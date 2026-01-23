@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/jfreymuth/pulse"
+	"github.com/jfreymuth/pulse/proto"
 )
-
 
 type pulseContext struct {
 	client *pulse.Client
@@ -67,7 +67,7 @@ func (c *pulseCapture) Start() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	const gain = 4 // software gain to compensate for weak mic input
+	const gain = 8 // software gain to compensate for weak mic input
 
 	writer := pulse.Int16Writer(func(buf []int16) (int, error) {
 		if len(buf) == 0 {
@@ -90,6 +90,11 @@ func (c *pulseCapture) Start() error {
 	opts := []pulse.RecordOption{
 		pulse.RecordMono,
 		pulse.RecordSampleRate(int(c.config.SampleRate)),
+		pulse.RecordLatency(0.05), // 50ms target latency — forces near-realtime delivery
+		pulse.RecordRawOption(func(r *proto.CreateRecordStream) {
+			vol := uint32(proto.VolumeNorm) * 3
+			r.ChannelVolumes = proto.ChannelVolumes{vol}
+		}),
 	}
 	if c.device != nil {
 		source, err := c.client.SourceByID(c.device.ID)

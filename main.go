@@ -28,6 +28,7 @@ var version = "dev"
 var peakAlloc uint64
 var activeTranscriber transcriber.Transcriber
 var autoPaste bool
+var saveLastRecording bool
 var transcriptions []TranscriptionRecord
 var percentileStats PercentileStats
 
@@ -74,6 +75,7 @@ func run() {
 	setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
 	modeFlag := flag.String("mode", "fast", "Transcription mode: fast, balanced, or precise")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
+	saveRecording := flag.Bool("saverecording", false, "Save last recording to /tmp/ses9000_last.<format>")
 	flag.Parse()
 
 	if *versionFlag {
@@ -81,6 +83,7 @@ func run() {
 		os.Exit(0)
 	}
 	autoPaste = *autoPasteFlag
+	saveLastRecording = *saveRecording
 
 	m, ok := modes[*modeFlag]
 	if !ok {
@@ -232,7 +235,7 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 		return nil, err
 	}
 
-	blockChan := make(chan []int16, 4)
+	blockChan := make(chan []int16, 64)
 	encodeDone := make(chan struct{})
 
 	go func() {
@@ -260,9 +263,8 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 
 	captureDevice, err := ctx.NewCapture(device, config, func(data []byte, frameCount uint32) {
 		bufMu.Lock()
-		defer bufMu.Unlock()
-
 		if stopped {
+			bufMu.Unlock()
 			return
 		}
 
@@ -275,17 +277,24 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 			sumSquares += normalized * normalized
 		}
 
-		// Send audio level to TUI
+		// Collect full blocks while holding lock
+		var blocks [][]int16
+		for len(sampleBuf) >= encoder.BlockSize {
+			block := make([]int16, encoder.BlockSize)
+			copy(block, sampleBuf[:encoder.BlockSize])
+			sampleBuf = sampleBuf[encoder.BlockSize:]
+			blocks = append(blocks, block)
+		}
+		bufMu.Unlock()
+
+		// Send audio level to TUI (outside lock)
 		if len(data) > 0 {
 			rms := math.Sqrt(sumSquares / float64(len(data)/2))
 			tuiProgram.Send(AudioLevelMsg{Level: rms})
 		}
 
-		// Send full blocks to encoder
-		for len(sampleBuf) >= encoder.BlockSize {
-			block := make([]int16, encoder.BlockSize)
-			copy(block, sampleBuf[:encoder.BlockSize])
-			sampleBuf = sampleBuf[encoder.BlockSize:]
+		// Send blocks to encoder (outside lock — won't stall next callback)
+		for _, block := range blocks {
 			blockChan <- block
 		}
 	})
@@ -353,6 +362,13 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 func processRecording(enc encoder.Encoder) {
 	audioDuration := float64(enc.TotalFrames()) / float64(encoder.SampleRate)
 	audioData := enc.Bytes()
+
+	if saveLastRecording {
+		path := fmt.Sprintf("ses9000_last.%s", activeMode.format)
+		if err := os.WriteFile(path, audioData, 0644); err != nil {
+			logToTUI("save recording error: %v", err)
+		}
+	}
 
 	result, err := activeTranscriber.Transcribe(audioData, activeMode.format)
 	if err != nil {

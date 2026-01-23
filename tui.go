@@ -139,7 +139,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AudioLevelMsg:
 		if m.state == tuiStateRecording {
-			m.audioLevel = m.audioLevel*0.6 + msg.Level*0.4
+			// Asymmetric smoothing: fast attack, slow decay
+			if msg.Level > m.audioLevel {
+				m.audioLevel = m.audioLevel*0.2 + msg.Level*0.8
+			} else {
+				m.audioLevel = m.audioLevel*0.7 + msg.Level*0.3
+			}
 			if msg.Level > m.peakLevel {
 				m.peakLevel = msg.Level
 			}
@@ -192,7 +197,7 @@ func (m tuiModel) View() string {
 			Render(fmt.Sprintf("● REC %.1fs", m.recordingDuration))
 		infoLines = append(infoLines, status)
 		// Voice detection warning (after 1s of recording with no voice)
-		if m.recordingDuration > 1.0 && m.peakLevel < 0.02 {
+		if m.recordingDuration > 1.0 && m.peakLevel < 0.005 {
 			warn := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("208")).
 				Render("  ⚠ no voice detected")
