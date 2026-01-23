@@ -44,7 +44,9 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-benchmark` | - | WAV file for benchmarking |
-| `-runs` | 3 | Benchmark iterations |
+| `-mode` | fast | Transcription mode: `fast`, `balanced`, `precise` |
 | `-setup` | false | Select microphone device |
 | `-autopaste` | true | Auto-paste after transcription |
+| `-benchmark` | - | WAV file for benchmarking |
+| `-runs` | 3 | Benchmark iterations |
+| `-version` | false | Print version and exit |
