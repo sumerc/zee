@@ -344,9 +344,9 @@ func renderHALEye(frame int, level float64, recording bool) string {
 	// Voice-reactive breathing
 	var breathe float64
 	if recording {
-		breathe = math.Sin(float64(frame)*0.10)*0.03 + level*10.0 - 0.05
+		breathe = math.Sin(float64(frame)*0.15)*0.08 + level*15.0
 	} else {
-		breathe = math.Sin(float64(frame)*0.08)*0.02 - 0.05
+		breathe = math.Sin(float64(frame)*0.10) * 0.05
 	}
 
 	pixels := make([][]int, pixH)
@@ -361,14 +361,14 @@ func renderHALEye(frame int, level float64, recording bool) string {
 	}
 
 	rings := []ring{
-		{0.6, 0.10, 1},
-		{1.3, 0.12, 2},
-		{2.0, 0.15, 3},
-		{2.8, 0.35, 4},  // red rings: high reactivity
-		{3.5, 0.40, 5},
-		{4.2, 0.38, 6},
-		{5.0, 0.30, 7},
-		{5.8, 0.15, 8},
+		{0.6, 0.30, 1},
+		{1.3, 0.35, 2},
+		{2.0, 0.30, 3},
+		{2.8, 0.20, 4},
+		{3.5, 0.18, 5},
+		{4.2, 0.15, 6},
+		{5.0, 0.12, 7},
+		{5.8, 0.08, 8},
 		{6.5, 0.03, 9},
 		{7.2, 0.0, 10},
 		{8.0, 0.0, 11},
@@ -383,9 +383,6 @@ func renderHALEye(frame int, level float64, recording bool) string {
 			dist := math.Sqrt(dx*dx + dy*dy)
 			for _, r := range rings {
 				radius := r.radius + breathe*r.breatheAmt*20
-				if radius > 10.0 {
-					radius = 10.0
-				}
 				if dist < radius {
 					pixels[y][x] = r.colorIdx
 					break
