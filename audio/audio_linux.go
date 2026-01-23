@@ -10,7 +10,6 @@ import (
 	"github.com/jfreymuth/pulse"
 )
 
-const nativeSampleRate = 44100
 
 type pulseContext struct {
 	client *pulse.Client
@@ -68,48 +67,29 @@ func (c *pulseCapture) Start() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	targetRate := c.config.SampleRate
-	ratio := float64(nativeSampleRate) / float64(targetRate)
-	var pos float64
+	const gain = 4 // software gain to compensate for weak mic input
 
 	writer := pulse.Int16Writer(func(buf []int16) (int, error) {
-		// Downmix stereo to mono
-		monoLen := len(buf) / 2
-		mono := make([]int16, monoLen)
-		for i := 0; i < monoLen; i++ {
-			l := int32(buf[i*2])
-			r := int32(buf[i*2+1])
-			mono[i] = int16((l + r) / 2)
+		if len(buf) == 0 {
+			return 0, nil
 		}
-
-		// Downsample from nativeSampleRate to targetRate
-		var resampled []int16
-		for pos < float64(monoLen) {
-			idx := int(pos)
-			if idx >= monoLen {
-				break
+		data := make([]byte, len(buf)*2)
+		for i, s := range buf {
+			amplified := int32(s) * gain
+			if amplified > 32767 {
+				amplified = 32767
+			} else if amplified < -32768 {
+				amplified = -32768
 			}
-			resampled = append(resampled, mono[idx])
-			pos += ratio
+			binary.LittleEndian.PutUint16(data[i*2:], uint16(int16(amplified)))
 		}
-		pos -= float64(monoLen)
-
-		if len(resampled) == 0 {
-			return len(buf), nil
-		}
-
-		// Convert to little-endian bytes
-		data := make([]byte, len(resampled)*2)
-		for i, s := range resampled {
-			binary.LittleEndian.PutUint16(data[i*2:], uint16(s))
-		}
-		c.callback(data, uint32(len(resampled)))
+		c.callback(data, uint32(len(buf)))
 		return len(buf), nil
 	})
 
 	opts := []pulse.RecordOption{
-		pulse.RecordSampleRate(nativeSampleRate),
-		pulse.RecordStereo,
+		pulse.RecordMono,
+		pulse.RecordSampleRate(int(c.config.SampleRate)),
 	}
 	if c.device != nil {
 		source, err := c.client.SourceByID(c.device.ID)
@@ -132,6 +112,7 @@ func (c *pulseCapture) Start() error {
 		stream.Start()
 		<-c.stop
 		stream.Stop()
+		stream.Close()
 	}()
 
 	return nil

@@ -101,6 +101,14 @@ func run() {
 		return
 	}
 
+	// Init virtual keyboard early so compositor recognizes it before first paste
+	if autoPaste {
+		if err := paste.Init(); err != nil {
+			fmt.Printf("Warning: paste init failed: %v\n", err)
+			fmt.Println("Fix with: sudo chmod 660 /dev/uinput && sudo chgrp input /dev/uinput")
+		}
+	}
+
 	// Init audio context and device selection BEFORE TUI (needs raw terminal)
 	ctx, err := audio.NewContext()
 	if err != nil {
@@ -356,8 +364,7 @@ func processRecording(enc encoder.Encoder) {
 	text := strings.TrimSpace(result.Text)
 	metrics := result.Metrics
 
-	// Detect no-speech: empty text or high no_speech_prob
-	noSpeech := text == "" || result.NoSpeechProb > 0.8
+	noSpeech := text == ""
 
 	// Only copy/paste if there's actual speech
 	clipboardOK := false
