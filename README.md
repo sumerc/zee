@@ -18,7 +18,7 @@
   - [ ] Windows
 - **Multiple providers** — Groq Whisper and DeepGram, switchable at runtime.
 - **Encoding modes** — `fast` (MP3 16kbps), `balanced` (MP3 64kbps), `precise` (FLAC lossless).
-- **[HAL 9000](https://en.wikipedia.org/wiki/HAL_9000) TUI** — voice-reactive animated eye with real-time transcription metrics.
+- **[HAL 9000](https://en.wikipedia.org/wiki/HAL_9000) TUI** — voice-reactive animated eye with real-time transcription metrics. UI is a work in progress.
 
 ## Usage
 
