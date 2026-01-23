@@ -18,10 +18,10 @@ var (
 )
 
 func initSound() {
-	// Start sound: snappy tick (30ms, fast decay)
-	startSamples = generateTick(44100, 1200, 0.03, 0.5, 60)
-	// End sound: slightly lower tick (50ms, moderate decay)
-	endSamples = generateTick(44100, 900, 0.05, 0.5, 40)
+	// Start sound: snappy tick (fast decay, 200ms tail for PA buffer fill)
+	startSamples = generateTick(44100, 1200, 0.2, 0.5, 60)
+	// End sound: slightly lower tick (moderate decay, 200ms tail for PA buffer fill)
+	endSamples = generateTick(44100, 900, 0.2, 0.5, 40)
 }
 
 func generateTick(sampleRate int, freq float64, duration float64, volume float64, decay float64) []int16 {
