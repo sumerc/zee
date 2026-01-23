@@ -50,3 +50,7 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 | `-benchmark` | - | WAV file for benchmarking |
 | `-runs` | 3 | Benchmark iterations |
 | `-version` | false | Print version and exit |
+
+## About
+
+Vibe-coded in ~30 hours with AI, but built with love and care. The kind of polish you get when you actually use the thing you're building.
