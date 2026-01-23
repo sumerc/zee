@@ -1,0 +1,80 @@
+//go:build linux
+
+package main
+
+import (
+	"fmt"
+	"math"
+	"sync"
+
+	"github.com/jfreymuth/pulse"
+)
+
+var (
+	pulseClient  *pulse.Client
+	startSamples []int16
+	endSamples   []int16
+	soundOnce    sync.Once
+)
+
+func initSound() {
+	var err error
+	pulseClient, err = pulse.NewClient()
+	if err != nil {
+		logDiagError(fmt.Sprintf("pulse playback init error: %v", err))
+		return
+	}
+
+	// Start sound: snappy tick (30ms, fast decay)
+	startSamples = generateTick(44100, 1200, 0.03, 0.5, 60)
+	// End sound: slightly lower tick (50ms, moderate decay)
+	endSamples = generateTick(44100, 900, 0.05, 0.5, 40)
+}
+
+func generateTick(sampleRate int, freq float64, duration float64, volume float64, decay float64) []int16 {
+	n := int(float64(sampleRate) * duration)
+	samples := make([]int16, n)
+	for i := range samples {
+		t := float64(i) / float64(sampleRate)
+		envelope := math.Exp(-t * decay)
+		samples[i] = int16(math.Sin(2*math.Pi*freq*t) * 32767 * volume * envelope)
+	}
+	return samples
+}
+
+func playSamples(samples []int16) {
+	if pulseClient == nil || len(samples) == 0 {
+		return
+	}
+	pos := 0
+	reader := pulse.Int16Reader(func(buf []int16) (int, error) {
+		if pos >= len(samples) {
+			return 0, pulse.EndOfData
+		}
+		n := copy(buf, samples[pos:])
+		pos += n
+		return n, nil
+	})
+	stream, err := pulseClient.NewPlayback(reader,
+		pulse.PlaybackSampleRate(44100),
+		pulse.PlaybackMono,
+	)
+	if err != nil {
+		logDiagError(fmt.Sprintf("pulse playback error: %v", err))
+		return
+	}
+	stream.Start()
+	stream.Drain()
+	stream.Stop()
+	stream.Close()
+}
+
+func playStartSound() {
+	soundOnce.Do(initSound)
+	go playSamples(startSamples)
+}
+
+func playEndSound() {
+	soundOnce.Do(initSound)
+	go playSamples(endSamples)
+}

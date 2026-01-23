@@ -1,9 +1,15 @@
-.PHONY: build test benchmark integration-test clean
+.PHONY: build build-linux-amd64 build-linux-arm64 test benchmark integration-test clean
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
 build:
-	go build -ldflags="-X main.version=$(VERSION) -extldflags=-Wl,-no_warn_duplicate_libraries" -o ses9000
+	go build -ldflags="-X main.version=$(VERSION)" -o ses9000
+
+build-linux-amd64:
+	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o ses9000-linux-amd64
+
+build-linux-arm64:
+	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o ses9000-linux-arm64
 
 test:
 	go test -v ./encoder/

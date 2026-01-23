@@ -4,17 +4,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gen2brain/malgo"
+	"ses9000/audio"
+
 	"golang.org/x/term"
 )
 
-type DeviceInfo struct {
-	ID   malgo.DeviceID
-	Name string
-}
-
-func selectDevice(ctx *malgo.AllocatedContext) (*DeviceInfo, error) {
-	devices, err := ctx.Devices(malgo.Capture)
+func selectDevice(ctx audio.Context) (*audio.DeviceInfo, error) {
+	devices, err := ctx.Devices()
 	if err != nil {
 		return nil, fmt.Errorf("enumerating devices: %w", err)
 	}
@@ -24,8 +20,8 @@ func selectDevice(ctx *malgo.AllocatedContext) (*DeviceInfo, error) {
 	}
 
 	if len(devices) == 1 {
-		fmt.Printf("Using device: %s\n", devices[0].Name())
-		return &DeviceInfo{ID: devices[0].ID, Name: devices[0].Name()}, nil
+		fmt.Printf("Using device: %s\n", devices[0].Name)
+		return &devices[0], nil
 	}
 
 	// Raw mode for arrow key input
@@ -43,9 +39,9 @@ func selectDevice(ctx *malgo.AllocatedContext) (*DeviceInfo, error) {
 		fmt.Print("Select input device (↑/↓, Enter to confirm):\r\n\r\n")
 		for i, d := range devices {
 			if i == cursor {
-				fmt.Printf("  \x1b[1;36m▶ %s\x1b[0m\r\n", d.Name())
+				fmt.Printf("  \x1b[1;36m▶ %s\x1b[0m\r\n", d.Name)
 			} else {
-				fmt.Printf("    %s\r\n", d.Name())
+				fmt.Printf("    %s\r\n", d.Name)
 			}
 		}
 	}
@@ -65,8 +61,7 @@ func selectDevice(ctx *malgo.AllocatedContext) (*DeviceInfo, error) {
 			case 13: // Enter
 				fmt.Printf("\r\n")
 				term.Restore(fd, oldState)
-				selected := devices[cursor]
-				return &DeviceInfo{ID: selected.ID, Name: selected.Name()}, nil
+				return &devices[cursor], nil
 			case 3: // Ctrl+C
 				fmt.Printf("\r\n")
 				term.Restore(fd, oldState)

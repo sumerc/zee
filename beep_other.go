@@ -1,3 +1,5 @@
+//go:build !linux
+
 package main
 
 import (
@@ -34,12 +36,12 @@ func initSound() {
 	<-ready
 
 	// Start sound: snappy tick (30ms, fast decay)
-	startBuffer = generateTickWithDecay(44100, 1200, 0.03, 0.5, 60)
+	startBuffer = generateTick(44100, 1200, 0.03, 0.5, 60)
 	// End sound: slightly lower tick (50ms, moderate decay)
-	endBuffer = generateTickWithDecay(44100, 900, 0.05, 0.5, 40)
+	endBuffer = generateTick(44100, 900, 0.05, 0.5, 40)
 }
 
-func generateTickWithDecay(sampleRate int, freq float64, duration float64, volume float64, decay float64) []byte {
+func generateTick(sampleRate int, freq float64, duration float64, volume float64, decay float64) []byte {
 	samples := int(float64(sampleRate) * duration)
 	buf := new(bytes.Buffer)
 	for i := 0; i < samples; i++ {

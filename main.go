@@ -15,12 +15,11 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
-	"github.com/gen2brain/malgo"
-	"golang.design/x/hotkey"
-	"golang.design/x/hotkey/mainthread"
 
+	"ses9000/audio"
 	"ses9000/encoder"
 	"ses9000/paste"
+	"ses9000/shortcut"
 	"ses9000/transcriber"
 )
 
@@ -67,13 +66,6 @@ var modes = map[string]modeConfig{
 
 var activeMode modeConfig
 
-func init() {
-	runtime.LockOSThread()
-}
-
-func main() {
-	mainthread.Init(run)
-}
 
 func run() {
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
@@ -110,15 +102,15 @@ func run() {
 	}
 
 	// Init audio context and device selection BEFORE TUI (needs raw terminal)
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	ctx, err := audio.NewContext()
 	if err != nil {
 		logDiagError(fmt.Sprintf("audio context init error: %v", err))
 		fmt.Printf("Error initializing audio context: %v\n", err)
 		os.Exit(1)
 	}
-	defer ctx.Uninit()
+	defer ctx.Close()
 
-	var selectedDevice *DeviceInfo
+	var selectedDevice *audio.DeviceInfo
 	if *setupFlag {
 		selectedDevice, err = selectDevice(ctx)
 		if err != nil {
@@ -175,7 +167,7 @@ func run() {
 	go activeTranscriber.WarmConnection() // Initial warm
 	go func() { soundOnce.Do(initSound) }()
 
-	hk := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl, hotkey.ModShift}, hotkey.KeySpace)
+	hk := shortcut.New()
 	if err := hk.Register(); err != nil {
 		logDiagError(fmt.Sprintf("hotkey register error: %v", err))
 		fmt.Printf("Error registering hotkey: %v\n", err)
@@ -199,7 +191,7 @@ func run() {
 		tuiProgram.Send(RecordingStartMsg{})
 		go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
 
-		state, err := recordWithStreaming(ctx, hk, selectedDevice)
+		state, err := recordWithStreaming(ctx, hk.Keyup(), selectedDevice)
 		tuiProgram.Send(RecordingStopMsg{})
 		if err != nil {
 			logToTUI("Error recording: %v", err)
@@ -220,7 +212,7 @@ func run() {
 	}
 }
 
-func recordWithStreaming(ctx *malgo.AllocatedContext, hk *hotkey.Hotkey, device *DeviceInfo) (encoder.Encoder, error) {
+func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio.DeviceInfo) (encoder.Encoder, error) {
 	var enc encoder.Encoder
 	var err error
 	if activeMode.format == "mp3" {
@@ -250,54 +242,52 @@ func recordWithStreaming(ctx *malgo.AllocatedContext, hk *hotkey.Hotkey, device 
 	// Audio capture state
 	var sampleBuf []int16
 	var bufMu sync.Mutex
+	var stopped bool
 	done := make(chan struct{})
 
-	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
-	deviceConfig.Capture.Format = malgo.FormatS16
-	deviceConfig.Capture.Channels = encoder.Channels
-	deviceConfig.SampleRate = encoder.SampleRate
-	if device != nil {
-		deviceConfig.Capture.DeviceID = device.ID.Pointer()
+	config := audio.CaptureConfig{
+		SampleRate: encoder.SampleRate,
+		Channels:   encoder.Channels,
 	}
 
-	callbacks := malgo.DeviceCallbacks{
-		Data: func(_, data []byte, frameCount uint32) {
-			bufMu.Lock()
-			defer bufMu.Unlock()
+	captureDevice, err := ctx.NewCapture(device, config, func(data []byte, frameCount uint32) {
+		bufMu.Lock()
+		defer bufMu.Unlock()
 
-			// Convert bytes to int16 and calculate RMS for audio level
-			var sumSquares float64
-			for i := 0; i < len(data); i += 2 {
-				sample := int16(binary.LittleEndian.Uint16(data[i:]))
-				sampleBuf = append(sampleBuf, sample)
-				normalized := float64(sample) / 32768.0
-				sumSquares += normalized * normalized
-			}
+		if stopped {
+			return
+		}
 
-			// Send audio level to TUI
-			if len(data) > 0 {
-				rms := math.Sqrt(sumSquares / float64(len(data)/2))
-				tuiProgram.Send(AudioLevelMsg{Level: rms})
-			}
+		// Convert bytes to int16 and calculate RMS for audio level
+		var sumSquares float64
+		for i := 0; i < len(data); i += 2 {
+			sample := int16(binary.LittleEndian.Uint16(data[i:]))
+			sampleBuf = append(sampleBuf, sample)
+			normalized := float64(sample) / 32768.0
+			sumSquares += normalized * normalized
+		}
 
-			// Send full blocks to encoder
-			for len(sampleBuf) >= encoder.BlockSize {
-				block := make([]int16, encoder.BlockSize)
-				copy(block, sampleBuf[:encoder.BlockSize])
-				sampleBuf = sampleBuf[encoder.BlockSize:]
-				blockChan <- block
-			}
-		},
-	}
+		// Send audio level to TUI
+		if len(data) > 0 {
+			rms := math.Sqrt(sumSquares / float64(len(data)/2))
+			tuiProgram.Send(AudioLevelMsg{Level: rms})
+		}
 
-	captureDevice, err := malgo.InitDevice(ctx.Context, deviceConfig, callbacks)
+		// Send full blocks to encoder
+		for len(sampleBuf) >= encoder.BlockSize {
+			block := make([]int16, encoder.BlockSize)
+			copy(block, sampleBuf[:encoder.BlockSize])
+			sampleBuf = sampleBuf[encoder.BlockSize:]
+			blockChan <- block
+		}
+	})
 	if err != nil {
 		close(blockChan)
 		return nil, err
 	}
 
 	if err := captureDevice.Start(); err != nil {
-		captureDevice.Uninit()
+		captureDevice.Close()
 		close(blockChan)
 		return nil, err
 	}
@@ -323,17 +313,18 @@ func recordWithStreaming(ctx *malgo.AllocatedContext, hk *hotkey.Hotkey, device 
 
 	// Wait for keyup
 	go func() {
-		<-hk.Keyup()
+		<-keyup
 		close(done)
 	}()
 	<-done
 
 	captureDevice.Stop()
 	playEndSound()
-	captureDevice.Uninit()
+	captureDevice.Close()
 
 	// Send remaining samples as partial block
 	bufMu.Lock()
+	stopped = true
 	if len(sampleBuf) > 0 {
 		partial := make([]int16, len(sampleBuf))
 		copy(partial, sampleBuf)
