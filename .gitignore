@@ -1,0 +1,22 @@
+# Binary
+ses9000
+
+# Environment
+.env
+
+# Logs
+*.log
+diagnostics_log.txt
+transcribe_log.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Claude
+.claude/
