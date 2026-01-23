@@ -29,7 +29,7 @@ func (m *malgoContext) Devices() ([]DeviceInfo, error) {
 	var result []DeviceInfo
 	for _, d := range devices {
 		result = append(result, DeviceInfo{
-			ID:   hex.EncodeToString(d.ID.Pointer()[:]),
+			ID:   hex.EncodeToString(d.ID[:]),
 			Name: d.Name(),
 		})
 	}
