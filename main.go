@@ -424,7 +424,7 @@ func processRecording(enc encoder.Encoder) {
 		fmt.Sprintf("audio:      %.1fs | %.1f KB → %.1f KB (%.0f%% smaller)",
 			audioDuration, float64(rawSize)/1024, float64(encodedSize)/1024, compressionPct),
 		fmt.Sprintf("mode:       %s (%s)", activeMode.name, formatLabel),
-		fmt.Sprintf("encode:     %dms", enc.EncodeTime().Milliseconds()),
+		fmt.Sprintf("encode:     %dms (concurrent)", enc.EncodeTime().Milliseconds()),
 		fmt.Sprintf("dns:        %dms", metrics.DNS.Milliseconds()),
 		fmt.Sprintf("tls:        %dms (%s)", metrics.TLS.Milliseconds(), connStatus),
 		fmt.Sprintf("net+infer:  %dms", networkAI.Milliseconds()),
