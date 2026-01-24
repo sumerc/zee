@@ -171,3 +171,29 @@ func isKeyboard(eventName string) bool {
 	caps := strings.TrimSpace(string(data))
 	return len(caps) > 10
 }
+
+// Diagnose checks hotkey/evdev access and returns a status message.
+func Diagnose() (string, error) {
+	keyboards, err := findKeyboards()
+	if err != nil {
+		return "", fmt.Errorf("cannot scan input devices: %w", err)
+	}
+	if len(keyboards) == 0 {
+		return "", fmt.Errorf("no keyboard devices found (is user in 'input' group?)")
+	}
+
+	var opened string
+	for _, path := range keyboards {
+		f, err := os.Open(path)
+		if err == nil {
+			f.Close()
+			opened = path
+			break
+		}
+	}
+	if opened == "" {
+		return "", fmt.Errorf("found %d keyboard(s) but cannot open any (run: sudo usermod -aG input $USER)", len(keyboards))
+	}
+
+	return fmt.Sprintf("%d keyboard(s) found, opened %s", len(keyboards), opened), nil
+}

@@ -51,3 +51,8 @@ func (h *xHotkey) Keydown() <-chan struct{} {
 func (h *xHotkey) Keyup() <-chan struct{} {
 	return h.keyup
 }
+
+// Diagnose checks hotkey availability and returns a status message.
+func Diagnose() (string, error) {
+	return "hotkey support available (Ctrl+Shift+Space)", nil
+}

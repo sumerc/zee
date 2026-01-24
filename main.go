@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/atotto/clipboard"
 
 	"ses9000/audio"
+	"ses9000/clipboard"
+	"ses9000/doctor"
 	"ses9000/encoder"
-	"ses9000/paste"
 	"ses9000/shortcut"
 	"ses9000/transcriber"
 )
@@ -76,11 +76,20 @@ func run() {
 	modeFlag := flag.String("mode", "fast", "Transcription mode: fast, balanced, or precise")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	saveRecording := flag.Bool("saverecording", false, "Save last recording to /tmp/ses9000_last.<format>")
+	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
 	flag.Parse()
 
 	if *versionFlag {
 		fmt.Printf("ses9000 %s\n", version)
 		os.Exit(0)
+	}
+
+	if *doctorFlag {
+		wavFile := ""
+		if len(flag.Args()) > 0 {
+			wavFile = flag.Args()[0]
+		}
+		os.Exit(doctor.Run(wavFile))
 	}
 	autoPaste = *autoPasteFlag
 	saveLastRecording = *saveRecording
@@ -106,7 +115,7 @@ func run() {
 
 	// Init virtual keyboard early so compositor recognizes it before first paste
 	if autoPaste {
-		if err := paste.Init(); err != nil {
+		if err := clipboard.Init(); err != nil {
 			fmt.Printf("Warning: paste init failed: %v\n", err)
 			fmt.Println("Fix with: sudo chmod 660 /dev/uinput && sudo chgrp input /dev/uinput")
 		}
@@ -386,12 +395,12 @@ func processRecording(enc encoder.Encoder) {
 	clipboardOK := false
 	if !noSpeech {
 		clipboardOK = true
-		if err := clipboard.WriteAll(text); err != nil {
+		if err := clipboard.Copy(text); err != nil {
 			clipboardOK = false
 			logDiagError(fmt.Sprintf("clipboard error: %v", err))
 		}
 		if autoPaste && clipboardOK {
-			if err := paste.Send(); err != nil {
+			if err := clipboard.Paste(); err != nil {
 				logDiagError(fmt.Sprintf("autopaste error: %v", err))
 			}
 		}
