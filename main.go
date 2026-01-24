@@ -391,18 +391,13 @@ func processRecording(enc encoder.Encoder) {
 
 	noSpeech := text == ""
 
-	// Only copy/paste if there's actual speech
+	// Only type if there's actual speech and autopaste is enabled
 	clipboardOK := false
-	if !noSpeech {
-		clipboardOK = true
-		if err := clipboard.Copy(text); err != nil {
-			clipboardOK = false
-			logDiagError(fmt.Sprintf("clipboard error: %v", err))
-		}
-		if autoPaste && clipboardOK {
-			if err := clipboard.Paste(); err != nil {
-				logDiagError(fmt.Sprintf("autopaste error: %v", err))
-			}
+	if !noSpeech && autoPaste {
+		if err := clipboard.Type(text); err != nil {
+			logDiagError(fmt.Sprintf("type error: %v", err))
+		} else {
+			clipboardOK = true
 		}
 	}
 
