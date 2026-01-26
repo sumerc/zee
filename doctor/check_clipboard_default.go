@@ -5,7 +5,7 @@ package doctor
 import (
 	"fmt"
 
-	"ses9000/clipboard"
+	"zee/clipboard"
 )
 
 func checkClipboardCopy() bool {

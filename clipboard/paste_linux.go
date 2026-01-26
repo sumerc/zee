@@ -95,7 +95,7 @@ func Init() error {
 		}
 		// Create device
 		dev := uinputUserDev{}
-		copy(dev.Name[:], "ses9000-paste")
+		copy(dev.Name[:], "zee-paste")
 		dev.ID.Bustype = busUSB
 		dev.ID.Vendor = 0x1234
 		dev.ID.Product = 0x5678
@@ -204,7 +204,7 @@ func Verify() (string, error) {
 		return "", fmt.Errorf("uinput init: %w", err)
 	}
 
-	// Find the ses9000-paste evdev device
+	// Find the zee-paste evdev device
 	entries, err := os.ReadDir("/sys/class/input")
 	if err != nil {
 		return "", fmt.Errorf("cannot scan input devices: %w", err)
@@ -220,13 +220,13 @@ func Verify() (string, error) {
 		if err != nil {
 			continue
 		}
-		if strings.TrimSpace(string(data)) == "ses9000-paste" {
+		if strings.TrimSpace(string(data)) == "zee-paste" {
 			evdevPath = filepath.Join("/dev/input", e.Name())
 			break
 		}
 	}
 	if evdevPath == "" {
-		return "", errors.New("ses9000-paste evdev device not found")
+		return "", errors.New("zee-paste evdev device not found")
 	}
 
 	// Open for readback

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"ses9000/audio"
+	"zee/audio"
 
 	"golang.org/x/term"
 )

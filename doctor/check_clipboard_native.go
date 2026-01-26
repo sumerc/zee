@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"time"
 
-	"ses9000/clipboard"
+	"zee/clipboard"
 )
 
 func checkClipboardCopy() bool {
 	fmt.Println()
 	fmt.Println("[5/6] Clipboard copy")
 
-	testStr := fmt.Sprintf("ses9000-doctor-%d", time.Now().UnixNano())
+	testStr := fmt.Sprintf("zee-doctor-%d", time.Now().UnixNano())
 
 	type cbResult struct {
 		readback string

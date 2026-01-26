@@ -15,12 +15,12 @@ import (
 	"syscall"
 	"time"
 
-	"ses9000/audio"
-	"ses9000/clipboard"
-	"ses9000/doctor"
-	"ses9000/encoder"
-	"ses9000/hotkey"
-	"ses9000/transcriber"
+	"zee/audio"
+	"zee/clipboard"
+	"zee/doctor"
+	"zee/encoder"
+	"zee/hotkey"
+	"zee/transcriber"
 )
 
 var version = "dev"
@@ -105,12 +105,12 @@ func run() {
 	setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
 	modeFlag := flag.String("mode", "fast", "Transcription mode: fast, balanced, or precise")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
-	saveRecording := flag.Bool("saverecording", false, "Save last recording to /tmp/ses9000_last.<format>")
+	saveRecording := flag.Bool("saverecording", false, "Save last recording to zee_last.<format>")
 	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Printf("ses9000 %s\n", version)
+		fmt.Printf("zee %s\n", version)
 		os.Exit(0)
 	}
 
@@ -417,7 +417,7 @@ func processRecording(enc encoder.Encoder) {
 	audioData := enc.Bytes()
 
 	if saveLastRecording {
-		path := fmt.Sprintf("ses9000_last.%s", audioFormat)
+		path := fmt.Sprintf("zee_last.%s", audioFormat)
 		if err := os.WriteFile(path, audioData, 0644); err != nil {
 			logToTUI("save recording error: %v", err)
 		}

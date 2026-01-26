@@ -9,15 +9,15 @@ import (
 	"strings"
 	"time"
 
-	"ses9000/audio"
-	"ses9000/encoder"
-	"ses9000/hotkey"
-	"ses9000/transcriber"
+	"zee/audio"
+	"zee/encoder"
+	"zee/hotkey"
+	"zee/transcriber"
 )
 
 // Run executes all diagnostic checks and returns an exit code (0=all pass, 1=any fail).
 func Run(wavFile string) int {
-	fmt.Println("ses9000 doctor - system diagnostics")
+	fmt.Println("zee doctor - system diagnostics")
 	fmt.Println("========================================")
 
 	allPass := true

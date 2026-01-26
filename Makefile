@@ -3,13 +3,13 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
 build:
-	go build -ldflags="-X main.version=$(VERSION)" -o ses9000
+	go build -ldflags="-X main.version=$(VERSION)" -o zee
 
 build-linux-amd64:
-	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o ses9000-linux-amd64
+	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-amd64
 
 build-linux-arm64:
-	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o ses9000-linux-arm64
+	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-arm64
 
 test:
 	go test -v ./encoder/
@@ -23,7 +23,7 @@ integration-test:
 benchmark: build
 	@test -n "$(WAV)" || (echo "Usage: make benchmark WAV=file.wav [RUNS=5]" && exit 1)
 	@if [ -f .env ]; then export $$(grep -v '^#' .env | xargs); fi; \
-	./ses9000 -benchmark $(WAV) -runs $(or $(RUNS),3)
+	./zee -benchmark $(WAV) -runs $(or $(RUNS),3)
 
 clean:
-	rm -f ses9000
+	rm -f zee

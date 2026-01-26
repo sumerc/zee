@@ -1,4 +1,4 @@
-module ses9000
+module zee
 
 go 1.24.0
 

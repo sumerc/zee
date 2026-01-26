@@ -1,6 +1,6 @@
 <p align="center">
-  <img src="eye.gif" alt="ses9000" width="264"><br>
-  <strong>ses9000</strong><br><br>
+  <img src="eye.gif" alt="zee" width="264"><br>
+  <strong>zee</strong><br><br>
   Push-to-talk voice transcription.<br>
   Pure Go. No dependencies. Sub-second fast.<br><br>
   <img src="https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white" alt="Go 1.24">
@@ -28,7 +28,7 @@ Hold `Ctrl+Shift+Space` to record, release to transcribe. Result goes to clipboa
 ```bash
 make build
 export GROQ_API_KEY=your_key
-./ses9000
+./zee
 ```
 
 Use `-setup` to pick a microphone, otherwise uses system default.

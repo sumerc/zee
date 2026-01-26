@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"ses9000/transcriber"
+	"zee/transcriber"
 )
 
 var (

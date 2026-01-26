@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"ses9000/internal/mp3"
+	"zee/internal/mp3"
 )
 
 const mp3FrameSamples = 576 // GRANULE_SIZE for MPEG II (16kHz)

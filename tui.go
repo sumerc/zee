@@ -260,7 +260,7 @@ func (m tuiModel) View() string {
 	boldStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Bold(true)
 	helpLine := boldStyle.Render("Ctrl+Shift+Space") + helpStyle.Render(" to record")
 	infoLines = append(infoLines, helpLine)
-	infoLines = append(infoLines, helpStyle.Render("ses9000 "+version))
+	infoLines = append(infoLines, helpStyle.Render("zee "+version))
 
 	// Append info to eye
 	for _, line := range infoLines {
