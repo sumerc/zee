@@ -46,6 +46,15 @@ type Transcriber interface {
 	Name() string
 }
 
+type baseTranscriber struct {
+	client *TracedClient
+	apiURL string
+}
+
+func (b *baseTranscriber) WarmConnection() time.Duration {
+	return b.client.WarmConnection(b.apiURL)
+}
+
 func New() Transcriber {
 	dgKey := os.Getenv("DEEPGRAM_API_KEY")
 	groqKey := os.Getenv("GROQ_API_KEY")

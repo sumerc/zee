@@ -62,6 +62,7 @@ func playStartSound() {
 	player.Play()
 	go func() {
 		for player.IsPlaying() {
+			time.Sleep(10 * time.Millisecond)
 		}
 		player.Close()
 	}()
@@ -76,6 +77,7 @@ func playEndSound() {
 	player.Play()
 	go func() {
 		for player.IsPlaying() {
+			time.Sleep(10 * time.Millisecond)
 		}
 		player.Close()
 	}()

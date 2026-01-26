@@ -1,6 +1,5 @@
-package shortcut
+package hotkey
 
-// Hotkey provides global shortcut registration with press/release events.
 type Hotkey interface {
 	Register() error
 	Unregister()

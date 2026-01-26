@@ -157,11 +157,3 @@ func logSessionEnd(count int) {
 		Msg("session_end")
 }
 
-func logPanic(r interface{}, stack []byte) {
-	msg := fmt.Sprintf("PANIC: %v\n%s", r, stack)
-	fmt.Fprintln(os.Stderr, msg)
-	if logReady {
-		diagLog.Error().Str("stack", string(stack)).Msgf("PANIC: %v", r)
-		diagFile.Sync()
-	}
-}

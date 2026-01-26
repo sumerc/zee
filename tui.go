@@ -57,6 +57,12 @@ var (
 	tuiMu      sync.Mutex
 )
 
+func tuiSend(msg tea.Msg) {
+	if tuiProgram != nil {
+		tuiProgram.Send(msg)
+	}
+}
+
 // Pre-computed pixel styles to avoid allocations in render loop
 var (
 	pixelColorsRec  = []string{"", "226", "220", "214", "208", "196", "160", "124", "88", "52", "236", "236", "236", "236", "255", "249"}
@@ -99,14 +105,14 @@ func NewTUIProgram() *tea.Program {
 	return tea.NewProgram(m, tea.WithAltScreen())
 }
 
-func tuiTick() tea.Cmd {
-	return tea.Tick(60*time.Millisecond, func(t time.Time) tea.Msg {
+func tuiTick(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return tuiTick()
+	return tuiTick(500 * time.Millisecond)
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -122,7 +128,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.frame++
-		return m, tuiTick()
+		if m.state == tuiStateRecording {
+			return m, tuiTick(60 * time.Millisecond)
+		}
+		return m, tuiTick(500 * time.Millisecond)
 
 	case RecordingStartMsg:
 		m.state = tuiStateRecording

@@ -16,8 +16,8 @@ func NewTracedClient() *TracedClient {
 	return &TracedClient{
 		client: &http.Client{
 			Transport: &http.Transport{
-				MaxIdleConns:        1,
-				MaxIdleConnsPerHost: 1,
+				MaxIdleConns:        4,
+				MaxIdleConnsPerHost: 4,
 				IdleConnTimeout:     90 * time.Second,
 				ForceAttemptHTTP2:   true,
 			},
@@ -103,9 +103,10 @@ func (c *TracedClient) WarmConnection(url string) time.Duration {
 	}
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	resp, err := c.client.Do(req)
-	if err == nil {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+	if err != nil {
+		return 0
 	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
 	return tlsDuration
 }

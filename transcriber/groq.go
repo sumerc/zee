@@ -6,28 +6,24 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
-	"time"
 )
 
-const groqAPIURL = "https://api.groq.com/openai/v1/audio/transcriptions"
-
 type Groq struct {
+	baseTranscriber
 	apiKey string
-	client *TracedClient
 }
 
 func NewGroq(apiKey string) *Groq {
 	return &Groq{
+		baseTranscriber: baseTranscriber{
+			client: NewTracedClient(),
+			apiURL: "https://api.groq.com/openai/v1/audio/transcriptions",
+		},
 		apiKey: apiKey,
-		client: NewTracedClient(),
 	}
 }
 
 func (g *Groq) Name() string { return "groq" }
-
-func (g *Groq) WarmConnection() time.Duration {
-	return g.client.WarmConnection(groqAPIURL)
-}
 
 type groqResponse struct {
 	Text     string  `json:"text"`
@@ -63,7 +59,7 @@ func (g *Groq) Transcribe(audioData []byte, format string) (*Result, error) {
 	writer.WriteField("response_format", "verbose_json")
 	writer.Close()
 
-	req, err := http.NewRequest("POST", groqAPIURL, &body)
+	req, err := http.NewRequest("POST", g.apiURL, &body)
 	if err != nil {
 		return nil, err
 	}

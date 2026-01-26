@@ -1,6 +1,6 @@
 //go:build linux
 
-package shortcut
+package hotkey
 
 import (
 	"encoding/binary"
@@ -22,11 +22,9 @@ const (
 	keySpace   = 57
 )
 
-// input_event is 24 bytes on 64-bit Linux:
-// timeval (16 bytes) + type (2) + code (2) + value (4)
 const inputEventSize = 24
 
-type evdevHotkey struct {
+type linuxHotkey struct {
 	keydown chan struct{}
 	keyup   chan struct{}
 	files   []*os.File
@@ -34,17 +32,14 @@ type evdevHotkey struct {
 	once    sync.Once
 }
 
-// New creates a hotkey using evdev (reads /dev/input directly).
-// Requires user to be in the 'input' group.
-// Supports hold-to-record: Ctrl+Shift+Space press/release.
 func New() Hotkey {
-	return &evdevHotkey{
+	return &linuxHotkey{
 		keydown: make(chan struct{}, 1),
 		keyup:   make(chan struct{}, 1),
 	}
 }
 
-func (h *evdevHotkey) Register() error {
+func (h *linuxHotkey) Register() error {
 	keyboards, err := findKeyboards()
 	if err != nil {
 		return fmt.Errorf("finding keyboards: %w", err)
@@ -71,7 +66,7 @@ func (h *evdevHotkey) Register() error {
 	return nil
 }
 
-func (h *evdevHotkey) readEvents(f *os.File) {
+func (h *linuxHotkey) readEvents(f *os.File) {
 	buf := make([]byte, inputEventSize*16)
 	var ctrlHeld, shiftHeld, spaceHeld bool
 
@@ -123,7 +118,7 @@ func (h *evdevHotkey) readEvents(f *os.File) {
 	}
 }
 
-func (h *evdevHotkey) Unregister() {
+func (h *linuxHotkey) Unregister() {
 	h.once.Do(func() {
 		if h.stop != nil {
 			close(h.stop)
@@ -134,11 +129,11 @@ func (h *evdevHotkey) Unregister() {
 	})
 }
 
-func (h *evdevHotkey) Keydown() <-chan struct{} {
+func (h *linuxHotkey) Keydown() <-chan struct{} {
 	return h.keydown
 }
 
-func (h *evdevHotkey) Keyup() <-chan struct{} {
+func (h *linuxHotkey) Keyup() <-chan struct{} {
 	return h.keyup
 }
 
@@ -167,12 +162,10 @@ func isKeyboard(eventName string) bool {
 	if err != nil {
 		return false
 	}
-	// Real keyboards have long key capability bitmaps
 	caps := strings.TrimSpace(string(data))
 	return len(caps) > 10
 }
 
-// Diagnose checks hotkey/evdev access and returns a status message.
 func Diagnose() (string, error) {
 	keyboards, err := findKeyboards()
 	if err != nil {

@@ -5,10 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 )
-
-const deepgramAPIURL = "https://api.deepgram.com/v1/listen?model=nova-3"
 
 func firstNonEmpty(h http.Header, keys ...string) string {
 	for _, k := range keys {
@@ -20,22 +17,21 @@ func firstNonEmpty(h http.Header, keys ...string) string {
 }
 
 type Deepgram struct {
+	baseTranscriber
 	apiKey string
-	client *TracedClient
 }
 
 func NewDeepgram(apiKey string) *Deepgram {
 	return &Deepgram{
+		baseTranscriber: baseTranscriber{
+			client: NewTracedClient(),
+			apiURL: "https://api.deepgram.com/v1/listen?model=nova-3",
+		},
 		apiKey: apiKey,
-		client: NewTracedClient(),
 	}
 }
 
 func (d *Deepgram) Name() string { return "deepgram" }
-
-func (d *Deepgram) WarmConnection() time.Duration {
-	return d.client.WarmConnection("https://api.deepgram.com")
-}
 
 type deepgramResponse struct {
 	Metadata struct {
@@ -58,7 +54,7 @@ func (d *Deepgram) Transcribe(audioData []byte, format string) (*Result, error) 
 		contentType = "audio/mpeg"
 	}
 
-	req, err := http.NewRequest("POST", deepgramAPIURL, bytes.NewReader(audioData))
+	req, err := http.NewRequest("POST", d.apiURL, bytes.NewReader(audioData))
 	if err != nil {
 		return nil, err
 	}

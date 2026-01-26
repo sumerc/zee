@@ -11,7 +11,7 @@ import (
 
 	"ses9000/audio"
 	"ses9000/encoder"
-	"ses9000/shortcut"
+	"ses9000/hotkey"
 	"ses9000/transcriber"
 )
 
@@ -58,7 +58,7 @@ func checkHotkey() bool {
 	fmt.Println()
 	fmt.Println("[1/6] Hotkey access")
 
-	msg, err := shortcut.Diagnose()
+	msg, err := hotkey.Diagnose()
 	if err != nil {
 		fmt.Printf("  FAIL: %v\n", err)
 		return false

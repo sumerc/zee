@@ -8,18 +8,18 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-
 	"ses9000/audio"
 	"ses9000/clipboard"
 	"ses9000/doctor"
 	"ses9000/encoder"
-	"ses9000/shortcut"
+	"ses9000/hotkey"
 	"ses9000/transcriber"
 )
 
@@ -66,7 +66,7 @@ var modes = map[string]modeConfig{
 	"adaptive": {name: "adaptive", format: "adaptive", bitrate: 0},
 }
 
-var adaptiveThreshold int // bytes, set from TLS warmup
+var adaptiveThreshold = 100 * 1024 // bytes, default 100KB (fast connection), updated from TLS warmup
 
 func thresholdFromTLSWarmup(tlsTime time.Duration) int {
 	switch {
@@ -92,16 +92,12 @@ func newEncoderForMode(mode modeConfig) (encoder.Encoder, error) {
 
 var activeMode modeConfig
 
-
 func run() {
-	defer func() {
-		if r := recover(); r != nil {
-			stack := make([]byte, 4096)
-			n := runtime.Stack(stack, true)
-			logPanic(r, stack[:n])
-			os.Exit(1)
-		}
-	}()
+	// Set up crash output file for all crashes (panics, SIGSEGV, etc.)
+	crashFile, err := os.OpenFile("crash_log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		debug.SetCrashOutput(crashFile, debug.CrashOptions{})
+	}
 
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
@@ -182,7 +178,7 @@ func run() {
 
 	go func() {
 		if _, err := tuiProgram.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+			logDiagError(fmt.Sprintf("TUI error: %v", err))
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -221,13 +217,13 @@ func run() {
 	// Initial warmup - capture TLS time for adaptive threshold
 	go func() {
 		tlsTime := activeTranscriber.WarmConnection()
-		if activeMode.format == "adaptive" && adaptiveThreshold == 0 {
+		if activeMode.format == "adaptive" {
 			adaptiveThreshold = thresholdFromTLSWarmup(tlsTime)
 		}
 	}()
 	go func() { soundOnce.Do(initSound) }()
 
-	hk := shortcut.New()
+	hk := hotkey.New()
 	if err := hk.Register(); err != nil {
 		logDiagError(fmt.Sprintf("hotkey register error: %v", err))
 		fmt.Printf("Error registering hotkey: %v\n", err)
@@ -241,20 +237,20 @@ func run() {
 	} else if activeMode.format == "adaptive" {
 		formatLabel = "adaptive"
 	}
-	tuiProgram.Send(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, activeTranscriber.Name())})
+	tuiSend(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, activeTranscriber.Name())})
 	if selectedDevice != nil {
-		tuiProgram.Send(DeviceLineMsg{Text: "mic: " + selectedDevice.Name})
+		tuiSend(DeviceLineMsg{Text: "mic: " + selectedDevice.Name})
 	} else {
-		tuiProgram.Send(DeviceLineMsg{Text: "mic: system default"})
+		tuiSend(DeviceLineMsg{Text: "mic: system default"})
 	}
 
 	for {
 		<-hk.Keydown()
-		tuiProgram.Send(RecordingStartMsg{})
+		tuiSend(RecordingStartMsg{})
 		go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
 
 		state, err := recordWithStreaming(ctx, hk.Keyup(), selectedDevice)
-		tuiProgram.Send(RecordingStopMsg{})
+		tuiSend(RecordingStopMsg{})
 		if err != nil {
 			logToTUI("Error recording: %v", err)
 			logDiagError(fmt.Sprintf("recording error: %v", err))
@@ -335,7 +331,7 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 		// Send audio level to TUI (outside lock)
 		if len(data) > 0 {
 			rms := math.Sqrt(sumSquares / float64(len(data)/2))
-			tuiProgram.Send(AudioLevelMsg{Level: rms})
+			tuiSend(AudioLevelMsg{Level: rms})
 		}
 
 		// Send blocks to encoder (outside lock — won't stall next callback)
@@ -368,7 +364,7 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 				return
 			case <-ticker.C:
 				elapsed := time.Since(recordStart).Seconds()
-				tuiProgram.Send(RecordingTickMsg{Duration: elapsed})
+				tuiSend(RecordingTickMsg{Duration: elapsed})
 			}
 		}
 	}()
@@ -504,7 +500,7 @@ func processRecording(enc encoder.Encoder) {
 	if noSpeech {
 		displayText = "(no speech detected)"
 	}
-	tuiProgram.Send(TranscriptionMsg{
+	tuiSend(TranscriptionMsg{
 		Text:     displayText,
 		Metrics:  metricsLines,
 		Copied:   clipboardOK,
@@ -512,7 +508,7 @@ func processRecording(enc encoder.Encoder) {
 	})
 
 	if result.RateLimit != "?/?" {
-		tuiProgram.Send(RateLimitMsg{Text: "requests: " + result.RateLimit + " remaining"})
+		tuiSend(RateLimitMsg{Text: "requests: " + result.RateLimit + " remaining"})
 	}
 
 	record := TranscriptionRecord{
@@ -530,7 +526,7 @@ func processRecording(enc encoder.Encoder) {
 	}
 	transcriptions = append(transcriptions, record)
 	updatePercentileStats()
-	logTranscriptionMetrics(record, activeMode.name, activeMode.format, activeTranscriber.Name(), metrics.ConnReused)
+	logTranscriptionMetrics(record, activeMode.name, audioFormat, activeTranscriber.Name(), metrics.ConnReused)
 	logSegments(result.Segments, result.Confidence)
 	if !noSpeech {
 		logTranscriptionText(text)
@@ -645,4 +641,3 @@ func simulateRecording(wavFile string) (encoder.Encoder, error) {
 
 	return enc, nil
 }
-
