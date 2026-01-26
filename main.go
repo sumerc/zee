@@ -47,7 +47,7 @@ type TranscriptionRecord struct {
 	EncodeTimeMs     float64
 	DNSTimeMs        float64
 	TLSTimeMs        float64
-	NetInferMs       float64
+	TTFBMs           float64
 	TotalTimeMs      float64
 	MemoryAllocMB    float64
 	MemoryPeakMB     float64
@@ -63,12 +63,46 @@ var modes = map[string]modeConfig{
 	"fast":     {name: "fast", format: "mp3", bitrate: 16},
 	"balanced": {name: "balanced", format: "mp3", bitrate: 64},
 	"precise":  {name: "precise", format: "flac", bitrate: 0},
+	"adaptive": {name: "adaptive", format: "adaptive", bitrate: 0},
+}
+
+var adaptiveThreshold int // bytes, set from TLS warmup
+
+func thresholdFromTLSWarmup(tlsTime time.Duration) int {
+	switch {
+	case tlsTime < 100*time.Millisecond:
+		return 100 * 1024 // 100KB for fast connections
+	case tlsTime < 300*time.Millisecond:
+		return 60 * 1024 // 60KB for medium
+	default:
+		return 30 * 1024 // 30KB for slow
+	}
+}
+
+func newEncoderForMode(mode modeConfig) (encoder.Encoder, error) {
+	switch mode.format {
+	case "mp3":
+		return encoder.NewMp3(mode.bitrate)
+	case "adaptive":
+		return encoder.NewAdaptive()
+	default:
+		return encoder.NewFlac()
+	}
 }
 
 var activeMode modeConfig
 
 
 func run() {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := make([]byte, 4096)
+			n := runtime.Stack(stack, true)
+			logPanic(r, stack[:n])
+			os.Exit(1)
+		}
+	}()
+
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
 	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
@@ -96,7 +130,7 @@ func run() {
 
 	m, ok := modes[*modeFlag]
 	if !ok {
-		fmt.Printf("Error: unknown mode %q (use fast, balanced, or precise)\n", *modeFlag)
+		fmt.Printf("Error: unknown mode %q (use fast, balanced, precise, or adaptive)\n", *modeFlag)
 		os.Exit(1)
 	}
 	activeMode = m
@@ -184,7 +218,13 @@ func run() {
 			}
 		}
 	}()
-	go activeTranscriber.WarmConnection() // Initial warm
+	// Initial warmup - capture TLS time for adaptive threshold
+	go func() {
+		tlsTime := activeTranscriber.WarmConnection()
+		if activeMode.format == "adaptive" && adaptiveThreshold == 0 {
+			adaptiveThreshold = thresholdFromTLSWarmup(tlsTime)
+		}
+	}()
 	go func() { soundOnce.Do(initSound) }()
 
 	hk := shortcut.New()
@@ -198,6 +238,8 @@ func run() {
 	formatLabel := "FLAC"
 	if activeMode.format == "mp3" {
 		formatLabel = fmt.Sprintf("MP3@%dkbps", activeMode.bitrate)
+	} else if activeMode.format == "adaptive" {
+		formatLabel = "adaptive"
 	}
 	tuiProgram.Send(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, activeTranscriber.Name())})
 	if selectedDevice != nil {
@@ -233,13 +275,7 @@ func run() {
 }
 
 func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio.DeviceInfo) (encoder.Encoder, error) {
-	var enc encoder.Encoder
-	var err error
-	if activeMode.format == "mp3" {
-		enc, err = encoder.NewMp3(activeMode.bitrate)
-	} else {
-		enc, err = encoder.NewFlac()
-	}
+	enc, err := newEncoderForMode(activeMode)
 	if err != nil {
 		return nil, err
 	}
@@ -370,16 +406,28 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 
 func processRecording(enc encoder.Encoder) {
 	audioDuration := float64(enc.TotalFrames()) / float64(encoder.SampleRate)
+
+	// Handle adaptive encoder format selection
+	var audioFormat string
+	var adaptiveInfo string
+	if adaptiveEnc, ok := enc.(*encoder.AdaptiveEncoder); ok {
+		adaptiveEnc.Select(adaptiveThreshold)
+		audioFormat = adaptiveEnc.Format()
+		adaptiveInfo = fmt.Sprintf(" → %s (%dKB threshold)", adaptiveEnc.ChosenName(), adaptiveThreshold/1024)
+	} else {
+		audioFormat = activeMode.format
+	}
+
 	audioData := enc.Bytes()
 
 	if saveLastRecording {
-		path := fmt.Sprintf("ses9000_last.%s", activeMode.format)
+		path := fmt.Sprintf("ses9000_last.%s", audioFormat)
 		if err := os.WriteFile(path, audioData, 0644); err != nil {
 			logToTUI("save recording error: %v", err)
 		}
 	}
 
-	result, err := activeTranscriber.Transcribe(audioData, activeMode.format)
+	result, err := activeTranscriber.Transcribe(audioData, audioFormat)
 	if err != nil {
 		logToTUI("Error transcribing: %v", err)
 		logDiagError(fmt.Sprintf("transcribe error: %v", err))
@@ -401,11 +449,6 @@ func processRecording(enc encoder.Encoder) {
 		}
 	}
 
-	connStatus := "new"
-	if metrics.ConnReused {
-		connStatus = "reused"
-	}
-
 	rawSize := enc.TotalFrames() * 2
 	encodedSize := uint64(len(audioData))
 	compressionPct := (1.0 - float64(encodedSize)/float64(rawSize)) * 100
@@ -416,22 +459,32 @@ func processRecording(enc encoder.Encoder) {
 		peakAlloc = m.Alloc
 	}
 
-	networkAI := metrics.Upload + metrics.Inference
-	total := metrics.DNS + metrics.TLS + networkAI
+	total := metrics.ConnWait + metrics.DNS + metrics.TCP + metrics.TLS + metrics.ReqHeaders + metrics.ReqBody + metrics.TTFB + metrics.Download
 
 	formatLabel := "FLAC"
 	if activeMode.format == "mp3" {
 		formatLabel = fmt.Sprintf("MP3@%dkbps", activeMode.bitrate)
+	} else if activeMode.format == "adaptive" {
+		formatLabel = "adaptive" + adaptiveInfo
 	}
 	// Build metrics lines for TUI
+	reusedStatus := ""
+	if metrics.ConnReused {
+		reusedStatus = " (reused)"
+	}
 	metricsLines := []string{
 		fmt.Sprintf("audio:      %.1fs | %.1f KB → %.1f KB (%.0f%% smaller)",
 			audioDuration, float64(rawSize)/1024, float64(encodedSize)/1024, compressionPct),
 		fmt.Sprintf("mode:       %s (%s)", activeMode.name, formatLabel),
 		fmt.Sprintf("encode:     %dms (concurrent)", enc.EncodeTime().Milliseconds()),
+		fmt.Sprintf("conn_wait:  %dms%s", metrics.ConnWait.Milliseconds(), reusedStatus),
 		fmt.Sprintf("dns:        %dms", metrics.DNS.Milliseconds()),
-		fmt.Sprintf("tls:        %dms (%s)", metrics.TLS.Milliseconds(), connStatus),
-		fmt.Sprintf("net+infer:  %dms", networkAI.Milliseconds()),
+		fmt.Sprintf("tcp:        %dms", metrics.TCP.Milliseconds()),
+		fmt.Sprintf("tls:        %dms", metrics.TLS.Milliseconds()),
+		fmt.Sprintf("req_head:   %dms", metrics.ReqHeaders.Milliseconds()),
+		fmt.Sprintf("req_body:   %dms", metrics.ReqBody.Milliseconds()),
+		fmt.Sprintf("ttfb:       %dms", metrics.TTFB.Milliseconds()),
+		fmt.Sprintf("download:   %dms", metrics.Download.Milliseconds()),
 		fmt.Sprintf("total:      %dms", total.Milliseconds()),
 	}
 	// API confidence fields
@@ -470,7 +523,7 @@ func processRecording(enc encoder.Encoder) {
 		EncodeTimeMs:     float64(enc.EncodeTime().Milliseconds()),
 		DNSTimeMs:        float64(metrics.DNS.Milliseconds()),
 		TLSTimeMs:        float64(metrics.TLS.Milliseconds()),
-		NetInferMs:       float64(networkAI.Milliseconds()),
+		TTFBMs:           float64(metrics.TTFB.Milliseconds()),
 		TotalTimeMs:      float64(total.Milliseconds()),
 		MemoryAllocMB:    float64(m.Alloc) / 1024 / 1024,
 		MemoryPeakMB:     float64(peakAlloc) / 1024 / 1024,
@@ -524,7 +577,11 @@ func runBenchmark(wavFile string, runs int) {
 	fmt.Printf("Benchmark: %s (%d runs)\n", wavFile, runs)
 	fmt.Println("Using same streaming encoder as live recording")
 
-	activeTranscriber.WarmConnection()
+	tlsTime := activeTranscriber.WarmConnection()
+	if activeMode.format == "adaptive" {
+		adaptiveThreshold = thresholdFromTLSWarmup(tlsTime)
+		fmt.Printf("Adaptive mode: TLS=%dms → threshold=%dKB\n", tlsTime.Milliseconds(), adaptiveThreshold/1024)
+	}
 
 	for i := 1; i <= runs; i++ {
 		fmt.Printf("=== Run %d ===\n", i)
@@ -563,12 +620,7 @@ func simulateRecording(wavFile string) (encoder.Encoder, error) {
 	audioDuration := float64(len(samples)) / float64(encoder.SampleRate)
 	fmt.Printf("Simulating %.1fs recording...\n", audioDuration)
 
-	var enc encoder.Encoder
-	if activeMode.format == "mp3" {
-		enc, err = encoder.NewMp3(activeMode.bitrate)
-	} else {
-		enc, err = encoder.NewFlac()
-	}
+	enc, err := newEncoderForMode(activeMode)
 	if err != nil {
 		return nil, err
 	}

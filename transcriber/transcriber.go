@@ -8,10 +8,13 @@ import (
 
 type NetworkMetrics struct {
 	DNS        time.Duration
+	ConnWait   time.Duration // time waiting for connection from pool
+	TCP        time.Duration // TCP connect time
 	TLS        time.Duration
-	Connect    time.Duration
-	Upload     time.Duration
-	Inference  time.Duration
+	ReqHeaders time.Duration // time to write request headers
+	ReqBody    time.Duration // time to write request body
+	TTFB       time.Duration // time to first byte (after request sent)
+	Download   time.Duration // time to read response body
 	Total      time.Duration
 	ConnReused bool
 }
@@ -39,7 +42,7 @@ type Result struct {
 
 type Transcriber interface {
 	Transcribe(audio []byte, format string) (*Result, error)
-	WarmConnection()
+	WarmConnection() time.Duration // returns TLS handshake time
 	Name() string
 }
 

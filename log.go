@@ -100,7 +100,7 @@ func logTranscriptionMetrics(r TranscriptionRecord, mode, format, provider strin
 		Float64("encode_ms", r.EncodeTimeMs).
 		Float64("dns_ms", r.DNSTimeMs).
 		Float64("tls_ms", r.TLSTimeMs).
-		Float64("net_infer_ms", r.NetInferMs).
+		Float64("ttfb_ms", r.TTFBMs).
 		Float64("total_ms", r.TotalTimeMs).
 		Float64("mem_mb", r.MemoryAllocMB).
 		Float64("peak_mb", r.MemoryPeakMB).
@@ -155,4 +155,13 @@ func logSessionEnd(count int) {
 	diagLog.Info().
 		Int("count", count).
 		Msg("session_end")
+}
+
+func logPanic(r interface{}, stack []byte) {
+	msg := fmt.Sprintf("PANIC: %v\n%s", r, stack)
+	fmt.Fprintln(os.Stderr, msg)
+	if logReady {
+		diagLog.Error().Str("stack", string(stack)).Msgf("PANIC: %v", r)
+		diagFile.Sync()
+	}
 }
