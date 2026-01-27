@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"zee/transcriber"
 )
 
 var (
@@ -117,23 +116,12 @@ func logTranscriptionText(text string) {
 	transcribeFile.WriteString(line)
 }
 
-func logSegments(segments []transcriber.Segment, confidence float64) {
+func logConfidence(confidence float64) {
 	if !logReady {
 		return
 	}
 	if confidence > 0 {
 		diagLog.Info().Float64("confidence", confidence).Msg("api_confidence")
-	}
-	for i, seg := range segments {
-		diagLog.Info().
-			Int("seg", i).
-			Float64("no_speech", seg.NoSpeechProb).
-			Float64("logprob", seg.AvgLogProb).
-			Float64("comp_ratio", seg.CompressionRatio).
-			Float64("temp", seg.Temperature).
-			Float64("start", seg.Start).
-			Float64("end", seg.End).
-			Msg("segment")
 	}
 }
 

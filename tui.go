@@ -35,21 +35,28 @@ const (
 	tuiStateRecording
 )
 
+type historyEntry struct {
+	text     string
+	metrics  []string
+	copied   bool
+	noSpeech bool
+}
+
+const maxHistory = 50
+
 type tuiModel struct {
 	state             tuiState
 	frame             int
 	recordingDuration float64
 	audioLevel        float64
-	peakLevel         float64  // peak audio level during current recording
+	peakLevel         float64 // peak audio level during current recording
 	msgCount          int
 	width, height     int
-	modeLine          string   // "[fast | MP3@16kbps | deepgram]"
-	deviceLine        string   // microphone device name
-	rateLimit         string   // "45/50 remaining"
-	lastText          string   // last transcribed text
-	lastMetrics       []string // metrics for last transcription
-	copiedToClipboard bool     // show clipboard indicator
-	noSpeech          bool     // last transcription had no speech
+	modeLine          string // "[fast | MP3@16kbps | deepgram]"
+	deviceLine        string // microphone device name
+	rateLimit         string // "45/50 remaining"
+	history           []historyEntry
+	viewIdx           int // 0 = newest, higher = older
 }
 
 var (
@@ -122,8 +129,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
+		switch msg.String() {
+		case "ctrl+c":
 			return m, tea.Quit
+		case "up", "k":
+			if m.viewIdx < len(m.history)-1 {
+				m.viewIdx++
+			}
+		case "down", "j":
+			if m.viewIdx > 0 {
+				m.viewIdx--
+			}
 		}
 
 	case tickMsg:
@@ -164,10 +180,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TranscriptionMsg:
 		m.msgCount++
-		m.lastText = msg.Text
-		m.lastMetrics = msg.Metrics
-		m.copiedToClipboard = msg.Copied
-		m.noSpeech = msg.NoSpeech
+		// Deep copy metrics slice to avoid aliasing
+		metricsCopy := make([]string, len(msg.Metrics))
+		copy(metricsCopy, msg.Metrics)
+		entry := historyEntry{
+			text:     msg.Text,
+			metrics:  metricsCopy,
+			copied:   msg.Copied,
+			noSpeech: msg.NoSpeech,
+		}
+		m.history = append(m.history, entry)
+		if len(m.history) > maxHistory {
+			m.history = m.history[1:]
+		}
+		m.viewIdx = 0 // reset to newest
 
 	case ModeLineMsg:
 		m.modeLine = msg.Text
@@ -275,31 +301,43 @@ func (m tuiModel) View() string {
 		logWidth = 20
 	}
 
-	// Build right panel content - only last transcription
+	// Build right panel content
 	var logContent strings.Builder
 	wrapWidth := logWidth - 2
 	if wrapWidth < 10 {
 		wrapWidth = 10
 	}
 
-	if m.lastText != "" {
-		// Title with number
+	if len(m.history) > 0 {
+		// Get entry from history (viewIdx 0 = newest = last in slice)
+		idx := len(m.history) - 1 - m.viewIdx
+		if idx < 0 {
+			idx = 0
+		}
+		entry := m.history[idx]
+		entryNum := m.msgCount - m.viewIdx
+
+		// Title with position indicator
+		titleText := fmt.Sprintf("Transcription #%d", entryNum)
+		if len(m.history) > 1 {
+			titleText += fmt.Sprintf(" (%d/%d ↑/↓)", m.viewIdx+1, len(m.history))
+		}
 		title := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("246")).
-			Render(fmt.Sprintf("Last transcription (#%d)", m.msgCount))
+			Render(titleText)
 		logContent.WriteString(title + "\n\n")
 
 		// Transcribed text
 		var textStyle lipgloss.Style
-		if m.noSpeech {
+		if entry.noSpeech {
 			textStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
 		} else {
 			textStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
 		}
-		lines := wrapText(m.lastText, wrapWidth)
+		lines := wrapText(entry.text, wrapWidth)
 		for i, line := range lines {
 			logContent.WriteString(textStyle.Render(line))
-			if i == len(lines)-1 && m.copiedToClipboard && !m.noSpeech {
+			if i == len(lines)-1 && entry.copied && !entry.noSpeech {
 				clipboardStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 				logContent.WriteString(" " + clipboardStyle.Render("[✓ copied]"))
 			}
@@ -307,15 +345,14 @@ func (m tuiModel) View() string {
 		}
 
 		// Metrics
-		if len(m.lastMetrics) > 0 {
+		if len(entry.metrics) > 0 {
 			logContent.WriteString("\n")
 			metricsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-			for _, metric := range m.lastMetrics {
+			for _, metric := range entry.metrics {
 				logContent.WriteString(metricsStyle.Render(metric) + "\n")
 			}
 		}
 	} else {
-		// No transcription yet
 		placeholder := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			Render("No transcriptions yet")

@@ -490,11 +490,6 @@ func processRecording(enc encoder.Encoder) {
 	if result.Confidence > 0 {
 		metricsLines = append(metricsLines, fmt.Sprintf("confidence: %.4f", result.Confidence))
 	}
-	for i, seg := range result.Segments {
-		metricsLines = append(metricsLines,
-			fmt.Sprintf("seg[%d]:     no_speech=%.3f logprob=%.2f comp=%.2f temp=%.1f",
-				i, seg.NoSpeechProb, seg.AvgLogProb, seg.CompressionRatio, seg.Temperature))
-	}
 
 	displayText := text
 	if noSpeech {
@@ -527,7 +522,7 @@ func processRecording(enc encoder.Encoder) {
 	transcriptions = append(transcriptions, record)
 	updatePercentileStats()
 	logTranscriptionMetrics(record, activeMode.name, audioFormat, activeTranscriber.Name(), metrics.ConnReused)
-	logSegments(result.Segments, result.Confidence)
+	logConfidence(result.Confidence)
 	if !noSpeech {
 		logTranscriptionText(text)
 	}
