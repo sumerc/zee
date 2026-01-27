@@ -107,6 +107,7 @@ func run() {
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	saveRecording := flag.Bool("saverecording", false, "Save last recording to zee_last.<format>")
 	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
+	expertFlag := flag.Bool("expert", false, "Show full TUI with HAL eye animation")
 	flag.Parse()
 
 	if *versionFlag {
@@ -173,7 +174,7 @@ func run() {
 
 	// Start TUI
 	tuiMu.Lock()
-	tuiProgram = NewTUIProgram()
+	tuiProgram = NewTUIProgram(*expertFlag)
 	tuiMu.Unlock()
 
 	go func() {

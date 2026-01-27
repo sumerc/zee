@@ -23,9 +23,9 @@ type TranscriptionMsg struct {
 	Copied   bool
 	NoSpeech bool // true when no speech was detected
 }
-type ModeLineMsg struct{ Text string }    // Mode/provider info
-type DeviceLineMsg struct{ Text string }  // Microphone device name
-type RateLimitMsg struct{ Text string }   // Rate limit info
+type ModeLineMsg struct{ Text string }   // Mode/provider info
+type DeviceLineMsg struct{ Text string } // Microphone device name
+type RateLimitMsg struct{ Text string }  // Rate limit info
 type tickMsg time.Time
 
 type tuiState int
@@ -56,7 +56,8 @@ type tuiModel struct {
 	deviceLine        string // microphone device name
 	rateLimit         string // "45/50 remaining"
 	history           []historyEntry
-	viewIdx           int // 0 = newest, higher = older
+	viewIdx           int  // 0 = newest, higher = older
+	expertMode        bool // show full TUI with HAL eye
 }
 
 var (
@@ -107,8 +108,8 @@ func init() {
 	}
 }
 
-func NewTUIProgram() *tea.Program {
-	m := tuiModel{}
+func NewTUIProgram(expertMode bool) *tea.Program {
+	m := tuiModel{expertMode: expertMode}
 	return tea.NewProgram(m, tea.WithAltScreen())
 }
 
@@ -119,7 +120,7 @@ func tuiTick(d time.Duration) tea.Cmd {
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return tuiTick(500 * time.Millisecond)
+	return tuiTick(33 * time.Millisecond) // ~30 FPS for smooth breathing
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -147,7 +148,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == tuiStateRecording {
 			return m, tuiTick(60 * time.Millisecond)
 		}
-		return m, tuiTick(500 * time.Millisecond)
+		return m, tuiTick(33 * time.Millisecond) // ~30 FPS for smooth breathing
 
 	case RecordingStartMsg:
 		m.state = tuiStateRecording
@@ -269,12 +270,14 @@ func (m tuiModel) View() string {
 		infoLines = append(infoLines, rateLine)
 	}
 
-	// Percentile table
-	if table := renderPercentileTable(); table != "" {
-		infoLines = append(infoLines, "")
-		tableStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-		for _, line := range strings.Split(table, "\n") {
-			infoLines = append(infoLines, tableStyle.Render(line))
+	// Percentile table (expert mode only)
+	if m.expertMode {
+		if table := renderPercentileTable(); table != "" {
+			infoLines = append(infoLines, "")
+			tableStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+			for _, line := range strings.Split(table, "\n") {
+				infoLines = append(infoLines, tableStyle.Render(line))
+			}
 		}
 	}
 
@@ -349,7 +352,16 @@ func (m tuiModel) View() string {
 			logContent.WriteString("\n")
 			metricsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 			for _, metric := range entry.metrics {
-				logContent.WriteString(metricsStyle.Render(metric) + "\n")
+				if m.expertMode {
+					logContent.WriteString(metricsStyle.Render(metric) + "\n")
+				} else if strings.HasPrefix(metric, "audio:") {
+					// Show only duration part (before "|")
+					if idx := strings.Index(metric, "|"); idx > 0 {
+						logContent.WriteString(metricsStyle.Render(strings.TrimSpace(metric[:idx])) + "\n")
+					}
+				} else if strings.HasPrefix(metric, "total:") {
+					logContent.WriteString(metricsStyle.Render(metric) + "\n")
+				}
 			}
 		}
 	} else {
