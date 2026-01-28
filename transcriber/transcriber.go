@@ -44,16 +44,23 @@ type Transcriber interface {
 	Transcribe(audio []byte, format string) (*Result, error)
 	WarmConnection() time.Duration // returns TLS handshake time
 	Name() string
+	SetLanguage(lang string)
+	GetLanguage() string
 }
 
 type baseTranscriber struct {
 	client *TracedClient
 	apiURL string
+	lang   string
 }
 
 func (b *baseTranscriber) WarmConnection() time.Duration {
 	return b.client.WarmConnection(b.apiURL)
 }
+
+func (b *baseTranscriber) SetLanguage(lang string) { b.lang = lang }
+
+func (b *baseTranscriber) GetLanguage() string { return b.lang }
 
 func New() Transcriber {
 	dgKey := os.Getenv("DEEPGRAM_API_KEY")

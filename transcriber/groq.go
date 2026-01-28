@@ -57,6 +57,9 @@ func (g *Groq) Transcribe(audioData []byte, format string) (*Result, error) {
 
 	writer.WriteField("model", "whisper-large-v3-turbo")
 	writer.WriteField("response_format", "verbose_json")
+	if g.baseTranscriber.lang != "" {
+		writer.WriteField("language", g.baseTranscriber.lang)
+	}
 	writer.Close()
 
 	req, err := http.NewRequest("POST", g.apiURL, &body)

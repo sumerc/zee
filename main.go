@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"zee/audio"
+	"zee/beep"
 	"zee/clipboard"
 	"zee/doctor"
 	"zee/encoder"
@@ -94,7 +95,8 @@ var activeMode modeConfig
 
 func run() {
 	// Set up crash output file for all crashes (panics, SIGSEGV, etc.)
-	crashFile, err := os.OpenFile("crash_log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	crashFileName := fmt.Sprintf("crash_log-%s.txt", time.Now().Format("02012006-150405"))
+	crashFile, err := os.OpenFile(crashFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
 		debug.SetCrashOutput(crashFile, debug.CrashOptions{})
 	}
@@ -108,6 +110,7 @@ func run() {
 	saveRecording := flag.Bool("saverecording", false, "Save last recording to zee_last.<format>")
 	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
 	expertFlag := flag.Bool("expert", false, "Show full TUI with HAL eye animation")
+	langFlag := flag.String("lang", "", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
 	flag.Parse()
 
 	if *versionFlag {
@@ -132,6 +135,9 @@ func run() {
 	}
 	activeMode = m
 	activeTranscriber = transcriber.New()
+	if *langFlag != "" {
+		activeTranscriber.SetLanguage(*langFlag)
+	}
 
 	if err := initLogging(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not init logging: %v\n", err)
@@ -222,7 +228,7 @@ func run() {
 			adaptiveThreshold = thresholdFromTLSWarmup(tlsTime)
 		}
 	}()
-	go func() { soundOnce.Do(initSound) }()
+	go beep.Init()
 
 	hk := hotkey.New()
 	if err := hk.Register(); err != nil {
@@ -238,7 +244,11 @@ func run() {
 	} else if activeMode.format == "adaptive" {
 		formatLabel = "adaptive"
 	}
-	tuiSend(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, activeTranscriber.Name())})
+	providerLabel := activeTranscriber.Name()
+	if lang := activeTranscriber.GetLanguage(); lang != "" {
+		providerLabel += " (" + lang + ")"
+	}
+	tuiSend(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, providerLabel)})
 	if selectedDevice != nil {
 		tuiSend(DeviceLineMsg{Text: "mic: " + selectedDevice.Name})
 	} else {
@@ -351,7 +361,7 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 		return nil, err
 	}
 
-	playStartSound()
+	beep.PlayStart()
 
 	recordStart := time.Now()
 
@@ -378,7 +388,7 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 	<-done
 
 	captureDevice.Stop()
-	playEndSound()
+	beep.PlayEnd()
 	captureDevice.Close()
 
 	// Send remaining samples as partial block

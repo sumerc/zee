@@ -133,11 +133,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
-		case "up", "k":
+		case "down", "j":
 			if m.viewIdx < len(m.history)-1 {
 				m.viewIdx++
 			}
-		case "down", "j":
+		case "up", "k":
 			if m.viewIdx > 0 {
 				m.viewIdx--
 			}
