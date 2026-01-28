@@ -95,9 +95,10 @@ var activeMode modeConfig
 
 func run() {
 	// Set up crash output file for all crashes (panics, SIGSEGV, etc.)
-	crashFileName := fmt.Sprintf("crash_log-%s.txt", time.Now().Format("02012006-150405"))
-	crashFile, err := os.OpenFile(crashFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// Write session marker so each crash can be correlated to a session start time
+	crashFile, err := os.OpenFile("crash_log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
+		fmt.Fprintf(crashFile, "\n=== Session %s [pid=%d] ===\n", time.Now().Format("2006-01-02 15:04:05"), os.Getpid())
 		debug.SetCrashOutput(crashFile, debug.CrashOptions{})
 	}
 
@@ -111,7 +112,12 @@ func run() {
 	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
 	expertFlag := flag.Bool("expert", false, "Show full TUI with HAL eye animation")
 	langFlag := flag.String("lang", "", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
+	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
 	flag.Parse()
+
+	if *crashFlag {
+		panic("TEST CRASH: synthetic panic to verify crash logging")
+	}
 
 	if *versionFlag {
 		fmt.Printf("zee %s\n", version)
@@ -139,10 +145,13 @@ func run() {
 		activeTranscriber.SetLanguage(*langFlag)
 	}
 
-	if err := initLogging(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not init logging: %v\n", err)
-	} else {
-		logSessionStart(activeTranscriber.Name(), activeMode.name, activeMode.format)
+	// Only enable verbose logging in expert mode
+	if *expertFlag {
+		if err := initLogging(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not init logging: %v\n", err)
+		} else {
+			logSessionStart(activeTranscriber.Name(), activeMode.name, activeMode.format)
+		}
 	}
 
 	if *benchmarkFile != "" {
@@ -257,10 +266,12 @@ func run() {
 
 	for {
 		<-hk.Keydown()
+		logDiagInfo("hotkey_down")
 		tuiSend(RecordingStartMsg{})
 		go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
 
 		state, err := recordWithStreaming(ctx, hk.Keyup(), selectedDevice)
+		logDiagInfo("hotkey_up")
 		tuiSend(RecordingStopMsg{})
 		if err != nil {
 			logToTUI("Error recording: %v", err)
@@ -361,6 +372,7 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 		return nil, err
 	}
 
+	logDiagInfo("beep_start")
 	beep.PlayStart()
 
 	recordStart := time.Now()
@@ -388,6 +400,7 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 	<-done
 
 	captureDevice.Stop()
+	logDiagInfo("beep_end")
 	beep.PlayEnd()
 	captureDevice.Close()
 
@@ -449,10 +462,12 @@ func processRecording(enc encoder.Encoder) {
 	// Only type if there's actual speech and autopaste is enabled
 	clipboardOK := false
 	if !noSpeech && autoPaste {
+		logDiagInfo("paste_start")
 		if err := clipboard.Type(text); err != nil {
 			logDiagError(fmt.Sprintf("type error: %v", err))
 		} else {
 			clipboardOK = true
+			logDiagInfo("paste_done")
 		}
 	}
 

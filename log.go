@@ -15,11 +15,14 @@ var (
 	transcribeFile *os.File
 	logMu          sync.Mutex
 	logReady       bool
+	pid            int
 )
 
 func initLogging() error {
 	logMu.Lock()
 	defer logMu.Unlock()
+
+	pid = os.Getpid()
 
 	var err error
 
@@ -39,7 +42,7 @@ func initLogging() error {
 		TimeFormat: "15:04:05",
 		NoColor:    true,
 	}
-	diagLog = zerolog.New(consoleWriter).With().Timestamp().Logger()
+	diagLog = zerolog.New(consoleWriter).With().Timestamp().Int("pid", pid).Logger()
 
 	logReady = true
 	return nil
@@ -112,7 +115,7 @@ func logTranscriptionText(text string) {
 	}
 	logMu.Lock()
 	defer logMu.Unlock()
-	line := fmt.Sprintf("%s\t%s\n", time.Now().Format("2006-01-02 15:04:05"), text)
+	line := fmt.Sprintf("%s\t[%d]\t%s\n", time.Now().Format("2006-01-02 15:04:05"), pid, text)
 	transcribeFile.WriteString(line)
 }
 

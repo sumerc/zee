@@ -8,7 +8,7 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/gen2brain/malgo v0.11.22
+	github.com/gen2brain/malgo v0.11.25-0.20251120102819-856f60956a65
 	github.com/jfreymuth/pulse v0.1.1
 	github.com/mewkiz/flac v1.0.13
 	github.com/micmonay/keybd_event v1.1.2

@@ -5,17 +5,23 @@ package beep
 import (
 	"math"
 	"sync"
-	"time"
+	"sync/atomic"
 
 	"github.com/gen2brain/malgo"
 )
 
 var (
 	malgoCtx     *malgo.AllocatedContext
+	device       *malgo.Device
 	startSamples []byte
 	endSamples   []byte
 	soundOnce    sync.Once
-	soundMu      sync.Mutex
+
+	// Playback state - accessed atomically from callback
+	playSamples atomic.Pointer[[]byte]
+	playPos     atomic.Uint32
+	playDone    chan struct{}
+	playMu      sync.Mutex
 )
 
 func initSound() {
@@ -27,6 +33,63 @@ func initSound() {
 
 	startSamples = generateTickBytes(44100, 1200, 0.03, 0.5, 60)
 	endSamples = generateTickBytes(44100, 900, 0.05, 0.5, 40)
+
+	// Create persistent device
+	config := malgo.DefaultDeviceConfig(malgo.Playback)
+	config.Playback.Format = malgo.FormatS16
+	config.Playback.Channels = 1
+	config.SampleRate = 44100
+
+	callbacks := malgo.DeviceCallbacks{
+		Data: dataCallback,
+	}
+
+	device, err = malgo.InitDevice(malgoCtx.Context, config, callbacks)
+	if err != nil {
+		malgoCtx.Uninit()
+		malgoCtx = nil
+		return
+	}
+}
+
+func dataCallback(pOutput, _ []byte, frameCount uint32) {
+	samples := playSamples.Load()
+	if samples == nil || len(*samples) == 0 {
+		// Silence when not playing
+		for i := range pOutput {
+			pOutput[i] = 0
+		}
+		return
+	}
+
+	pos := playPos.Load()
+	total := uint32(len(*samples))
+	bytesToWrite := frameCount * 2
+	remaining := total - pos
+
+	if remaining == 0 {
+		// Done playing - signal and output silence
+		for i := range pOutput {
+			pOutput[i] = 0
+		}
+		select {
+		case playDone <- struct{}{}:
+		default:
+		}
+		return
+	}
+
+	if bytesToWrite > remaining {
+		bytesToWrite = remaining
+	}
+
+	copy(pOutput[:bytesToWrite], (*samples)[pos:pos+bytesToWrite])
+	playPos.Store(pos + bytesToWrite)
+
+	// Zero-fill remainder
+	for i := bytesToWrite; i < frameCount*2; i++ {
+		pOutput[i] = 0
+	}
 }
 
 func generateTickBytes(sampleRate int, freq float64, duration float64, volume float64, decay float64) []byte {
@@ -43,55 +106,29 @@ func generateTickBytes(sampleRate int, freq float64, duration float64, volume fl
 }
 
 func playBytes(samples []byte) {
-	if malgoCtx == nil || len(samples) == 0 {
+	if device == nil || len(samples) == 0 {
 		return
 	}
 
-	soundMu.Lock()
-	defer soundMu.Unlock()
+	playMu.Lock()
+	defer playMu.Unlock()
 
-	config := malgo.DefaultDeviceConfig(malgo.Playback)
-	config.Playback.Format = malgo.FormatS16
-	config.Playback.Channels = 1
-	config.SampleRate = 44100
+	// Set up playback state
+	playDone = make(chan struct{}, 1)
+	playPos.Store(0)
+	playSamples.Store(&samples)
 
-	var pos uint32
-	total := uint32(len(samples))
-
-	callbacks := malgo.DeviceCallbacks{
-		Data: func(pOutput, _ []byte, frameCount uint32) {
-			bytesToWrite := frameCount * 2
-			remaining := total - pos
-			if bytesToWrite > remaining {
-				bytesToWrite = remaining
-			}
-			if bytesToWrite > 0 {
-				copy(pOutput[:bytesToWrite], samples[pos:pos+bytesToWrite])
-				pos += bytesToWrite
-			}
-			for i := bytesToWrite; i < frameCount*2; i++ {
-				pOutput[i] = 0
-			}
-		},
+	// Start device if not running
+	if !device.IsStarted() {
+		if err := device.Start(); err != nil {
+			playSamples.Store(nil)
+			return
+		}
 	}
 
-	device, err := malgo.InitDevice(malgoCtx.Context, config, callbacks)
-	if err != nil {
-		return
-	}
-
-	if err := device.Start(); err != nil {
-		device.Uninit()
-		return
-	}
-
-	for pos < total {
-		time.Sleep(5 * time.Millisecond)
-	}
-	time.Sleep(10 * time.Millisecond)
-
-	device.Stop()
-	device.Uninit()
+	// Wait for playback to complete
+	<-playDone
+	playSamples.Store(nil)
 }
 
 func Init() {

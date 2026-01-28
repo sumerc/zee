@@ -3,7 +3,6 @@ package mp3
 import (
 	"encoding/binary"
 	"io"
-	"unsafe"
 )
 
 const SHINE_MAX_SAMPLES = 1152
@@ -151,7 +150,7 @@ func NewEncoder(sampleRate, channels, bitrate int) *Encoder {
 	}
 	return enc
 }
-func (enc *Encoder) encodeBufferInternal(stride int) ([]uint8, int) {
+func (enc *Encoder) encodeBufferInternal() ([]uint8, int) {
 	if enc.Mpeg.FracSlotsPerFrame != 0 {
 		if enc.Mpeg.Slot_lag <= (enc.Mpeg.FracSlotsPerFrame - 1.0) {
 			enc.Mpeg.Padding = 1
@@ -162,7 +161,7 @@ func (enc *Encoder) encodeBufferInternal(stride int) ([]uint8, int) {
 	}
 	enc.Mpeg.BitsPerFrame = (enc.Mpeg.WholeSlotsPerFrame + enc.Mpeg.Padding) * 8
 	enc.meanBits = (enc.Mpeg.BitsPerFrame - enc.sideInfoLen) / enc.Mpeg.GranulesPerFrame
-	enc.mdctSub(int64(stride))
+	enc.mdctSub()
 	enc.iterationLoop()
 	enc.formatBitstream()
 	written := enc.bitstream.dataPosition
@@ -170,12 +169,10 @@ func (enc *Encoder) encodeBufferInternal(stride int) ([]uint8, int) {
 	return enc.bitstream.data, written
 }
 
-func (enc *Encoder) encodeBufferInterleaved(data *int16) ([]uint8, int) {
-	enc.buffer[0] = data
-	if enc.Wave.Channels == 2 {
-		enc.buffer[1] = (*int16)(unsafe.Add(unsafe.Pointer(data), unsafe.Sizeof(int16(0))*1))
-	}
-	return enc.encodeBufferInternal(int(enc.Wave.Channels))
+func (enc *Encoder) encodeBufferInterleaved(data []int16) ([]uint8, int) {
+	enc.buffer = data
+	enc.bufferStride = int(enc.Wave.Channels)
+	return enc.encodeBufferInternal()
 }
 
 func (enc *Encoder) Write(out io.Writer, data []int16) error {
@@ -183,7 +180,7 @@ func (enc *Encoder) Write(out io.Writer, data []int16) error {
 
 	samplesRead := len(data)
 	for i := 0; i < samplesRead; i += samples_per_pass * int(enc.Wave.Channels) {
-		end := i + samples_per_pass
+		end := i + samples_per_pass*int(enc.Wave.Channels)
 		if end > samplesRead {
 			end = samplesRead
 		}
@@ -191,7 +188,7 @@ func (enc *Encoder) Write(out io.Writer, data []int16) error {
 		chunk := data[i:end]
 
 		// Encode and write the chunk to the output file.
-		data, written := enc.encodeBufferInterleaved(&chunk[0])
+		data, written := enc.encodeBufferInterleaved(chunk)
 		err := binary.Write(out, binary.LittleEndian, data[:written])
 		if err != nil {
 			return err

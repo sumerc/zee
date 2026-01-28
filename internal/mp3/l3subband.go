@@ -2,10 +2,9 @@ package mp3
 
 import (
 	"math"
-	"unsafe"
 )
 
-// subbandInitialize calculates the analysis filterbank coefficients and rounds to the  9th decimal
+// subbandInitialize calculates the analysis filterbank coefficients and rounds to the 9th decimal
 // place accuracy of the filterbank tables in the ISO document. The coefficients are stored in #filter#
 func (enc *Encoder) subbandInitialize() {
 	var (
@@ -47,29 +46,30 @@ func (enc *Encoder) subbandInitialize() {
 	}
 }
 
-// Overlapping window on PCM samples 32 16-bit pcm samples are scaled to fractional 2's complement and
-// concatenated to the end of the window buffer #x#. The updated window buffer #x# is then windowed by
-// the analysis window #shine_enwindow# to produce the windowed sample #z# Calculates the analysis filter bank
-// coefficients The windowed samples #z# is filtered by the digital filter matrix #filter# to produce the subband
-// samples #s#. This done by first selectively picking out values from the windowed samples, and then
-// multiplying them by the filter matrix, producing 32 subband samples.
-func (enc *Encoder) windowFilterSubband(buffer **int16, s *[32]int32, ch int64, stride int64) {
+// windowFilterSubband processes samples from the buffer at the given position.
+// Returns the new buffer position after reading 32 samples.
+func (enc *Encoder) windowFilterSubband(bufPos int, s *[32]int32, ch int64) int {
 	var (
-		y   [64]int32
-		i   int64
-		j   int64
-		ptr *int16 = *buffer
+		y [64]int32
+		i int64
+		j int64
 	)
+
+	stride := enc.bufferStride
+
+	// Read 32 samples with stride
 	for i = 32; func() int64 {
 		p := &i
 		x := *p
 		*p--
 		return x
 	}() != 0; {
-		enc.subband.X[ch][i+enc.subband.Off[ch]] = int32(int64(int32(*ptr)) << 16)
-		ptr = (*int16)(unsafe.Add(unsafe.Pointer(ptr), unsafe.Sizeof(int16(0))*uintptr(stride)))
+		if bufPos < len(enc.buffer) {
+			enc.subband.X[ch][i+enc.subband.Off[ch]] = int32(int64(int32(enc.buffer[bufPos])) << 16)
+		}
+		bufPos += stride
 	}
-	*buffer = ptr
+
 	for i = 64; func() int64 {
 		p := &i
 		x := *p
@@ -103,16 +103,17 @@ func (enc *Encoder) windowFilterSubband(buffer **int16, s *[32]int32, ch int64, 
 			s_value_lo uint32
 		)
 		_ = s_value_lo
-		s_value = int32(((int64(enc.subband.Fl[i][63])) * (int64(y[63]))) >> 32)
-		for j = 63; j != 0; j -= 7 {
-			s_value += int32(((int64(enc.subband.Fl[i][j-1])) * (int64(y[j-1]))) >> 32)
-			s_value += int32(((int64(enc.subband.Fl[i][j-2])) * (int64(y[j-2]))) >> 32)
-			s_value += int32(((int64(enc.subband.Fl[i][j-3])) * (int64(y[j-3]))) >> 32)
-			s_value += int32(((int64(enc.subband.Fl[i][j-4])) * (int64(y[j-4]))) >> 32)
-			s_value += int32(((int64(enc.subband.Fl[i][j-5])) * (int64(y[j-5]))) >> 32)
-			s_value += int32(((int64(enc.subband.Fl[i][j-6])) * (int64(y[j-6]))) >> 32)
-			s_value += int32(((int64(enc.subband.Fl[i][j-7])) * (int64(y[j-7]))) >> 32)
+		s_value = 0
+		for j = 64; func() int64 {
+			p := &j
+			x := *p
+			*p--
+			return x
+		}() != 0; {
+			s_value += int32(((int64(y[j])) * (int64(enc.subband.Fl[i][j]))) >> 32)
 		}
-		s[i] = s_value
+		s[i] = s_value << 1
 	}
+
+	return bufPos
 }

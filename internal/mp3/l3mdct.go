@@ -53,7 +53,7 @@ func (enc *Encoder) mdctInitialize() {
 		}
 	}
 }
-func (enc *Encoder) mdctSub(stride int64) {
+func (enc *Encoder) mdctSub() {
 	var (
 		ch      int64
 		gr      int64
@@ -62,6 +62,9 @@ func (enc *Encoder) mdctSub(stride int64) {
 		k       int64
 		mdct_in [36]int32
 	)
+	// Track position in buffer for each channel
+	bufferPos := [2]int{0, 1} // channel 0 starts at 0, channel 1 starts at 1 (interleaved)
+
 	for ch = enc.Wave.Channels; func() int64 {
 		p := &ch
 		x := *p
@@ -71,8 +74,8 @@ func (enc *Encoder) mdctSub(stride int64) {
 		for gr = 0; gr < enc.Mpeg.GranulesPerFrame; gr++ {
 			mdct_enc := &enc.mdctFrequency[ch][gr]
 			for k = 0; k < 18; k += 2 {
-				enc.windowFilterSubband(&enc.buffer[ch], &enc.l3SubbandSamples[ch][gr+1][k], ch, stride)
-				enc.windowFilterSubband(&enc.buffer[ch], &enc.l3SubbandSamples[ch][gr+1][k+1], ch, stride)
+				bufferPos[ch] = enc.windowFilterSubband(bufferPos[ch], &enc.l3SubbandSamples[ch][gr+1][k], ch)
+				bufferPos[ch] = enc.windowFilterSubband(bufferPos[ch], &enc.l3SubbandSamples[ch][gr+1][k+1], ch)
 				for band = 1; band < 32; band += 2 {
 					enc.l3SubbandSamples[ch][gr+1][k+1][band] *= -1
 				}
