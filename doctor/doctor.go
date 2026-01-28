@@ -252,7 +252,12 @@ func recordAudio(ctx audio.Context, device *audio.DeviceInfo, keyup <-chan struc
 		Channels:   encoder.Channels,
 	}
 
-	captureDevice, err := ctx.NewCapture(device, config, func(data []byte, frameCount uint32) {
+	captureDevice, err := ctx.NewCapture(device, config)
+	if err != nil {
+		return nil, err
+	}
+
+	captureDevice.SetCallback(func(data []byte, frameCount uint32) {
 		bufMu.Lock()
 		if stopped {
 			bufMu.Unlock()
@@ -277,9 +282,6 @@ func recordAudio(ctx audio.Context, device *audio.DeviceInfo, keyup <-chan struc
 			enc.EncodeBlock(block)
 		}
 	})
-	if err != nil {
-		return nil, err
-	}
 
 	if err := captureDevice.Start(); err != nil {
 		captureDevice.Close()

@@ -14,7 +14,7 @@ type DeviceInfo struct {
 
 type Context interface {
 	Devices() ([]DeviceInfo, error)
-	NewCapture(device *DeviceInfo, config CaptureConfig, callback DataCallback) (CaptureDevice, error)
+	NewCapture(device *DeviceInfo, config CaptureConfig) (CaptureDevice, error)
 	Close()
 }
 
@@ -22,4 +22,6 @@ type CaptureDevice interface {
 	Start() error
 	Stop()
 	Close()
+	SetCallback(cb DataCallback)
+	ClearCallback()
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jfreymuth/pulse"
 	"github.com/jfreymuth/pulse/proto"
@@ -38,12 +39,11 @@ func (p *pulseContext) Devices() ([]DeviceInfo, error) {
 	return devices, nil
 }
 
-func (p *pulseContext) NewCapture(device *DeviceInfo, config CaptureConfig, callback DataCallback) (CaptureDevice, error) {
+func (p *pulseContext) NewCapture(device *DeviceInfo, config CaptureConfig) (CaptureDevice, error) {
 	return &pulseCapture{
-		client:   p.client,
-		device:   device,
-		config:   config,
-		callback: callback,
+		client: p.client,
+		device: device,
+		config: config,
 	}, nil
 }
 
@@ -55,7 +55,7 @@ type pulseCapture struct {
 	client   *pulse.Client
 	device   *DeviceInfo
 	config   CaptureConfig
-	callback DataCallback
+	callback atomic.Pointer[DataCallback]
 
 	stream *pulse.RecordStream
 	mu     sync.Mutex
@@ -67,11 +67,15 @@ func (c *pulseCapture) Start() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	const gain = 8 // software gain to compensate for weak mic input
+	const gain = 8
 
 	writer := pulse.Int16Writer(func(buf []int16) (int, error) {
 		if len(buf) == 0 {
 			return 0, nil
+		}
+		cb := c.callback.Load()
+		if cb == nil {
+			return len(buf), nil
 		}
 		data := make([]byte, len(buf)*2)
 		for i, s := range buf {
@@ -83,14 +87,14 @@ func (c *pulseCapture) Start() error {
 			}
 			binary.LittleEndian.PutUint16(data[i*2:], uint16(int16(amplified)))
 		}
-		c.callback(data, uint32(len(buf)))
+		(*cb)(data, uint32(len(buf)))
 		return len(buf), nil
 	})
 
 	opts := []pulse.RecordOption{
 		pulse.RecordMono,
 		pulse.RecordSampleRate(int(c.config.SampleRate)),
-		pulse.RecordLatency(0.05), // 50ms target latency — forces near-realtime delivery
+		pulse.RecordLatency(0.05),
 		pulse.RecordRawOption(func(r *proto.CreateRecordStream) {
 			vol := uint32(proto.VolumeNorm) * 3
 			r.ChannelVolumes = proto.ChannelVolumes{vol}
@@ -138,4 +142,12 @@ func (c *pulseCapture) Stop() {
 
 func (c *pulseCapture) Close() {
 	c.Stop()
+}
+
+func (c *pulseCapture) SetCallback(cb DataCallback) {
+	c.callback.Store(&cb)
+}
+
+func (c *pulseCapture) ClearCallback() {
+	c.callback.Store(nil)
 }

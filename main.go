@@ -187,6 +187,19 @@ func run() {
 		}
 	}
 
+	// Create persistent capture device
+	captureConfig := audio.CaptureConfig{
+		SampleRate: encoder.SampleRate,
+		Channels:   encoder.Channels,
+	}
+	captureDevice, err := ctx.NewCapture(selectedDevice, captureConfig)
+	if err != nil {
+		logDiagError(fmt.Sprintf("capture device init error: %v", err))
+		fmt.Printf("Error initializing capture device: %v\n", err)
+		os.Exit(1)
+	}
+	defer captureDevice.Close()
+
 	// Start TUI
 	tuiMu.Lock()
 	tuiProgram = NewTUIProgram(*expertFlag)
@@ -270,7 +283,7 @@ func run() {
 		tuiSend(RecordingStartMsg{})
 		go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
 
-		state, err := recordWithStreaming(ctx, hk.Keyup(), selectedDevice)
+		state, err := recordWithStreaming(captureDevice, hk.Keyup())
 		logDiagInfo("hotkey_up")
 		tuiSend(RecordingStopMsg{})
 		if err != nil {
@@ -292,7 +305,7 @@ func run() {
 	}
 }
 
-func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio.DeviceInfo) (encoder.Encoder, error) {
+func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (encoder.Encoder, error) {
 	enc, err := newEncoderForMode(activeMode)
 	if err != nil {
 		return nil, err
@@ -319,12 +332,8 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 	var stopped bool
 	done := make(chan struct{})
 
-	config := audio.CaptureConfig{
-		SampleRate: encoder.SampleRate,
-		Channels:   encoder.Channels,
-	}
-
-	captureDevice, err := ctx.NewCapture(device, config, func(data []byte, frameCount uint32) {
+	// Set callback for this recording
+	capture.SetCallback(func(data []byte, frameCount uint32) {
 		bufMu.Lock()
 		if stopped {
 			bufMu.Unlock()
@@ -361,13 +370,9 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 			blockChan <- block
 		}
 	})
-	if err != nil {
-		close(blockChan)
-		return nil, err
-	}
 
-	if err := captureDevice.Start(); err != nil {
-		captureDevice.Close()
+	if err := capture.Start(); err != nil {
+		capture.ClearCallback()
 		close(blockChan)
 		return nil, err
 	}
@@ -399,10 +404,10 @@ func recordWithStreaming(ctx audio.Context, keyup <-chan struct{}, device *audio
 	}()
 	<-done
 
-	captureDevice.Stop()
+	capture.Stop()
 	logDiagInfo("beep_end")
 	beep.PlayEnd()
-	captureDevice.Close()
+	capture.ClearCallback()
 
 	// Send remaining samples as partial block
 	bufMu.Lock()
