@@ -15,6 +15,7 @@ var (
 	device       *malgo.Device
 	startSamples []byte
 	endSamples   []byte
+	errorSamples []byte
 	soundOnce    sync.Once
 
 	// Playback state - accessed atomically from callback
@@ -47,6 +48,7 @@ func initSound() {
 
 	startSamples = generateTickBytes(44100, 1200, 0.03, 0.5, 60)
 	endSamples = generateTickBytes(44100, 900, 0.05, 0.5, 40)
+	errorSamples = generateDoubleBeepBytes(44100, 350, 0.08, 0.05, 0.6, 30)
 
 	if err := initDevice(); err != nil {
 		malgoCtx.Uninit()
@@ -104,6 +106,17 @@ func generateTickBytes(sampleRate int, freq float64, duration float64, volume fl
 	return buf
 }
 
+func generateDoubleBeepBytes(sampleRate int, freq float64, beepDur float64, gapDur float64, volume float64, decay float64) []byte {
+	beep1 := generateTickBytes(sampleRate, freq, beepDur, volume, decay)
+	beep2 := generateTickBytes(sampleRate, freq, beepDur, volume, decay)
+	gap := make([]byte, int(float64(sampleRate)*gapDur)*2)
+	result := make([]byte, 0, len(beep1)+len(gap)+len(beep2))
+	result = append(result, beep1...)
+	result = append(result, gap...)
+	result = append(result, beep2...)
+	return result
+}
+
 func playBytes(samples []byte) {
 	if malgoCtx == nil || len(samples) == 0 {
 		return
@@ -150,4 +163,9 @@ func PlayStart() {
 func PlayEnd() {
 	soundOnce.Do(initSound)
 	playBytes(endSamples)
+}
+
+func PlayError() {
+	soundOnce.Do(initSound)
+	playBytes(errorSamples)
 }

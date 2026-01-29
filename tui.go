@@ -23,9 +23,11 @@ type TranscriptionMsg struct {
 	Copied   bool
 	NoSpeech bool // true when no speech was detected
 }
-type ModeLineMsg struct{ Text string }   // Mode/provider info
-type DeviceLineMsg struct{ Text string } // Microphone device name
-type RateLimitMsg struct{ Text string }  // Rate limit info
+type ModeLineMsg struct{ Text string }       // Mode/provider info
+type DeviceLineMsg struct{ Text string }     // Microphone device name
+type RateLimitMsg struct{ Text string }      // Rate limit info
+type RequestDeviceSelectionMsg struct{} // Request to change microphone
+type NoVoiceWarningMsg struct{}         // No voice detected during recording
 type tickMsg time.Time
 
 type tuiState int
@@ -49,7 +51,7 @@ type tuiModel struct {
 	frame             int
 	recordingDuration float64
 	audioLevel        float64
-	peakLevel         float64 // peak audio level during current recording
+	noVoiceWarning    bool // show no voice warning
 	msgCount          int
 	width, height     int
 	modeLine          string // "[fast | MP3@16kbps | deepgram]"
@@ -133,6 +135,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
+		case "ctrl+g":
+			return m, func() tea.Msg { return RequestDeviceSelectionMsg{} }
 		case "down", "j":
 			if m.viewIdx < len(m.history)-1 {
 				m.viewIdx++
@@ -154,7 +158,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = tuiStateRecording
 		m.recordingDuration = 0
 		m.audioLevel = 0
-		m.peakLevel = 0
+		m.noVoiceWarning = false
 
 	case RecordingStopMsg:
 		m.state = tuiStateIdle
@@ -171,10 +175,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.audioLevel = m.audioLevel*0.7 + msg.Level*0.3
 			}
-			if msg.Level > m.peakLevel {
-				m.peakLevel = msg.Level
-			}
 		}
+
+	case NoVoiceWarningMsg:
+		m.noVoiceWarning = true
 
 	case LogMsg:
 		// No longer using log buffer - only show last transcription
@@ -204,6 +208,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RateLimitMsg:
 		m.rateLimit = msg.Text
+
+	case RequestDeviceSelectionMsg:
+		select {
+		case deviceSelectChan <- struct{}{}:
+		default:
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -232,8 +243,8 @@ func (m tuiModel) View() string {
 			Bold(true).
 			Render(fmt.Sprintf("● REC %.1fs", m.recordingDuration))
 		infoLines = append(infoLines, status)
-		// Voice detection warning (after 1s of recording with no voice)
-		if m.recordingDuration > 1.0 && m.peakLevel < 0.005 {
+		// Voice detection warning
+		if m.noVoiceWarning {
 			warn := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("208")).
 				Render("  ⚠ no voice detected")

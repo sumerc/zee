@@ -7,3 +7,4 @@ package beep
 func Init()      {}
 func PlayStart() {}
 func PlayEnd()   {}
+func PlayError() {}

@@ -92,6 +92,14 @@ func newEncoderForMode(mode modeConfig) (encoder.Encoder, error) {
 }
 
 var activeMode modeConfig
+var deviceSelectChan = make(chan struct{}, 1)
+
+func deviceLineText(dev *audio.DeviceInfo) string {
+	if dev != nil {
+		return "mic: " + dev.Name + " (ctrl+g to change)"
+	}
+	return "mic: system default (ctrl+g to change)"
+}
 
 func run() {
 	// Set up crash output file for all crashes (panics, SIGSEGV, etc.)
@@ -271,36 +279,57 @@ func run() {
 		providerLabel += " (" + lang + ")"
 	}
 	tuiSend(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, providerLabel)})
-	if selectedDevice != nil {
-		tuiSend(DeviceLineMsg{Text: "mic: " + selectedDevice.Name})
-	} else {
-		tuiSend(DeviceLineMsg{Text: "mic: system default"})
-	}
+	tuiSend(DeviceLineMsg{Text: deviceLineText(selectedDevice)})
 
 	for {
-		<-hk.Keydown()
-		logDiagInfo("hotkey_down")
-		tuiSend(RecordingStartMsg{})
-		go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
-
-		state, err := recordWithStreaming(captureDevice, hk.Keyup())
-		logDiagInfo("hotkey_up")
-		tuiSend(RecordingStopMsg{})
-		if err != nil {
-			logToTUI("Error recording: %v", err)
-			logDiagError(fmt.Sprintf("recording error: %v", err))
-			continue
-		}
-
-		if state.TotalFrames() < uint64(encoder.SampleRate/10) {
-			continue
-		}
-
-		processRecording(state)
-		// Reset warm timer - transcription just used the connection
 		select {
-		case warmReset <- struct{}{}:
-		default:
+		case <-hk.Keydown():
+			logDiagInfo("hotkey_down")
+			tuiSend(RecordingStartMsg{})
+			go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
+
+			state, err := recordWithStreaming(captureDevice, hk.Keyup())
+			logDiagInfo("hotkey_up")
+			tuiSend(RecordingStopMsg{})
+			if err != nil {
+				logToTUI("Error recording: %v", err)
+				logDiagError(fmt.Sprintf("recording error: %v", err))
+				continue
+			}
+
+			if state.TotalFrames() < uint64(encoder.SampleRate/10) {
+				continue
+			}
+
+			processRecording(state)
+			// Reset warm timer - transcription just used the connection
+			select {
+			case warmReset <- struct{}{}:
+			default:
+			}
+
+		case <-deviceSelectChan:
+			// Pause TUI for device selection
+			tuiProgram.ReleaseTerminal()
+
+			newDevice, err := selectDevice(ctx)
+
+			tuiProgram.RestoreTerminal()
+
+			if err != nil {
+				logDiagWarn(fmt.Sprintf("device selection failed: %v", err))
+				continue
+			}
+			if newDevice != nil {
+				captureDevice.Close()
+				captureDevice, err = ctx.NewCapture(newDevice, captureConfig)
+				if err != nil {
+					logDiagError(fmt.Sprintf("capture device reinit error: %v", err))
+					continue
+				}
+				selectedDevice = newDevice
+				tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
+			}
 		}
 	}
 }
@@ -330,6 +359,8 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 	var sampleBuf []int16
 	var bufMu sync.Mutex
 	var stopped bool
+	var peakLevel float64
+	var noVoiceBeeped bool
 	done := make(chan struct{})
 
 	// Set callback for this recording
@@ -363,6 +394,11 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 		if len(data) > 0 {
 			rms := math.Sqrt(sumSquares / float64(len(data)/2))
 			tuiSend(AudioLevelMsg{Level: rms})
+			bufMu.Lock()
+			if rms > peakLevel {
+				peakLevel = rms
+			}
+			bufMu.Unlock()
 		}
 
 		// Send blocks to encoder (outside lock — won't stall next callback)
@@ -393,6 +429,17 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 			case <-ticker.C:
 				elapsed := time.Since(recordStart).Seconds()
 				tuiSend(RecordingTickMsg{Duration: elapsed})
+				// Check for no voice after 1s
+				bufMu.Lock()
+				shouldWarn := elapsed > 1.0 && peakLevel < 0.005 && !noVoiceBeeped
+				if shouldWarn {
+					noVoiceBeeped = true
+				}
+				bufMu.Unlock()
+				if shouldWarn {
+					tuiSend(NoVoiceWarningMsg{})
+					beep.PlayError()
+				}
 			}
 		}
 	}()
