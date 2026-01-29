@@ -5,11 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
-	"os/exec"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"zee/audio"
@@ -21,17 +18,8 @@ import (
 
 // Run executes interactive diagnostic checks and returns an exit code (0=all pass, 1=any fail).
 func Run(_ string) int {
-	// Reset terminal - CGO libs may corrupt settings at import time
-	exec.Command("stty", "sane").Run()
-
-	// Handle Ctrl+C
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		fmt.Println("\nInterrupted")
-		os.Exit(1)
-	}()
+	resetTerminal()
+	setupInterruptHandler()
 
 	fmt.Println("zee doctor - interactive system diagnostics")
 	fmt.Println("============================================")
@@ -82,7 +70,7 @@ func checkHotkey() bool {
 		case <-time.After(5 * time.Second):
 		}
 		// Reset terminal after hotkey - it may leave terminal in raw mode
-		exec.Command("stty", "sane").Run()
+		resetTerminal()
 		return true
 	case <-time.After(10 * time.Second):
 		fmt.Println("  FAIL: timeout waiting for hotkey")
@@ -351,7 +339,7 @@ func checkClipboard() bool {
 	}
 
 	// Reset terminal and use fresh reader for confirmation
-	exec.Command("stty", "sane").Run()
+	resetTerminal()
 	confirmReader := bufio.NewReader(os.Stdin)
 	fmt.Println()
 	fmt.Print("Did the text \"zee-doctor-test\" appear? [y/n]: ")

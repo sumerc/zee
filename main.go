@@ -6,13 +6,11 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"zee/audio"
@@ -21,6 +19,7 @@ import (
 	"zee/doctor"
 	"zee/encoder"
 	"zee/hotkey"
+	"zee/shutdown"
 	"zee/transcriber"
 )
 
@@ -95,10 +94,22 @@ var activeMode modeConfig
 var deviceSelectChan = make(chan struct{}, 1)
 
 func deviceLineText(dev *audio.DeviceInfo) string {
+	name := "system default"
 	if dev != nil {
-		return "mic: " + dev.Name + " (ctrl+g to change)"
+		name = dev.Name
 	}
-	return "mic: system default (ctrl+g to change)"
+	return "mic: " + name + " (ctrl+g to change)"
+}
+
+func formatLabelForMode(mode modeConfig, adaptiveSuffix string) string {
+	switch mode.format {
+	case "mp3":
+		return fmt.Sprintf("MP3@%dkbps", mode.bitrate)
+	case "adaptive":
+		return "adaptive" + adaptiveSuffix
+	default:
+		return "FLAC"
+	}
 }
 
 func run() {
@@ -226,7 +237,7 @@ func run() {
 
 	// Write metrics on exit
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	shutdown.Notify(sigChan)
 	go func() {
 		<-sigChan
 		if len(transcriptions) > 0 {
@@ -268,12 +279,7 @@ func run() {
 	}
 	defer hk.Unregister()
 
-	formatLabel := "FLAC"
-	if activeMode.format == "mp3" {
-		formatLabel = fmt.Sprintf("MP3@%dkbps", activeMode.bitrate)
-	} else if activeMode.format == "adaptive" {
-		formatLabel = "adaptive"
-	}
+	formatLabel := formatLabelForMode(activeMode, "")
 	providerLabel := activeTranscriber.Name()
 	if lang := activeTranscriber.GetLanguage(); lang != "" {
 		providerLabel += " (" + lang + ")"
@@ -535,12 +541,7 @@ func processRecording(enc encoder.Encoder) {
 
 	total := metrics.ConnWait + metrics.DNS + metrics.TCP + metrics.TLS + metrics.ReqHeaders + metrics.ReqBody + metrics.TTFB + metrics.Download
 
-	formatLabel := "FLAC"
-	if activeMode.format == "mp3" {
-		formatLabel = fmt.Sprintf("MP3@%dkbps", activeMode.bitrate)
-	} else if activeMode.format == "adaptive" {
-		formatLabel = "adaptive" + adaptiveInfo
-	}
+	formatLabel := formatLabelForMode(activeMode, adaptiveInfo)
 	// Build metrics lines for TUI
 	reusedStatus := ""
 	if metrics.ConnReused {

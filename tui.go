@@ -180,9 +180,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NoVoiceWarningMsg:
 		m.noVoiceWarning = true
 
-	case LogMsg:
-		// No longer using log buffer - only show last transcription
-
 	case TranscriptionMsg:
 		m.msgCount++
 		// Deep copy metrics slice to avoid aliasing

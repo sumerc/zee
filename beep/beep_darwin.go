@@ -28,7 +28,7 @@ func initDevice() error {
 	config := malgo.DefaultDeviceConfig(malgo.Playback)
 	config.Playback.Format = malgo.FormatS16
 	config.Playback.Channels = 1
-	config.SampleRate = 44100
+	config.SampleRate = sampleRate
 
 	callbacks := malgo.DeviceCallbacks{
 		Data: dataCallback,
@@ -46,9 +46,9 @@ func initSound() {
 		return
 	}
 
-	startSamples = generateTickBytes(44100, 1200, 0.03, 0.5, 60)
-	endSamples = generateTickBytes(44100, 900, 0.05, 0.5, 40)
-	errorSamples = generateDoubleBeepBytes(44100, 350, 0.08, 0.05, 0.6, 30)
+	startSamples = generateTickBytes(sampleRate, startFreq, 0.03, startVolume, startDecay)
+	endSamples = generateTickBytes(sampleRate, endFreq, 0.05, endVolume, endDecay)
+	errorSamples = generateDoubleBeepBytes(sampleRate, errorFreq, 0.08, 0.05, errorVolume, errorDecay)
 
 	if err := initDevice(); err != nil {
 		malgoCtx.Uninit()
@@ -107,13 +107,12 @@ func generateTickBytes(sampleRate int, freq float64, duration float64, volume fl
 }
 
 func generateDoubleBeepBytes(sampleRate int, freq float64, beepDur float64, gapDur float64, volume float64, decay float64) []byte {
-	beep1 := generateTickBytes(sampleRate, freq, beepDur, volume, decay)
-	beep2 := generateTickBytes(sampleRate, freq, beepDur, volume, decay)
+	beep := generateTickBytes(sampleRate, freq, beepDur, volume, decay)
 	gap := make([]byte, int(float64(sampleRate)*gapDur)*2)
-	result := make([]byte, 0, len(beep1)+len(gap)+len(beep2))
-	result = append(result, beep1...)
+	result := make([]byte, 0, len(beep)*2+len(gap))
+	result = append(result, beep...)
 	result = append(result, gap...)
-	result = append(result, beep2...)
+	result = append(result, beep...)
 	return result
 }
 

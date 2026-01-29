@@ -18,9 +18,9 @@ var (
 )
 
 func initSound() {
-	startSamples = generateTick(44100, 1200, 0.2, 0.5, 60)
-	endSamples = generateTick(44100, 900, 0.2, 0.5, 40)
-	errorSamples = generateDoubleBeep(44100, 350, 0.08, 0.05, 0.6, 30)
+	startSamples = generateTick(sampleRate, startFreq, 0.2, startVolume, startDecay)
+	endSamples = generateTick(sampleRate, endFreq, 0.2, endVolume, endDecay)
+	errorSamples = generateDoubleBeep(sampleRate, errorFreq, 0.08, 0.05, errorVolume, errorDecay)
 }
 
 func generateTick(sampleRate int, freq float64, duration float64, volume float64, decay float64) []int16 {
@@ -37,13 +37,12 @@ func generateTick(sampleRate int, freq float64, duration float64, volume float64
 }
 
 func generateDoubleBeep(sampleRate int, freq float64, beepDur float64, gapDur float64, volume float64, decay float64) []int16 {
-	beep1 := generateTick(sampleRate, freq, beepDur, volume, decay)
-	beep2 := generateTick(sampleRate, freq, beepDur, volume, decay)
+	beep := generateTick(sampleRate, freq, beepDur, volume, decay)
 	gap := make([]int16, int(float64(sampleRate)*gapDur)*2)
-	result := make([]int16, 0, len(beep1)+len(gap)+len(beep2))
-	result = append(result, beep1...)
+	result := make([]int16, 0, len(beep)*2+len(gap))
+	result = append(result, beep...)
 	result = append(result, gap...)
-	result = append(result, beep2...)
+	result = append(result, beep...)
 	return result
 }
 
@@ -68,7 +67,7 @@ func playSamples(samples []int16) {
 	})
 	stream, err := c.NewPlayback(reader,
 		pulse.PlaybackStereo,
-		pulse.PlaybackSampleRate(44100),
+		pulse.PlaybackSampleRate(sampleRate),
 		pulse.PlaybackLatency(0.1),
 		pulse.PlaybackRawOption(func(p *proto.CreatePlaybackStream) {
 			p.ChannelVolumes = proto.ChannelVolumes{uint32(proto.VolumeNorm), uint32(proto.VolumeNorm)}
