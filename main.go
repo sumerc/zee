@@ -5,7 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -19,6 +22,7 @@ import (
 	"zee/doctor"
 	"zee/encoder"
 	"zee/hotkey"
+	"zee/log"
 	"zee/shutdown"
 	"zee/transcriber"
 )
@@ -113,14 +117,6 @@ func formatLabelForMode(mode modeConfig, adaptiveSuffix string) string {
 }
 
 func run() {
-	// Set up crash output file for all crashes (panics, SIGSEGV, etc.)
-	// Write session marker so each crash can be correlated to a session start time
-	crashFile, err := os.OpenFile("crash_log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err == nil {
-		fmt.Fprintf(crashFile, "\n=== Session %s [pid=%d] ===\n", time.Now().Format("2006-01-02 15:04:05"), os.Getpid())
-		debug.SetCrashOutput(crashFile, debug.CrashOptions{})
-	}
-
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
 	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
@@ -132,7 +128,41 @@ func run() {
 	expertFlag := flag.Bool("expert", false, "Show full TUI with HAL eye animation")
 	langFlag := flag.String("lang", "", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
 	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
+	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
+	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
 	flag.Parse()
+
+	// Resolve log directory early
+	logPath, err := log.ResolveDir(*logPathFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to resolve log directory: %v\n", err)
+		os.Exit(1)
+	}
+	log.SetDir(logPath)
+
+	// Ensure log directory exists for crash log (always enabled)
+	if err := log.EnsureDir(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not create log directory: %v\n", err)
+	}
+
+	// Set up crash output file for all crashes (panics, SIGSEGV, etc.)
+	// Write session marker so each crash can be correlated to a session start time
+	crashPath := filepath.Join(log.Dir(), "crash_log.txt")
+	crashFile, err := os.OpenFile(crashPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		fmt.Fprintf(crashFile, "\n=== Session %s [pid=%d] ===\n", time.Now().Format("2006-01-02 15:04:05"), os.Getpid())
+		debug.SetCrashOutput(crashFile, debug.CrashOptions{})
+	}
+
+	// Start pprof server if requested
+	if *profileFlag != "" {
+		go func() {
+			fmt.Fprintf(os.Stderr, "pprof server listening on http://%s/debug/pprof/\n", *profileFlag)
+			if err := http.ListenAndServe(*profileFlag, nil); err != nil {
+				fmt.Fprintf(os.Stderr, "pprof server error: %v\n", err)
+			}
+		}()
+	}
 
 	if *crashFlag {
 		panic("TEST CRASH: synthetic panic to verify crash logging")
@@ -166,10 +196,10 @@ func run() {
 
 	// Only enable verbose logging in expert mode
 	if *expertFlag {
-		if err := initLogging(); err != nil {
+		if err := log.Init(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not init logging: %v\n", err)
 		} else {
-			logSessionStart(activeTranscriber.Name(), activeMode.name, activeMode.format)
+			log.SessionStart(activeTranscriber.Name(), activeMode.name, activeMode.format)
 		}
 	}
 
@@ -189,7 +219,7 @@ func run() {
 	// Init audio context and device selection BEFORE TUI (needs raw terminal)
 	ctx, err := audio.NewContext()
 	if err != nil {
-		logDiagError(fmt.Sprintf("audio context init error: %v", err))
+		log.Error(fmt.Sprintf("audio context init error: %v", err))
 		fmt.Printf("Error initializing audio context: %v\n", err)
 		os.Exit(1)
 	}
@@ -199,7 +229,7 @@ func run() {
 	if *setupFlag {
 		selectedDevice, err = selectDevice(ctx)
 		if err != nil {
-			logDiagWarn(fmt.Sprintf("device selection failed: %v", err))
+			log.Warn(fmt.Sprintf("device selection failed: %v", err))
 			fmt.Printf("Warning: device selection failed: %v\n", err)
 			fmt.Println("Falling back to default device")
 			selectedDevice = nil
@@ -213,7 +243,7 @@ func run() {
 	}
 	captureDevice, err := ctx.NewCapture(selectedDevice, captureConfig)
 	if err != nil {
-		logDiagError(fmt.Sprintf("capture device init error: %v", err))
+		log.Error(fmt.Sprintf("capture device init error: %v", err))
 		fmt.Printf("Error initializing capture device: %v\n", err)
 		os.Exit(1)
 	}
@@ -226,7 +256,7 @@ func run() {
 
 	go func() {
 		if _, err := tuiProgram.Run(); err != nil {
-			logDiagError(fmt.Sprintf("TUI error: %v", err))
+			log.Error(fmt.Sprintf("TUI error: %v", err))
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -241,9 +271,9 @@ func run() {
 	go func() {
 		<-sigChan
 		if len(transcriptions) > 0 {
-			logSessionEnd(len(transcriptions))
+			log.SessionEnd(len(transcriptions))
 		}
-		closeLogging()
+		log.Close()
 		tuiProgram.Quit()
 		os.Exit(0)
 	}()
@@ -273,7 +303,7 @@ func run() {
 
 	hk := hotkey.New()
 	if err := hk.Register(); err != nil {
-		logDiagError(fmt.Sprintf("hotkey register error: %v", err))
+		log.Error(fmt.Sprintf("hotkey register error: %v", err))
 		fmt.Printf("Error registering hotkey: %v\n", err)
 		os.Exit(1)
 	}
@@ -290,16 +320,16 @@ func run() {
 	for {
 		select {
 		case <-hk.Keydown():
-			logDiagInfo("hotkey_down")
+			log.Info("hotkey_down")
 			tuiSend(RecordingStartMsg{})
 			go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
 
 			state, err := recordWithStreaming(captureDevice, hk.Keyup())
-			logDiagInfo("hotkey_up")
+			log.Info("hotkey_up")
 			tuiSend(RecordingStopMsg{})
 			if err != nil {
 				logToTUI("Error recording: %v", err)
-				logDiagError(fmt.Sprintf("recording error: %v", err))
+				log.Error(fmt.Sprintf("recording error: %v", err))
 				continue
 			}
 
@@ -323,14 +353,14 @@ func run() {
 			tuiProgram.RestoreTerminal()
 
 			if err != nil {
-				logDiagWarn(fmt.Sprintf("device selection failed: %v", err))
+				log.Warn(fmt.Sprintf("device selection failed: %v", err))
 				continue
 			}
 			if newDevice != nil {
 				captureDevice.Close()
 				captureDevice, err = ctx.NewCapture(newDevice, captureConfig)
 				if err != nil {
-					logDiagError(fmt.Sprintf("capture device reinit error: %v", err))
+					log.Error(fmt.Sprintf("capture device reinit error: %v", err))
 					continue
 				}
 				selectedDevice = newDevice
@@ -355,7 +385,7 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 			start := time.Now()
 			if err := enc.EncodeBlock(block); err != nil {
 				logToTUI("Encode error: %v", err)
-				logDiagError(fmt.Sprintf("encode error: %v", err))
+				log.Error(fmt.Sprintf("encode error: %v", err))
 			}
 			enc.AddEncodeTime(time.Since(start))
 		}
@@ -419,7 +449,7 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 		return nil, err
 	}
 
-	logDiagInfo("beep_start")
+	log.Info("beep_start")
 	beep.PlayStart()
 
 	recordStart := time.Now()
@@ -458,7 +488,7 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 	<-done
 
 	capture.Stop()
-	logDiagInfo("beep_end")
+	log.Info("beep_end")
 	beep.PlayEnd()
 	capture.ClearCallback()
 
@@ -508,7 +538,7 @@ func processRecording(enc encoder.Encoder) {
 	result, err := activeTranscriber.Transcribe(audioData, audioFormat)
 	if err != nil {
 		logToTUI("Error transcribing: %v", err)
-		logDiagError(fmt.Sprintf("transcribe error: %v", err))
+		log.Error(fmt.Sprintf("transcribe error: %v", err))
 		return
 	}
 
@@ -520,12 +550,12 @@ func processRecording(enc encoder.Encoder) {
 	// Only type if there's actual speech and autopaste is enabled
 	clipboardOK := false
 	if !noSpeech && autoPaste {
-		logDiagInfo("paste_start")
+		log.Info("paste_start")
 		if err := clipboard.Type(text); err != nil {
-			logDiagError(fmt.Sprintf("type error: %v", err))
+			log.Error(fmt.Sprintf("type error: %v", err))
 		} else {
 			clipboardOK = true
-			logDiagInfo("paste_done")
+			log.Info("paste_done")
 		}
 	}
 
@@ -600,10 +630,10 @@ func processRecording(enc encoder.Encoder) {
 	}
 	transcriptions = append(transcriptions, record)
 	updatePercentileStats()
-	logTranscriptionMetrics(record, activeMode.name, audioFormat, activeTranscriber.Name(), metrics.ConnReused)
-	logConfidence(result.Confidence)
+	log.TranscriptionMetrics(log.Metrics(record), activeMode.name, audioFormat, activeTranscriber.Name(), metrics.ConnReused)
+	log.Confidence(result.Confidence)
 	if !noSpeech {
-		logTranscriptionText(text)
+		log.TranscriptionText(text)
 	}
 }
 
