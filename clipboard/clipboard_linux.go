@@ -1,14 +1,9 @@
-//go:build linux
-
 package clipboard
 
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -163,124 +158,4 @@ func Paste() error {
 		return err
 	}
 	return syn()
-}
-
-func keyTap(code uint16, shift bool) error {
-	if shift {
-		if err := writeEvent(evKey, 42, 1); err != nil { // LEFT_SHIFT down
-			return err
-		}
-		if err := syn(); err != nil {
-			return err
-		}
-	}
-	if err := writeEvent(evKey, code, 1); err != nil {
-		return err
-	}
-	if err := syn(); err != nil {
-		return err
-	}
-	if err := writeEvent(evKey, code, 0); err != nil {
-		return err
-	}
-	if err := syn(); err != nil {
-		return err
-	}
-	if shift {
-		if err := writeEvent(evKey, 42, 0); err != nil { // LEFT_SHIFT up
-			return err
-		}
-		if err := syn(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Verify creates the uinput device, sends a Ctrl+V keystroke, and reads it
-// back from the kernel input layer to confirm delivery.
-func Verify() (string, error) {
-	if err := Init(); err != nil {
-		return "", fmt.Errorf("uinput init: %w", err)
-	}
-
-	// Find the zee-paste evdev device
-	entries, err := os.ReadDir("/sys/class/input")
-	if err != nil {
-		return "", fmt.Errorf("cannot scan input devices: %w", err)
-	}
-
-	var evdevPath string
-	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), "event") {
-			continue
-		}
-		namePath := filepath.Join("/sys/class/input", e.Name(), "device", "name")
-		data, err := os.ReadFile(namePath)
-		if err != nil {
-			continue
-		}
-		if strings.TrimSpace(string(data)) == "zee-paste" {
-			evdevPath = filepath.Join("/dev/input", e.Name())
-			break
-		}
-	}
-	if evdevPath == "" {
-		return "", errors.New("zee-paste evdev device not found")
-	}
-
-	// Open for readback
-	evdev, err := os.Open(evdevPath)
-	if err != nil {
-		return "", fmt.Errorf("cannot open %s: %w", evdevPath, err)
-	}
-	defer evdev.Close()
-
-	// Send keystroke
-	if err := Paste(); err != nil {
-		return "", fmt.Errorf("paste send: %w", err)
-	}
-
-	// Read events with timeout
-	type result struct {
-		ctrl, v bool
-		err     error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		buf := make([]byte, 24*32)
-		var r result
-		n, err := evdev.Read(buf)
-		if err != nil {
-			r.err = err
-			ch <- r
-			return
-		}
-		for i := 0; i+24 <= n; i += 24 {
-			evType := binary.LittleEndian.Uint16(buf[i+16:])
-			evCode := binary.LittleEndian.Uint16(buf[i+18:])
-			if evType == evKey {
-				switch evCode {
-				case 29:
-					r.ctrl = true
-				case 47:
-					r.v = true
-				}
-			}
-		}
-		ch <- r
-	}()
-
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			return "", fmt.Errorf("reading events: %w", r.err)
-		}
-		if !r.ctrl || !r.v {
-			return "", fmt.Errorf("missing events (ctrl=%v, v=%v)", r.ctrl, r.v)
-		}
-		return fmt.Sprintf("Ctrl+V keystroke verified via %s", evdevPath), nil
-	case <-time.After(500 * time.Millisecond):
-		return "", errors.New("timed out waiting for keystroke events")
-	}
 }

@@ -551,8 +551,10 @@ func processRecording(enc encoder.Encoder) {
 	clipboardOK := false
 	if !noSpeech && autoPaste {
 		log.Info("paste_start")
-		if err := clipboard.Type(text); err != nil {
-			log.Error(fmt.Sprintf("type error: %v", err))
+		if err := clipboard.Copy(text); err != nil {
+			log.Error(fmt.Sprintf("copy error: %v", err))
+		} else if err := clipboard.Paste(); err != nil {
+			log.Error(fmt.Sprintf("paste error: %v", err))
 		} else {
 			clipboardOK = true
 			log.Info("paste_done")
