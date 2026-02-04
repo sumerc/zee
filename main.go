@@ -547,16 +547,13 @@ func processRecording(enc encoder.Encoder) {
 
 	noSpeech := text == ""
 
-	// Only type if there's actual speech and autopaste is enabled
-	clipboardOK := false
+	pasteSucceeded := false
 	if !noSpeech && autoPaste {
 		log.Info("paste_start")
-		if err := clipboard.Copy(text); err != nil {
-			log.Error(fmt.Sprintf("copy error: %v", err))
-		} else if err := clipboard.Paste(); err != nil {
+		if err := clipboard.CopyAndPasteWithPreserve(text); err != nil {
 			log.Error(fmt.Sprintf("paste error: %v", err))
 		} else {
-			clipboardOK = true
+			pasteSucceeded = true
 			log.Info("paste_done")
 		}
 	}
@@ -609,7 +606,7 @@ func processRecording(enc encoder.Encoder) {
 	tuiSend(TranscriptionMsg{
 		Text:     displayText,
 		Metrics:  metricsLines,
-		Copied:   clipboardOK,
+		Copied:   pasteSucceeded,
 		NoSpeech: noSpeech,
 	})
 

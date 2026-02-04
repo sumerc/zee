@@ -346,11 +346,42 @@ func checkClipboard() bool {
 	confirm, _ := confirmReader.ReadString('\n')
 	confirm = strings.TrimSpace(strings.ToLower(confirm))
 
-	if confirm == "y" || confirm == "yes" {
-		fmt.Println("  PASS: clipboard and paste verified by user")
-		return true
+	if confirm != "y" && confirm != "yes" {
+		fmt.Println("  FAIL: clipboard/paste not confirmed")
+		return false
+	}
+	fmt.Println("  PASS: clipboard and paste verified by user")
+
+	fmt.Println()
+	fmt.Println("  Verifying clipboard preservation...")
+	sentinel := "zee-preserve-check"
+	if err := clipboard.Copy(sentinel); err != nil {
+		fmt.Printf("  FAIL: could not set sentinel: %v\n", err)
+		return false
 	}
 
-	fmt.Println("  FAIL: clipboard/paste not confirmed")
-	return false
+	fmt.Println("  Focus on the text editor again...")
+	for i := 3; i > 0; i-- {
+		fmt.Printf("  %d...\n", i)
+		time.Sleep(1 * time.Second)
+	}
+
+	if err := clipboard.CopyAndPasteWithPreserve("zee-temp-replacement"); err != nil {
+		fmt.Printf("  FAIL: CopyAndPasteWithPreserve failed: %v\n", err)
+		return false
+	}
+
+	time.Sleep(1500 * time.Millisecond) // CopyAndPasteWithPreserve restores after 800ms; allow margin
+
+	restored, err := clipboard.Read()
+	if err != nil {
+		fmt.Printf("  FAIL: could not read clipboard after restore: %v\n", err)
+		return false
+	}
+	if restored != sentinel {
+		fmt.Printf("  FAIL: clipboard not preserved (got %q, want %q)\n", restored, sentinel)
+		return false
+	}
+	fmt.Println("  PASS: clipboard preservation verified")
+	return true
 }
