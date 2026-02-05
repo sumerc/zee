@@ -31,15 +31,12 @@ jobs:
           build_and_package() {
             local os=$1 arch=$2
             GOOS=$os GOARCH=$arch go build -ldflags="-X main.version=$VERSION -s -w" -o zee
-            tar -czvf "zee_${VERSION}_${os}_${arch}.tar.gz" zee README.md LICENSE 2>/dev/null || \
             tar -czvf "zee_${VERSION}_${os}_${arch}.tar.gz" zee README.md
             rm zee
           }
 
           build_and_package darwin arm64
           build_and_package darwin amd64
-          build_and_package linux arm64
-          build_and_package linux amd64
 
       - name: Create checksums
         run: shasum -a 256 zee_*.tar.gz > checksums.txt
