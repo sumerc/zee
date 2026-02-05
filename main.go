@@ -30,6 +30,31 @@ import (
 var version = "dev"
 
 var peakAlloc uint64
+
+// initCrashLog sets up crash logging early, before GUI or TUI initialization.
+// This must be called before any code that might crash (especially CGO).
+func initCrashLog() {
+	logPath, err := log.ResolveDir("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to resolve log directory: %v\n", err)
+		return
+	}
+	log.SetDir(logPath)
+
+	if err := log.EnsureDir(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not create log directory: %v\n", err)
+		return
+	}
+
+	crashPath := filepath.Join(log.Dir(), "crash_log.txt")
+	crashFile, err := os.OpenFile(crashPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not open crash log: %v\n", err)
+		return
+	}
+	fmt.Fprintf(crashFile, "\n=== Session %s [pid=%d] ===\n", time.Now().Format("2006-01-02 15:04:05"), os.Getpid())
+	debug.SetCrashOutput(crashFile, debug.CrashOptions{})
+}
 var activeTranscriber transcriber.Transcriber
 var autoPaste bool
 var saveLastRecording bool
@@ -96,6 +121,8 @@ func newEncoderForMode(mode modeConfig) (encoder.Encoder, error) {
 
 var activeMode modeConfig
 var deviceSelectChan = make(chan struct{}, 1)
+var sink EventSink = tuiEventSink{} // overridden by gui_enabled.go when -gui is used
+var guiMode bool
 
 func deviceLineText(dev *audio.DeviceInfo) string {
 	name := "system default"
@@ -130,6 +157,7 @@ func run() {
 	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
+	_ = flag.Bool("gui", false, "Launch GUI overlay mode instead of terminal TUI (requires gui build tag)")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -216,54 +244,69 @@ func run() {
 		}
 	}
 
-	// Init audio context and device selection BEFORE TUI (needs raw terminal)
-	ctx, err := audio.NewContext()
-	if err != nil {
-		log.Error(fmt.Sprintf("audio context init error: %v", err))
-		fmt.Printf("Error initializing audio context: %v\n", err)
-		os.Exit(1)
-	}
-	defer ctx.Close()
-
-	var selectedDevice *audio.DeviceInfo
-	if *setupFlag {
-		selectedDevice, err = selectDevice(ctx)
-		if err != nil {
-			log.Warn(fmt.Sprintf("device selection failed: %v", err))
-			fmt.Printf("Warning: device selection failed: %v\n", err)
-			fmt.Println("Falling back to default device")
-			selectedDevice = nil
-		}
-	}
-
-	// Create persistent capture device
+	// Capture config used for device initialization and re-selection
 	captureConfig := audio.CaptureConfig{
 		SampleRate: encoder.SampleRate,
 		Channels:   encoder.Channels,
 	}
-	captureDevice, err := ctx.NewCapture(selectedDevice, captureConfig)
-	if err != nil {
-		log.Error(fmt.Sprintf("capture device init error: %v", err))
-		fmt.Printf("Error initializing capture device: %v\n", err)
-		os.Exit(1)
-	}
-	defer captureDevice.Close()
 
-	// Start TUI
-	tuiMu.Lock()
-	tuiProgram = NewTUIProgram(*expertFlag)
-	tuiMu.Unlock()
+	// Init audio context and device selection
+	// In GUI mode, audio was already initialized on main thread (gui_enabled.go)
+	var ctx audio.Context
+	var captureDevice audio.CaptureDevice
+	var selectedDevice *audio.DeviceInfo
 
-	go func() {
-		if _, err := tuiProgram.Run(); err != nil {
-			log.Error(fmt.Sprintf("TUI error: %v", err))
+	if guiMode {
+		// Use pre-initialized audio from main thread (required for macOS Core Audio)
+		ctx = guiAudioCtx
+		captureDevice = guiCaptureDevice
+	} else {
+		// TUI mode: initialize audio here (already on main thread via mainthread.Init)
+		var err error
+		ctx, err = audio.NewContext()
+		if err != nil {
+			log.Error(fmt.Sprintf("audio context init error: %v", err))
+			fmt.Printf("Error initializing audio context: %v\n", err)
 			os.Exit(1)
 		}
-		os.Exit(0)
-	}()
+		defer ctx.Close()
 
-	// Wait for TUI to initialize
-	time.Sleep(100 * time.Millisecond)
+		if *setupFlag {
+			selectedDevice, err = selectDevice(ctx)
+			if err != nil {
+				log.Warn(fmt.Sprintf("device selection failed: %v", err))
+				fmt.Printf("Warning: device selection failed: %v\n", err)
+				fmt.Println("Falling back to default device")
+				selectedDevice = nil
+			}
+		}
+
+		captureDevice, err = ctx.NewCapture(selectedDevice, captureConfig)
+		if err != nil {
+			log.Error(fmt.Sprintf("capture device init error: %v", err))
+			fmt.Printf("Error initializing capture device: %v\n", err)
+			os.Exit(1)
+		}
+		defer captureDevice.Close()
+	}
+
+	if !guiMode {
+		// Start TUI
+		tuiMu.Lock()
+		tuiProgram = NewTUIProgram(*expertFlag)
+		tuiMu.Unlock()
+
+		go func() {
+			if _, err := tuiProgram.Run(); err != nil {
+				log.Error(fmt.Sprintf("TUI error: %v", err))
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}()
+
+		// Wait for TUI to initialize
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	// Write metrics on exit
 	sigChan := make(chan os.Signal, 1)
@@ -274,7 +317,9 @@ func run() {
 			log.SessionEnd(len(transcriptions))
 		}
 		log.Close()
-		tuiProgram.Quit()
+		if tuiProgram != nil {
+			tuiProgram.Quit()
+		}
 		os.Exit(0)
 	}()
 
@@ -314,19 +359,18 @@ func run() {
 	if lang := activeTranscriber.GetLanguage(); lang != "" {
 		providerLabel += " (" + lang + ")"
 	}
-	tuiSend(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, providerLabel)})
-	tuiSend(DeviceLineMsg{Text: deviceLineText(selectedDevice)})
+	sink.ModeLine(fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, providerLabel))
+	sink.DeviceLine(deviceLineText(selectedDevice))
 
 	for {
 		select {
 		case <-hk.Keydown():
 			log.Info("hotkey_down")
-			tuiSend(RecordingStartMsg{})
+			sink.RecordingStart()
 			go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
 
 			state, err := recordWithStreaming(captureDevice, hk.Keyup())
 			log.Info("hotkey_up")
-			tuiSend(RecordingStopMsg{})
 			if err != nil {
 				logToTUI("Error recording: %v", err)
 				log.Error(fmt.Sprintf("recording error: %v", err))
@@ -364,7 +408,7 @@ func run() {
 					continue
 				}
 				selectedDevice = newDevice
-				tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
+				sink.DeviceLine(deviceLineText(newDevice))
 			}
 		}
 	}
@@ -378,6 +422,7 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 
 	blockChan := make(chan []int16, 64)
 	encodeDone := make(chan struct{})
+	var callbackCount int
 
 	go func() {
 		defer close(encodeDone)
@@ -400,8 +445,14 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 	done := make(chan struct{})
 
 	// Set callback for this recording
+	var firstCallbackLogged bool
 	capture.SetCallback(func(data []byte, frameCount uint32) {
 		bufMu.Lock()
+		callbackCount++
+		if !firstCallbackLogged {
+			firstCallbackLogged = true
+			fmt.Fprintf(os.Stderr, "[audio] First callback: %d bytes, %d frames\n", len(data), frameCount)
+		}
 		if stopped {
 			bufMu.Unlock()
 			return
@@ -409,11 +460,17 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 
 		// Convert bytes to int16 and calculate RMS for audio level
 		var sumSquares float64
+		var maxSample int16
 		for i := 0; i < len(data); i += 2 {
 			sample := int16(binary.LittleEndian.Uint16(data[i:]))
 			sampleBuf = append(sampleBuf, sample)
 			normalized := float64(sample) / 32768.0
 			sumSquares += normalized * normalized
+			if sample > maxSample {
+				maxSample = sample
+			} else if -sample > maxSample {
+				maxSample = -sample
+			}
 		}
 
 		// Collect full blocks while holding lock
@@ -429,7 +486,7 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 		// Send audio level to TUI (outside lock)
 		if len(data) > 0 {
 			rms := math.Sqrt(sumSquares / float64(len(data)/2))
-			tuiSend(AudioLevelMsg{Level: rms})
+			sink.AudioLevel(rms)
 			bufMu.Lock()
 			if rms > peakLevel {
 				peakLevel = rms
@@ -443,7 +500,9 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 		}
 	})
 
+	fmt.Fprintf(os.Stderr, "[audio] Starting capture...\n")
 	if err := capture.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "[audio] Start failed: %v\n", err)
 		capture.ClearCallback()
 		close(blockChan)
 		return nil, err
@@ -464,7 +523,7 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 				return
 			case <-ticker.C:
 				elapsed := time.Since(recordStart).Seconds()
-				tuiSend(RecordingTickMsg{Duration: elapsed})
+				sink.RecordingTick(elapsed)
 				// Check for no voice after 1s
 				bufMu.Lock()
 				shouldWarn := elapsed > 1.0 && peakLevel < 0.005 && !noVoiceBeeped
@@ -473,7 +532,7 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 				}
 				bufMu.Unlock()
 				if shouldWarn {
-					tuiSend(NoVoiceWarningMsg{})
+					sink.NoVoiceWarning()
 					beep.PlayError()
 				}
 			}
@@ -486,6 +545,9 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 		close(done)
 	}()
 	<-done
+
+	// Hide window immediately on keyup, before cleanup
+	sink.RecordingStop()
 
 	capture.Stop()
 	log.Info("beep_end")
@@ -509,6 +571,8 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 		return nil, err
 	}
 
+	fmt.Fprintf(os.Stderr, "[audio] Recording done: callbacks=%d, frames=%d, peak=%.4f\n",
+		callbackCount, enc.TotalFrames(), peakLevel)
 	return enc, nil
 }
 
@@ -603,15 +667,10 @@ func processRecording(enc encoder.Encoder) {
 	if noSpeech {
 		displayText = "(no speech detected)"
 	}
-	tuiSend(TranscriptionMsg{
-		Text:     displayText,
-		Metrics:  metricsLines,
-		Copied:   pasteSucceeded,
-		NoSpeech: noSpeech,
-	})
+	sink.Transcription(displayText, metricsLines, pasteSucceeded, noSpeech)
 
 	if result.RateLimit != "?/?" {
-		tuiSend(RateLimitMsg{Text: "requests: " + result.RateLimit + " remaining"})
+		sink.RateLimit("requests: " + result.RateLimit + " remaining")
 	}
 
 	record := TranscriptionRecord{

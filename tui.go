@@ -73,6 +73,21 @@ func tuiSend(msg tea.Msg) {
 	}
 }
 
+// tuiEventSink implements EventSink by forwarding to the Bubble Tea program.
+type tuiEventSink struct{}
+
+func (tuiEventSink) RecordingStart()                { tuiSend(RecordingStartMsg{}) }
+func (tuiEventSink) RecordingStop()                 { tuiSend(RecordingStopMsg{}) }
+func (tuiEventSink) RecordingTick(duration float64) { tuiSend(RecordingTickMsg{Duration: duration}) }
+func (tuiEventSink) AudioLevel(level float64)       { tuiSend(AudioLevelMsg{Level: level}) }
+func (tuiEventSink) NoVoiceWarning()                { tuiSend(NoVoiceWarningMsg{}) }
+func (tuiEventSink) ModeLine(text string)           { tuiSend(ModeLineMsg{Text: text}) }
+func (tuiEventSink) DeviceLine(text string)         { tuiSend(DeviceLineMsg{Text: text}) }
+func (tuiEventSink) RateLimit(text string)          { tuiSend(RateLimitMsg{Text: text}) }
+func (tuiEventSink) Transcription(text string, metrics []string, copied bool, noSpeech bool) {
+	tuiSend(TranscriptionMsg{Text: text, Metrics: metrics, Copied: copied, NoSpeech: noSpeech})
+}
+
 // Pre-computed pixel styles to avoid allocations in render loop
 var (
 	pixelColorsRec  = []string{"", "226", "220", "214", "208", "196", "160", "124", "88", "52", "236", "236", "236", "236", "255", "249"}

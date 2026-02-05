@@ -1,9 +1,20 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test benchmark integration-test clean
+.PHONY: build build-gui build-linux-amd64 build-linux-arm64 test benchmark integration-test clean
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
 build:
 	go build -ldflags="-X main.version=$(VERSION)" -o zee
+
+build-gui:
+	go build -tags gui -ldflags="-X main.version=$(VERSION)" -o zee-gui
+	@# Create macOS .app bundle for proper microphone permissions
+	@mkdir -p zee-gui.app/Contents/MacOS
+	@cp zee-gui zee-gui.app/Contents/MacOS/
+	@cp gui/zee-launcher zee-gui.app/Contents/MacOS/
+	@chmod +x zee-gui.app/Contents/MacOS/zee-launcher
+	@cp gui/Info.plist zee-gui.app/Contents/
+	@echo "Built zee-gui.app (run with: open zee-gui.app)"
+	@echo "Note: Create .env file with GROQ_API_KEY=xxx in zee directory"
 
 build-linux-amd64:
 	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-amd64
@@ -26,4 +37,5 @@ benchmark: build
 	./zee -benchmark $(WAV) -runs $(or $(RUNS),3)
 
 clean:
-	rm -f zee
+	rm -f zee zee-gui zee-linux-amd64 zee-linux-arm64
+	rm -rf zee-gui.app
