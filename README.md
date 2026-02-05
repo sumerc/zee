@@ -33,6 +33,16 @@ export GROQ_API_KEY=your_key
 
 Use `-setup` to pick a microphone, otherwise uses system default.
 
+### macOS Permissions
+
+On first run, macOS will prompt you to grant permissions to your terminal app (Ghostty, iTerm2, Terminal.app, etc.):
+
+1. **Microphone** — Required for audio recording. Go to System Settings → Privacy & Security → Microphone and enable your terminal.
+
+2. **Accessibility** — Required for global hotkey and auto-paste. Go to System Settings → Privacy & Security → Accessibility and enable your terminal.
+
+If permissions aren't granted, zee will fail silently or the hotkey won't register. Run with `-doctor` to diagnose permission issues.
+
 ## Testing
 
 ```bash
@@ -48,6 +58,12 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 | `-mode` | fast | Transcription mode: `fast`, `balanced`, `precise` |
 | `-setup` | false | Select microphone device |
 | `-autopaste` | true | Auto-paste after transcription |
+| `-lang` | (auto) | Language code for transcription (e.g., `en`, `es`, `fr`) |
+| `-expert` | false | Show full TUI with HAL eye animation |
+| `-doctor` | false | Run system diagnostics and exit |
+| `-saverecording` | false | Save last recording to `zee_last.<format>` |
+| `-logpath` | OS-specific | Log directory path (use `./` for current dir) |
+| `-profile` | - | Enable pprof server (e.g., `:6060`) |
 | `-benchmark` | - | WAV file for benchmarking |
 | `-runs` | 3 | Benchmark iterations |
 | `-version` | false | Print version and exit |
