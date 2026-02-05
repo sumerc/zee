@@ -9,12 +9,17 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: macos-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            arch: arm64
+          - os: macos-13
+            arch: amd64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -27,16 +32,21 @@ jobs:
       - name: Build and package
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
+          go build -ldflags="-X main.version=$VERSION -s -w" -o zee
+          tar -czvf "zee_${VERSION}_darwin_${{ matrix.arch }}.tar.gz" zee README.md
 
-          build_and_package() {
-            local os=$1 arch=$2
-            GOOS=$os GOARCH=$arch go build -ldflags="-X main.version=$VERSION -s -w" -o zee
-            tar -czvf "zee_${VERSION}_${os}_${arch}.tar.gz" zee README.md
-            rm zee
-          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zee-darwin-${{ matrix.arch }}
+          path: zee_*.tar.gz
 
-          build_and_package darwin arm64
-          build_and_package darwin amd64
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
 
       - name: Create checksums
         run: shasum -a 256 zee_*.tar.gz > checksums.txt
