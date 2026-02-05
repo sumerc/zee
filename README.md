@@ -8,10 +8,6 @@
   <a href="https://freepalestine.dev"><img src="https://freepalestine.dev/badge?t=d&u=0&r=1" alt="From the river to the sea, Palestine will be free"></a>
 </p>
 
-<p align="center">
-  <img src="screenshot.png" alt="zee TUI showing HAL 9000 eye, transcription metrics, and performance stats" width="720">
-</p>
-
 ## Highlights
 
 - **Fast** — obsessively optimized end-to-end. HTTP keep-alive, TLS connection reuse, pre-warmed connections, streaming encoder runs during recording (not after). Typical latency from key-release to clipboard: under 500ms.
@@ -22,8 +18,14 @@
   - [ ] Windows
 - **Multiple providers** — Groq Whisper and DeepGram, switchable at runtime.
 - **Encoding modes** — `fast` (MP3 16kbps), `balanced` (MP3 64kbps), `precise` (FLAC lossless).
-- **[HAL 9000](https://en.wikipedia.org/wiki/HAL_9000) TUI** — voice-reactive animated eye with real-time transcription metrics. 
+- **[HAL 9000](https://en.wikipedia.org/wiki/HAL_9000) TUI** — voice-reactive animated eye with real-time transcription metrics.
   - Terminal-based for now, windowed UI planned.
+
+## Screenshots
+
+<p align="center">
+  <img src="screenshot.png" alt="zee TUI" width="680">
+</p>
 
 ## Usage
 
