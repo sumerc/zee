@@ -98,17 +98,12 @@ func (c *malgoCapture) initDevice() error {
 }
 
 func (c *malgoCapture) Start() error {
-	err := c.device.Start()
-	if err == nil {
-		return nil
-	}
-
-	// Device failed - try to recreate it (handles macOS sleep/wake)
+	// Always reinitialize before starting — handles macOS sleep/wake
+	// where the device handle goes stale without returning errors
 	c.device.Uninit()
-	if initErr := c.initDevice(); initErr != nil {
-		return fmt.Errorf("device recovery failed: %w (original: %v)", initErr, err)
+	if err := c.initDevice(); err != nil {
+		return fmt.Errorf("device reinit failed: %w", err)
 	}
-
 	return c.device.Start()
 }
 
