@@ -119,17 +119,19 @@ func formatLabelForMode(mode modeConfig, adaptiveSuffix string) string {
 func run() {
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
-	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
-	setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
-	modeFlag := flag.String("mode", "fast", "Transcription mode: fast, balanced, or precise")
-	versionFlag := flag.Bool("version", false, "Print version and exit")
-	saveRecording := flag.Bool("saverecording", false, "Save last recording to zee_last.<format>")
-	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
-	expertFlag := flag.Bool("expert", false, "Show full TUI with HAL eye animation")
-	langFlag := flag.String("lang", "", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
-	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
-	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
-	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
+    autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
+    setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
+    modeFlag := flag.String("mode", "fast", "Transcription mode: fast, balanced, or precise")
+    versionFlag := flag.Bool("version", false, "Print version and exit")
+    saveRecording := flag.Bool("saverecording", false, "Save last recording to zee_last.<format>")
+    doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
+    expertFlag := flag.Bool("expert", false, "Show full TUI with HAL eye animation")
+    langFlag := flag.String("lang", "", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
+    crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
+    logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
+    profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
+    hybridFlag := flag.Bool("hybrid", false, "Enable hybrid tap+hold recording mode")
+    longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -314,60 +316,117 @@ func run() {
 	if lang := activeTranscriber.GetLanguage(); lang != "" {
 		providerLabel += " (" + lang + ")"
 	}
-	tuiSend(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, providerLabel)})
-	tuiSend(DeviceLineMsg{Text: deviceLineText(selectedDevice)})
+    tuiSend(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, providerLabel)})
+    tuiSend(DeviceLineMsg{Text: deviceLineText(selectedDevice)})
+    tuiSend(HybridHelpMsg{Enabled: *hybridFlag})
 
-	for {
-		select {
-		case <-hk.Keydown():
-			log.Info("hotkey_down")
-			tuiSend(RecordingStartMsg{})
-			go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
+    if *hybridFlag {
+        hy := hotkey.NewHybrid(hk, *longPressFlag)
+        for {
+            select {
+            case ev := <-hy.Start():
+                log.Info("hotkey_start_" + string(ev.Mode))
+                tuiSend(RecordingStartMsg{})
+                beep.PlayStart()
+                go activeTranscriber.WarmConnection()
 
-			state, err := recordWithStreaming(captureDevice, hk.Keyup())
-			log.Info("hotkey_up")
-			tuiSend(RecordingStopMsg{})
-			if err != nil {
-				logToTUI("Error recording: %v", err)
-				log.Error(fmt.Sprintf("recording error: %v", err))
-				continue
-			}
+                state, err := recordWithStreaming(captureDevice, hy.StopChan())
+                tuiSend(RecordingStopMsg{})
+                if err != nil {
+                    logToTUI("Error recording: %v", err)
+                    log.Error(fmt.Sprintf("recording error: %v", err))
+                    continue
+                }
 
-			if state.TotalFrames() < uint64(encoder.SampleRate/10) {
-				continue
-			}
+                if state.TotalFrames() < uint64(encoder.SampleRate/10) {
+                    continue
+                }
 
-			processRecording(state)
-			// Reset warm timer - transcription just used the connection
-			select {
-			case warmReset <- struct{}{}:
-			default:
-			}
+                processRecording(state)
+                // Reset warm timer - transcription just used the connection
+                select {
+                case warmReset <- struct{}{}:
+                default:
+                }
 
-		case <-deviceSelectChan:
-			// Pause TUI for device selection
-			tuiProgram.ReleaseTerminal()
+            case <-deviceSelectChan:
+                // Pause TUI for device selection
+                tuiProgram.ReleaseTerminal()
 
-			newDevice, err := selectDevice(ctx)
+                newDevice, err := selectDevice(ctx)
 
-			tuiProgram.RestoreTerminal()
+                tuiProgram.RestoreTerminal()
 
-			if err != nil {
-				log.Warn(fmt.Sprintf("device selection failed: %v", err))
-				continue
-			}
-			if newDevice != nil {
-				captureDevice.Close()
-				captureDevice, err = ctx.NewCapture(newDevice, captureConfig)
-				if err != nil {
-					log.Error(fmt.Sprintf("capture device reinit error: %v", err))
-					continue
-				}
-				selectedDevice = newDevice
-				tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
-			}
-		}
-	}
+                if err != nil {
+                    log.Warn(fmt.Sprintf("device selection failed: %v", err))
+                    continue
+                }
+                if newDevice != nil {
+                    captureDevice.Close()
+                    captureDevice, err = ctx.NewCapture(newDevice, captureConfig)
+                    if err != nil {
+                        log.Error(fmt.Sprintf("capture device reinit error: %v", err))
+                        continue
+                    }
+                    selectedDevice = newDevice
+                    tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
+                }
+            }
+        }
+    } else {
+        for {
+            select {
+            case <-hk.Keydown():
+                log.Info("hotkey_down")
+                tuiSend(RecordingStartMsg{})
+                beep.PlayStart()
+                go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
+
+                state, err := recordWithStreaming(captureDevice, hk.Keyup())
+                log.Info("hotkey_up")
+                tuiSend(RecordingStopMsg{})
+                if err != nil {
+                    logToTUI("Error recording: %v", err)
+                    log.Error(fmt.Sprintf("recording error: %v", err))
+                    continue
+                }
+
+                if state.TotalFrames() < uint64(encoder.SampleRate/10) {
+                    continue
+                }
+
+                processRecording(state)
+                // Reset warm timer - transcription just used the connection
+                select {
+                case warmReset <- struct{}{}:
+                default:
+                }
+
+            case <-deviceSelectChan:
+                // Pause TUI for device selection
+                tuiProgram.ReleaseTerminal()
+
+                newDevice, err := selectDevice(ctx)
+
+                tuiProgram.RestoreTerminal()
+
+                if err != nil {
+                    log.Warn(fmt.Sprintf("device selection failed: %v", err))
+                    continue
+                }
+                if newDevice != nil {
+                    captureDevice.Close()
+                    captureDevice, err = ctx.NewCapture(newDevice, captureConfig)
+                    if err != nil {
+                        log.Error(fmt.Sprintf("capture device reinit error: %v", err))
+                        continue
+                    }
+                    selectedDevice = newDevice
+                    tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
+                }
+            }
+        }
+    }
 }
 
 func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (encoder.Encoder, error) {
@@ -449,8 +508,7 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 		return nil, err
 	}
 
-	log.Info("beep_start")
-	beep.PlayStart()
+    // Start beep happens on key press in main()
 
 	recordStart := time.Now()
 

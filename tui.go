@@ -28,6 +28,7 @@ type DeviceLineMsg struct{ Text string }     // Microphone device name
 type RateLimitMsg struct{ Text string }      // Rate limit info
 type RequestDeviceSelectionMsg struct{} // Request to change microphone
 type NoVoiceWarningMsg struct{}         // No voice detected during recording
+type HybridHelpMsg struct{ Enabled bool }    // Whether hybrid tap+hold is enabled
 type tickMsg time.Time
 
 type tuiState int
@@ -59,7 +60,8 @@ type tuiModel struct {
 	rateLimit         string // "45/50 remaining"
 	history           []historyEntry
 	viewIdx           int  // 0 = newest, higher = older
-	expertMode        bool // show full TUI with HAL eye
+    expertMode        bool // show full TUI with HAL eye
+    hybridEnabled     bool // show hybrid help text when true
 }
 
 var (
@@ -206,6 +208,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RateLimitMsg:
 		m.rateLimit = msg.Text
 
+	case HybridHelpMsg:
+		m.hybridEnabled = msg.Enabled
+
 	case RequestDeviceSelectionMsg:
 		select {
 		case deviceSelectChan <- struct{}{}:
@@ -270,6 +275,18 @@ func (m tuiModel) View() string {
 		infoLines = append(infoLines, deviceLine)
 	}
 
+	// Talk mode (expert only), shown under mic line
+	if m.expertMode {
+		talk := "PTT"
+		if m.hybridEnabled {
+			talk = "hybrid"
+		}
+		talkLine := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			Render("talk mode: " + talk)
+		infoLines = append(infoLines, talkLine)
+	}
+
 	// Rate limit (gray)
 	if m.rateLimit != "" {
 		rateLine := lipgloss.NewStyle().
@@ -293,9 +310,14 @@ func (m tuiModel) View() string {
 	infoLines = append(infoLines, "")
 
 	// Help line with version
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
-	boldStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Bold(true)
-	helpLine := boldStyle.Render("Ctrl+Shift+Space") + helpStyle.Render(" to record")
+    helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
+    boldStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Bold(true)
+    var helpLine string
+    if m.hybridEnabled {
+        helpLine = helpStyle.Render("Hold or tap ") + boldStyle.Render("Ctrl+Shift+Space") + helpStyle.Render(" to record")
+    } else {
+        helpLine = helpStyle.Render("Hold ") + boldStyle.Render("Ctrl+Shift+Space") + helpStyle.Render(" to record")
+    }
 	infoLines = append(infoLines, helpLine)
 	infoLines = append(infoLines, helpStyle.Render("zee "+version))
 
