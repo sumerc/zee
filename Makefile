@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test benchmark integration-test clean
+.PHONY: build build-linux-amd64 build-linux-arm64 test benchmark integration-test clean release
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -27,3 +27,8 @@ benchmark: build
 
 clean:
 	rm -f zee
+
+release:
+	@test -n "$(V)" || (echo "Usage: make release V=0.1.0" && exit 1)
+	git tag v$(V)
+	git push origin v$(V)

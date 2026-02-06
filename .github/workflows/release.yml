@@ -14,8 +14,10 @@ jobs:
       matrix:
         include:
           - os: macos-15
+            goos: darwin
             arch: arm64
           - os: macos-15-intel
+            goos: darwin
             arch: amd64
     runs-on: ${{ matrix.os }}
     steps:
@@ -29,16 +31,15 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: Build and package
+      - name: Build
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
-          go build -ldflags="-X main.version=$VERSION -s -w" -o zee
-          tar -czvf "zee_${VERSION}_darwin_${{ matrix.arch }}.tar.gz" zee README.md
+          go build -ldflags="-X main.version=$VERSION -s -w" -o "zee_${{ matrix.goos }}_${{ matrix.arch }}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: zee-darwin-${{ matrix.arch }}
-          path: zee_*.tar.gz
+          name: zee-${{ matrix.goos }}-${{ matrix.arch }}
+          path: zee_*
 
   release:
     needs: build
@@ -49,12 +50,12 @@ jobs:
           merge-multiple: true
 
       - name: Create checksums
-        run: shasum -a 256 zee_*.tar.gz > checksums.txt
+        run: shasum -a 256 zee_* > checksums.txt
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            zee_*.tar.gz
+            zee_*
             checksums.txt

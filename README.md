@@ -27,14 +27,23 @@
   <img src="screenshot.png" alt="zee TUI" width="680">
 </p>
 
+## Install
+
+### macOS
+
+```bash
+curl -L -o zee "https://github.com/sumerc/zee/releases/latest/download/zee_darwin_$(uname -m)"
+chmod +x zee
+sudo mv zee /usr/local/bin/
+```
+
 ## Usage
 
 Hold `Ctrl+Shift+Space` to record, release to transcribe. Result goes to clipboard and auto-pastes.
 
 ```bash
-make build
 export GROQ_API_KEY=your_key
-./zee
+zee
 ```
 
 Use `-setup` to pick a microphone, otherwise uses system default.
