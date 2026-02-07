@@ -28,6 +28,8 @@ import (
 
 var version = "dev"
 
+const voiceThreshold = 0.002
+
 var activeTranscriber transcriber.Transcriber
 var autoPaste bool
 var transcriptions []TranscriptionRecord
@@ -268,7 +270,6 @@ func run() {
 				go beep.PlayStart()
 
 				err := handleRecording(captureDevice, hy.StopChan())
-				tuiSend(RecordingStopMsg{})
 				if err != nil {
 					logToTUI("Error recording: %v", err)
 					log.Errorf("recording error: %v", err)
@@ -288,7 +289,6 @@ func run() {
 
 				err := handleRecording(captureDevice, hk.Keyup())
 				log.Info("hotkey_up")
-				tuiSend(RecordingStopMsg{})
 				if err != nil {
 					logToTUI("Error recording: %v", err)
 					log.Errorf("recording error: %v", err)
@@ -358,6 +358,7 @@ func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) error {
 	}()
 
 	totalFrames, err := record(capture, keyup, sess)
+	tuiSend(RecordingStopMsg{})
 	result, closeErr := sess.Close()
 
 	var clipPrev string
@@ -412,7 +413,7 @@ func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) error {
 		}
 		transcriptions = append(transcriptions, record)
 		updatePercentileStats()
-		log.TranscriptionMetrics(log.Metrics(record), activeFormat, activeFormat, activeTranscriber.Name(), bs.ConnReused)
+		log.TranscriptionMetrics(log.Metrics(record), activeFormat, activeFormat, activeTranscriber.Name(), bs.ConnReused, bs.TLSProtocol)
 		log.Confidence(bs.Confidence)
 	}
 
@@ -511,7 +512,7 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 
 func checkNoVoice(mu *sync.Mutex, elapsed float64, peakLevel *float64, beeped *bool) {
 	mu.Lock()
-	shouldWarn := elapsed > 1.0 && *peakLevel < 0.002 && !*beeped
+	shouldWarn := elapsed > 1.0 && *peakLevel < voiceThreshold && !*beeped
 	if shouldWarn {
 		*beeped = true
 	}

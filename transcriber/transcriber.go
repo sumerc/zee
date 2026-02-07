@@ -3,6 +3,7 @@ package transcriber
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 )
@@ -17,7 +18,21 @@ type NetworkMetrics struct {
 	TTFB       time.Duration
 	Download   time.Duration
 	Total      time.Duration
-	ConnReused bool
+	ConnReused  bool
+	TLSProtocol string
+}
+
+func (m *NetworkMetrics) Sum() time.Duration {
+	return m.ConnWait + m.DNS + m.TCP + m.TLS + m.ReqHeaders + m.ReqBody + m.TTFB + m.Download
+}
+
+func firstNonEmpty(h http.Header, keys ...string) string {
+	for _, k := range keys {
+		if v := h.Get(k); v != "" {
+			return v
+		}
+	}
+	return "?"
 }
 
 type Segment struct {
@@ -52,10 +67,6 @@ type baseTranscriber struct {
 	client *TracedClient
 	apiURL string
 	lang   string
-}
-
-func (b *baseTranscriber) warmConnection() time.Duration {
-	return b.client.WarmConnection(b.apiURL)
 }
 
 func (b *baseTranscriber) SetLanguage(lang string) { b.lang = lang }

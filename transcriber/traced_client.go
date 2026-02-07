@@ -5,15 +5,21 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"time"
 )
 
 type TracedClient struct {
-	client *http.Client
+	client  *http.Client
+	warmURL string
 }
 
-func NewTracedClient() *TracedClient {
-	return &TracedClient{
+func NewTracedClient(apiURL string) *TracedClient {
+	warmURL := "/"
+	if u, err := url.Parse(apiURL); err == nil {
+		warmURL = u.Scheme + "://" + u.Host + "/"
+	}
+	tc := &TracedClient{
 		client: &http.Client{
 			Transport: &http.Transport{
 				MaxIdleConns:        4,
@@ -22,7 +28,10 @@ func NewTracedClient() *TracedClient {
 				ForceAttemptHTTP2:   true,
 			},
 		},
+		warmURL: warmURL,
 	}
+	go tc.Warm()
+	return tc
 }
 
 type TracedResponse struct {
@@ -49,7 +58,10 @@ func (c *TracedClient) Do(req *http.Request) (*TracedResponse, error) {
 		ConnectStart:  func(_, _ string) { tcpStart = time.Now() },
 		ConnectDone:   func(_, _ string, _ error) { metrics.TCP = time.Since(tcpStart) },
 		TLSHandshakeStart: func() { tlsStart = time.Now() },
-		TLSHandshakeDone:  func(_ tls.ConnectionState, _ error) { metrics.TLS = time.Since(tlsStart) },
+		TLSHandshakeDone: func(state tls.ConnectionState, _ error) {
+			metrics.TLS = time.Since(tlsStart)
+			metrics.TLSProtocol = state.NegotiatedProtocol
+		},
 		WroteHeaders: func() {
 			wroteHeaders = time.Now()
 			metrics.ReqHeaders = wroteHeaders.Sub(gotConn)
@@ -88,25 +100,15 @@ func (c *TracedClient) Do(req *http.Request) (*TracedResponse, error) {
 	}, nil
 }
 
-func (c *TracedClient) WarmConnection(url string) time.Duration {
-	var tlsStart time.Time
-	var tlsDuration time.Duration
-
-	trace := &httptrace.ClientTrace{
-		TLSHandshakeStart: func() { tlsStart = time.Now() },
-		TLSHandshakeDone:  func(_ tls.ConnectionState, _ error) { tlsDuration = time.Since(tlsStart) },
-	}
-
-	req, err := http.NewRequest("HEAD", url, nil)
+func (c *TracedClient) Warm() {
+	req, err := http.NewRequest(http.MethodHead, c.warmURL, nil)
 	if err != nil {
-		return 0
+		return
 	}
-	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return 0
+		return
 	}
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
-	return tlsDuration
 }

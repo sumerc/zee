@@ -26,6 +26,7 @@ type BatchStats struct {
 	TTFBMs           float64
 	TotalTimeMs      float64
 	ConnReused       bool
+	TLSProtocol      string
 	Confidence       float64
 }
 

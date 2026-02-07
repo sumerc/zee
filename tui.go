@@ -194,11 +194,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AudioLevelMsg:
 		if m.state == tuiStateRecording {
-			// Asymmetric smoothing: fast attack, slow decay
 			if msg.Level > m.audioLevel {
 				m.audioLevel = m.audioLevel*0.2 + msg.Level*0.8
 			} else {
 				m.audioLevel = m.audioLevel*0.7 + msg.Level*0.3
+			}
+			if m.noVoiceWarning && msg.Level >= voiceThreshold {
+				m.noVoiceWarning = false
 			}
 		}
 
@@ -467,7 +469,7 @@ func renderHALEye(frame int, level float64, recording bool) string {
 	// Voice-reactive breathing
 	var breathe float64
 	if recording {
-		breathe = math.Sin(float64(frame)*0.15)*0.08 + level*15.0
+		breathe = math.Sin(float64(frame)*0.15)*0.08 + math.Min(level*15.0, 1.0)
 	} else {
 		breathe = math.Sin(float64(frame)*0.10) * 0.05
 	}

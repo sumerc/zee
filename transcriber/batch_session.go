@@ -22,7 +22,7 @@ type batchSession struct {
 	bufMu      sync.Mutex
 }
 
-func newBatchSession(cfg SessionConfig, transcribe transcribeFunc, warmConn func()) (*batchSession, error) {
+func newBatchSession(cfg SessionConfig, transcribe transcribeFunc) (*batchSession, error) {
 	enc, err := newEncoder(cfg.Format)
 	if err != nil {
 		return nil, err
@@ -36,8 +36,6 @@ func newBatchSession(cfg SessionConfig, transcribe transcribeFunc, warmConn func
 		blockChan:  make(chan []int16, 64),
 		encodeDone: make(chan struct{}),
 	}
-
-	go warmConn()
 
 	go func() {
 		defer close(bs.encodeDone)
@@ -109,7 +107,6 @@ func (bs *batchSession) Close() (SessionResult, error) {
 	compressionPct := (1.0 - float64(encodedSize)/float64(rawSize)) * 100
 	audioDuration := float64(enc.TotalFrames()) / float64(encoder.SampleRate)
 	netMetrics := result.Metrics
-	total := netMetrics.ConnWait + netMetrics.DNS + netMetrics.TCP + netMetrics.TLS + netMetrics.ReqHeaders + netMetrics.ReqBody + netMetrics.TTFB + netMetrics.Download
 
 	sr := SessionResult{
 		Text:      text,
@@ -125,25 +122,19 @@ func (bs *batchSession) Close() (SessionResult, error) {
 			DNSTimeMs:        float64(netMetrics.DNS.Milliseconds()),
 			TLSTimeMs:        float64(netMetrics.TLS.Milliseconds()),
 			TTFBMs:           float64(netMetrics.TTFB.Milliseconds()),
-			TotalTimeMs:      float64(total.Milliseconds()),
+			TotalTimeMs:      float64(netMetrics.Sum().Milliseconds()),
 			ConnReused:       netMetrics.ConnReused,
+			TLSProtocol:      netMetrics.TLSProtocol,
 			Confidence:       result.Confidence,
 		},
-		Metrics: bs.formatMetrics(result),
+		Metrics: bs.formatMetrics(rawSize, encodedSize, compressionPct, audioDuration, result),
 	}
 	sr.captureMemStats()
 	return sr, nil
 }
 
-func (bs *batchSession) formatMetrics(result *Result) []string {
-	enc := bs.encoder
-	rawSize := enc.TotalFrames() * 2
-	encodedSize := uint64(len(enc.Bytes()))
-	compressionPct := (1.0 - float64(encodedSize)/float64(rawSize)) * 100
-	audioDuration := float64(enc.TotalFrames()) / float64(encoder.SampleRate)
+func (bs *batchSession) formatMetrics(rawSize, encodedSize uint64, compressionPct, audioDuration float64, result *Result) []string {
 	metrics := result.Metrics
-
-	total := metrics.ConnWait + metrics.DNS + metrics.TCP + metrics.TLS + metrics.ReqHeaders + metrics.ReqBody + metrics.TTFB + metrics.Download
 
 	reusedStatus := ""
 	if metrics.ConnReused {
@@ -154,7 +145,7 @@ func (bs *batchSession) formatMetrics(result *Result) []string {
 		fmt.Sprintf("audio:      %.1fs | %.1f KB → %.1f KB (%.0f%% smaller)",
 			audioDuration, float64(rawSize)/1024, float64(encodedSize)/1024, compressionPct),
 		fmt.Sprintf("format:     %s", bs.cfg.Format),
-		fmt.Sprintf("encode:     %dms (concurrent)", enc.EncodeTime().Milliseconds()),
+		fmt.Sprintf("encode:     %dms (concurrent)", bs.encoder.EncodeTime().Milliseconds()),
 		fmt.Sprintf("conn_wait:  %dms%s", metrics.ConnWait.Milliseconds(), reusedStatus),
 		fmt.Sprintf("dns:        %dms", metrics.DNS.Milliseconds()),
 		fmt.Sprintf("tcp:        %dms", metrics.TCP.Milliseconds()),
@@ -163,7 +154,7 @@ func (bs *batchSession) formatMetrics(result *Result) []string {
 		fmt.Sprintf("req_body:   %dms", metrics.ReqBody.Milliseconds()),
 		fmt.Sprintf("ttfb:       %dms", metrics.TTFB.Milliseconds()),
 		fmt.Sprintf("download:   %dms", metrics.Download.Milliseconds()),
-		fmt.Sprintf("total:      %dms", total.Milliseconds()),
+		fmt.Sprintf("total:      %dms", metrics.Sum().Milliseconds()),
 	}
 	if result.Duration > 0 {
 		lines = append(lines, fmt.Sprintf("api_dur:    %.2fs", result.Duration))
