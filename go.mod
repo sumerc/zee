@@ -15,6 +15,7 @@ require (
 	github.com/rs/zerolog v1.34.0
 	golang.design/x/hotkey v0.4.1
 	golang.org/x/term v0.39.0
+	nhooyr.io/websocket v1.8.17
 )
 
 require (

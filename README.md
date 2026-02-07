@@ -73,6 +73,7 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 | `-mode` | fast | Transcription mode: `fast`, `balanced`, `precise` |
 | `-setup` | false | Select microphone device |
 | `-autopaste` | true | Auto-paste after transcription |
+| `-stream` | false | Enable streaming transcription (Deepgram only) |
 | `-hybrid` | false | Enable hybrid tap-to-toggle + hold-to-talk on the same hotkey |
 | `-longpress` | 350ms | Threshold distinguishing tap vs hold (e.g., `300ms`) |
 | `-lang` | (auto) | Language code for transcription (e.g., `en`, `es`, `fr`) |

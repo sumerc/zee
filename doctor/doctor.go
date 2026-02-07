@@ -2,7 +2,7 @@ package doctor
 
 import (
 	"bufio"
-	"encoding/binary"
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -195,8 +195,13 @@ func checkMicAndTranscription() bool {
 
 	fmt.Printf("  Recorded %.1f KB, transcribing...\n", float64(len(audioData))/1024)
 
-	// Transcribe
-	result, err := trans.Transcribe(audioData, "flac")
+	sess, err := trans.NewSession(context.Background(), transcriber.SessionConfig{Format: "flac"})
+	if err != nil {
+		fmt.Printf("  FAIL: session error: %v\n", err)
+		return false
+	}
+	sess.Feed(audioData)
+	result, err := sess.Close()
 	if err != nil {
 		fmt.Printf("  FAIL: transcription error: %v\n", err)
 		return false
@@ -225,12 +230,7 @@ func checkMicAndTranscription() bool {
 }
 
 func recordAudio(ctx audio.Context, device *audio.DeviceInfo, keyup <-chan struct{}) ([]byte, error) {
-	enc, err := encoder.NewFlac()
-	if err != nil {
-		return nil, err
-	}
-
-	var sampleBuf []int16
+	var pcmBuf []byte
 	var bufMu sync.Mutex
 	var stopped bool
 	done := make(chan struct{})
@@ -251,24 +251,8 @@ func recordAudio(ctx audio.Context, device *audio.DeviceInfo, keyup <-chan struc
 			bufMu.Unlock()
 			return
 		}
-
-		for i := 0; i < len(data); i += 2 {
-			sample := int16(binary.LittleEndian.Uint16(data[i:]))
-			sampleBuf = append(sampleBuf, sample)
-		}
-
-		var blocks [][]int16
-		for len(sampleBuf) >= encoder.BlockSize {
-			block := make([]int16, encoder.BlockSize)
-			copy(block, sampleBuf[:encoder.BlockSize])
-			sampleBuf = sampleBuf[encoder.BlockSize:]
-			blocks = append(blocks, block)
-		}
+		pcmBuf = append(pcmBuf, data...)
 		bufMu.Unlock()
-
-		for _, block := range blocks {
-			enc.EncodeBlock(block)
-		}
 	})
 
 	if err := captureDevice.Start(); err != nil {
@@ -290,7 +274,6 @@ func recordAudio(ctx audio.Context, device *audio.DeviceInfo, keyup <-chan struc
 		}
 	}()
 
-	// Wait for keyup
 	<-keyup
 	close(done)
 
@@ -298,19 +281,12 @@ func recordAudio(ctx audio.Context, device *audio.DeviceInfo, keyup <-chan struc
 	fmt.Println(" done")
 	captureDevice.Close()
 
-	// Encode remaining samples
 	bufMu.Lock()
 	stopped = true
-	if len(sampleBuf) > 0 {
-		enc.EncodeBlock(sampleBuf)
-	}
+	raw := pcmBuf
 	bufMu.Unlock()
 
-	if err := enc.Close(); err != nil {
-		return nil, err
-	}
-
-	return enc.Bytes(), nil
+	return raw, nil
 }
 
 func checkClipboard() bool {
@@ -366,12 +342,21 @@ func checkClipboard() bool {
 		time.Sleep(1 * time.Second)
 	}
 
-	if err := clipboard.CopyAndPasteWithPreserve("zee-temp-replacement"); err != nil {
-		fmt.Printf("  FAIL: CopyAndPasteWithPreserve failed: %v\n", err)
+	if err := clipboard.Copy("zee-temp-replacement"); err != nil {
+		fmt.Printf("  FAIL: clipboard copy failed: %v\n", err)
+		return false
+	}
+	if err := clipboard.Paste(); err != nil {
+		fmt.Printf("  FAIL: paste failed: %v\n", err)
 		return false
 	}
 
-	time.Sleep(1500 * time.Millisecond) // CopyAndPasteWithPreserve restores after 800ms; allow margin
+	time.Sleep(500 * time.Millisecond)
+
+	if err := clipboard.Copy(sentinel); err != nil {
+		fmt.Printf("  FAIL: clipboard restore failed: %v\n", err)
+		return false
+	}
 
 	restored, err := clipboard.Read()
 	if err != nil {

@@ -106,7 +106,7 @@ func Init() error {
 
 	consoleWriter := zerolog.ConsoleWriter{
 		Out:        diagFile,
-		TimeFormat: "15:04:05",
+		TimeFormat: "2006-01-02 15:04:05",
 		NoColor:    true,
 	}
 	diagLog = zerolog.New(consoleWriter).With().Timestamp().Int("pid", pid).Logger()
@@ -141,13 +141,25 @@ func Error(msg string) {
 	}
 }
 
+func Errorf(format string, args ...any) {
+	if logReady {
+		diagLog.Error().Msg(fmt.Sprintf(format, args...))
+	}
+}
+
 func Warn(msg string) {
 	if logReady {
 		diagLog.Warn().Msg(msg)
 	}
 }
 
-func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused bool) {
+func Warnf(format string, args ...any) {
+	if logReady {
+		diagLog.Warn().Msg(fmt.Sprintf(format, args...))
+	}
+}
+
+func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused bool, tlsProto string) {
 	if !logReady {
 		return
 	}
@@ -157,12 +169,15 @@ func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused b
 		connStatus = "reused"
 	}
 
-	diagLog.Info().
+	ev := diagLog.Info().
 		Str("mode", mode).
 		Str("format", format).
 		Str("provider", provider).
-		Str("conn", connStatus).
-		Float64("audio_s", m.AudioLengthS).
+		Str("conn", connStatus)
+	if tlsProto != "" {
+		ev = ev.Str("tls_proto", tlsProto)
+	}
+	ev.Float64("audio_s", m.AudioLengthS).
 		Float64("raw_kb", m.RawSizeKB).
 		Float64("compressed_kb", m.CompressedSizeKB).
 		Float64("compression_pct", m.CompressionPct).

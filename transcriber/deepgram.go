@@ -2,19 +2,12 @@ package transcriber
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"zee/encoder"
 )
-
-func firstNonEmpty(h http.Header, keys ...string) string {
-	for _, k := range keys {
-		if v := h.Get(k); v != "" {
-			return v
-		}
-	}
-	return "?"
-}
 
 type Deepgram struct {
 	baseTranscriber
@@ -22,16 +15,40 @@ type Deepgram struct {
 }
 
 func NewDeepgram(apiKey string) *Deepgram {
+	apiURL := "https://api.deepgram.com/v1/listen?model=nova-3"
 	return &Deepgram{
 		baseTranscriber: baseTranscriber{
-			client: NewTracedClient(),
-			apiURL: "https://api.deepgram.com/v1/listen?model=nova-3",
+			client: NewTracedClient(apiURL),
+			apiURL: apiURL,
 		},
 		apiKey: apiKey,
 	}
 }
 
 func (d *Deepgram) Name() string { return "deepgram" }
+
+func (d *Deepgram) NewSession(ctx context.Context, cfg SessionConfig) (Session, error) {
+	go d.client.Warm()
+	if cfg.Language != "" {
+		d.SetLanguage(cfg.Language)
+	}
+	if cfg.Stream {
+		return d.newStreamSession(ctx)
+	}
+	return newBatchSession(cfg, d.transcribe)
+}
+
+func (d *Deepgram) newStreamSession(ctx context.Context) (Session, error) {
+	dial := func() (rawStreamSession, error) {
+		return d.startStream(ctx, streamSessionConfig{
+			SampleRate: encoder.SampleRate,
+			Channels:   encoder.Channels,
+			Language:   d.lang,
+			Model:      "nova-3",
+		})
+	}
+	return newStreamSession(dial), nil
+}
 
 type deepgramResponse struct {
 	Metadata struct {
@@ -48,7 +65,7 @@ type deepgramResponse struct {
 	} `json:"results"`
 }
 
-func (d *Deepgram) Transcribe(audioData []byte, format string) (*Result, error) {
+func (d *Deepgram) transcribe(audioData []byte, format string) (*Result, error) {
 	contentType := "audio/flac"
 	if format == "mp3" {
 		contentType = "audio/mpeg"
