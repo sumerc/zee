@@ -11,6 +11,13 @@ import (
 	"nhooyr.io/websocket"
 )
 
+type streamSessionConfig struct {
+	SampleRate int
+	Channels   int
+	Language   string
+	Model      string
+}
+
 type deepgramStreamResponse struct {
 	Type         string `json:"type"`
 	IsFinal      bool   `json:"is_final"`
@@ -29,7 +36,7 @@ type deepgramStreamSession struct {
 	cancel context.CancelFunc
 }
 
-func (d *Deepgram) StartStream(ctx context.Context, cfg StreamConfig) (StreamSession, error) {
+func (d *Deepgram) startStream(ctx context.Context, cfg streamSessionConfig) (rawStreamSession, error) {
 	endpoint, err := url.Parse("wss://api.deepgram.com/v1/listen")
 	if err != nil {
 		return nil, err
@@ -47,9 +54,6 @@ func (d *Deepgram) StartStream(ctx context.Context, cfg StreamConfig) (StreamSes
 	}
 	if cfg.Channels > 0 {
 		q.Set("channels", fmt.Sprintf("%d", cfg.Channels))
-	}
-	if cfg.InterimResults {
-		q.Set("interim_results", "true")
 	}
 	if cfg.Language != "" {
 		q.Set("language", cfg.Language)
@@ -78,15 +82,15 @@ func (s *deepgramStreamSession) CloseSend() error {
 	return s.conn.Write(s.ctx, websocket.MessageText, msg)
 }
 
-func (s *deepgramStreamSession) Recv() (StreamUpdate, error) {
+func (s *deepgramStreamSession) Recv() (streamUpdate, error) {
 	_, data, err := s.conn.Read(s.ctx)
 	if err != nil {
-		return StreamUpdate{}, err
+		return streamUpdate{}, err
 	}
 
 	var resp deepgramStreamResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return StreamUpdate{}, err
+		return streamUpdate{}, err
 	}
 
 	transcript := ""
@@ -94,7 +98,7 @@ func (s *deepgramStreamSession) Recv() (StreamUpdate, error) {
 		transcript = resp.Channel.Alternatives[0].Transcript
 	}
 
-	return StreamUpdate{
+	return streamUpdate{
 		Transcript:   strings.TrimSpace(transcript),
 		IsFinal:      resp.IsFinal,
 		SpeechFinal:  resp.SpeechFinal,

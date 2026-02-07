@@ -2,6 +2,7 @@ package transcriber
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
@@ -14,16 +15,28 @@ type Groq struct {
 }
 
 func NewGroq(apiKey string) *Groq {
-	return &Groq{
+	g := &Groq{
 		baseTranscriber: baseTranscriber{
 			client: NewTracedClient(),
 			apiURL: "https://api.groq.com/openai/v1/audio/transcriptions",
 		},
 		apiKey: apiKey,
 	}
+	go g.warmConnection()
+	return g
 }
 
 func (g *Groq) Name() string { return "groq" }
+
+func (g *Groq) NewSession(_ context.Context, cfg SessionConfig) (Session, error) {
+	if cfg.Stream {
+		return nil, fmt.Errorf("groq does not support streaming transcription")
+	}
+	if cfg.Language != "" {
+		g.SetLanguage(cfg.Language)
+	}
+	return newBatchSession(cfg, g.transcribe, func() { g.warmConnection() })
+}
 
 type groqResponse struct {
 	Text     string  `json:"text"`
@@ -39,7 +52,7 @@ type groqResponse struct {
 	} `json:"segments"`
 }
 
-func (g *Groq) Transcribe(audioData []byte, format string) (*Result, error) {
+func (g *Groq) transcribe(audioData []byte, format string) (*Result, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 

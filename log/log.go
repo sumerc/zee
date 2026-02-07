@@ -141,9 +141,21 @@ func Error(msg string) {
 	}
 }
 
+func Errorf(format string, args ...any) {
+	if logReady {
+		diagLog.Error().Msg(fmt.Sprintf(format, args...))
+	}
+}
+
 func Warn(msg string) {
 	if logReady {
 		diagLog.Warn().Msg(msg)
+	}
+}
+
+func Warnf(format string, args ...any) {
+	if logReady {
+		diagLog.Warn().Msg(fmt.Sprintf(format, args...))
 	}
 }
 

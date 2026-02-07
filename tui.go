@@ -428,12 +428,16 @@ func (m tuiModel) View() string {
 			logPadded[i] = ""
 		}
 	}
-	// Pad eye panel to full height
+	// Pad eye panel to full height (all lines must be eyeWidth-1 visual chars)
 	eyePadded := make([]string, m.height)
 	eyeBlank := strings.Repeat(" ", eyeWidth-1)
 	for i := range eyePadded {
 		if i < len(eyeLines) {
-			eyePadded[i] = eyeLines[i]
+			line := eyeLines[i]
+			if pad := eyeWidth - 1 - lipgloss.Width(line); pad > 0 {
+				line += strings.Repeat(" ", pad)
+			}
+			eyePadded[i] = line
 		} else {
 			eyePadded[i] = eyeBlank
 		}
