@@ -20,15 +20,17 @@ type LogMsg struct{ Text string }
 type TranscriptionMsg struct {
 	Text     string
 	Metrics  []string
-	Copied   bool
 	NoSpeech bool // true when no speech was detected
 }
-type ModeLineMsg struct{ Text string }       // Mode/provider info
-type DeviceLineMsg struct{ Text string }     // Microphone device name
-type RateLimitMsg struct{ Text string }      // Rate limit info
-type RequestDeviceSelectionMsg struct{} // Request to change microphone
-type NoVoiceWarningMsg struct{}         // No voice detected during recording
-type HybridHelpMsg struct{ Enabled bool }    // Whether hybrid tap+hold is enabled
+type LiveTranscriptionMsg struct {
+	Text string
+}
+type ModeLineMsg struct{ Text string }    // Mode/provider info
+type DeviceLineMsg struct{ Text string }  // Microphone device name
+type RateLimitMsg struct{ Text string }   // Rate limit info
+type RequestDeviceSelectionMsg struct{}   // Request to change microphone
+type NoVoiceWarningMsg struct{}           // No voice detected during recording
+type HybridHelpMsg struct{ Enabled bool } // Whether hybrid tap+hold is enabled
 type tickMsg time.Time
 
 type tuiState int
@@ -41,7 +43,6 @@ const (
 type historyEntry struct {
 	text     string
 	metrics  []string
-	copied   bool
 	noSpeech bool
 }
 
@@ -58,10 +59,28 @@ type tuiModel struct {
 	modeLine          string // "[fast | MP3@16kbps | deepgram]"
 	deviceLine        string // microphone device name
 	rateLimit         string // "45/50 remaining"
+	liveText          string // live streaming text (committed only)
 	history           []historyEntry
 	viewIdx           int  // 0 = newest, higher = older
-    expertMode        bool // show full TUI with HAL eye
-    hybridEnabled     bool // show hybrid help text when true
+	expertMode        bool // show full TUI with HAL eye
+	hybridEnabled     bool // show hybrid help text when true
+}
+
+func (m tuiModel) maxViewIdx() int {
+	if len(m.history) == 0 {
+		return 0
+	}
+	return len(m.history) - 1
+}
+
+func (m *tuiModel) clampViewIdx() {
+	if m.viewIdx < 0 {
+		m.viewIdx = 0
+	}
+	maxIdx := m.maxViewIdx()
+	if m.viewIdx > maxIdx {
+		m.viewIdx = maxIdx
+	}
 }
 
 var (
@@ -140,7 +159,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+g":
 			return m, func() tea.Msg { return RequestDeviceSelectionMsg{} }
 		case "down", "j":
-			if m.viewIdx < len(m.history)-1 {
+			if m.viewIdx < m.maxViewIdx() {
 				m.viewIdx++
 			}
 		case "up", "k":
@@ -161,10 +180,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recordingDuration = 0
 		m.audioLevel = 0
 		m.noVoiceWarning = false
+		m.liveText = ""
+		m.clampViewIdx()
 
 	case RecordingStopMsg:
 		m.state = tuiStateIdle
 		m.audioLevel = 0
+		m.liveText = ""
+		m.clampViewIdx()
 
 	case RecordingTickMsg:
 		m.recordingDuration = msg.Duration
@@ -182,15 +205,19 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NoVoiceWarningMsg:
 		m.noVoiceWarning = true
 
+	case LiveTranscriptionMsg:
+		m.liveText = msg.Text
+		m.clampViewIdx()
+
 	case TranscriptionMsg:
 		m.msgCount++
+		m.liveText = ""
 		// Deep copy metrics slice to avoid aliasing
 		metricsCopy := make([]string, len(msg.Metrics))
 		copy(metricsCopy, msg.Metrics)
 		entry := historyEntry{
 			text:     msg.Text,
 			metrics:  metricsCopy,
-			copied:   msg.Copied,
 			noSpeech: msg.NoSpeech,
 		}
 		m.history = append(m.history, entry)
@@ -198,6 +225,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.history = m.history[1:]
 		}
 		m.viewIdx = 0 // reset to newest
+		m.clampViewIdx()
 
 	case ModeLineMsg:
 		m.modeLine = msg.Text
@@ -310,14 +338,14 @@ func (m tuiModel) View() string {
 	infoLines = append(infoLines, "")
 
 	// Help line with version
-    helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
-    boldStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Bold(true)
-    var helpLine string
-    if m.hybridEnabled {
-        helpLine = helpStyle.Render("Hold or tap ") + boldStyle.Render("Ctrl+Shift+Space") + helpStyle.Render(" to record")
-    } else {
-        helpLine = helpStyle.Render("Hold ") + boldStyle.Render("Ctrl+Shift+Space") + helpStyle.Render(" to record")
-    }
+	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
+	boldStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Bold(true)
+	var helpLine string
+	if m.hybridEnabled {
+		helpLine = helpStyle.Render("Hold or tap ") + boldStyle.Render("Ctrl+Shift+Space") + helpStyle.Render(" to record")
+	} else {
+		helpLine = helpStyle.Render("Hold ") + boldStyle.Render("Ctrl+Shift+Space") + helpStyle.Render(" to record")
+	}
 	infoLines = append(infoLines, helpLine)
 	infoLines = append(infoLines, helpStyle.Render("zee "+version))
 
@@ -328,101 +356,99 @@ func (m tuiModel) View() string {
 
 	eyeLines := strings.Split(eye, "\n")
 
-	// Calculate log panel width
+	// Build right panel as explicit lines (avoids lipgloss layout quirks)
 	logWidth := m.width - eyeWidth - 1
 	if logWidth < 20 {
 		logWidth = 20
 	}
-
-	// Build right panel content
-	var logContent strings.Builder
 	wrapWidth := logWidth - 2
 	if wrapWidth < 10 {
 		wrapWidth = 10
 	}
 
-	if len(m.history) > 0 {
-		// Get entry from history (viewIdx 0 = newest = last in slice)
-		idx := len(m.history) - 1 - m.viewIdx
-		if idx < 0 {
-			idx = 0
-		}
-		entry := m.history[idx]
-		entryNum := m.msgCount - m.viewIdx
+	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	metricsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
-		// Title with position indicator
+	var logLines []string
+	showLive := recording && strings.TrimSpace(m.liveText) != "" && m.viewIdx == 0
+
+	if showLive {
+		logLines = append(logLines, titleStyle.Render("Transcription (live)"), "")
+		for _, line := range wrapText(m.liveText, wrapWidth) {
+			logLines = append(logLines, textStyle.Render(line))
+		}
+	} else if len(m.history) > 0 {
+		historyPos := m.viewIdx
+		if historyPos > len(m.history)-1 {
+			historyPos = len(m.history) - 1
+		}
+		entry := m.history[len(m.history)-1-historyPos]
+		entryNum := m.msgCount - historyPos
+
 		titleText := fmt.Sprintf("Transcription #%d", entryNum)
 		if len(m.history) > 1 {
-			titleText += fmt.Sprintf(" (%d/%d ↑/↓)", m.viewIdx+1, len(m.history))
+			titleText += fmt.Sprintf(" (%d/%d ↑/↓)", historyPos+1, len(m.history))
 		}
-		title := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("246")).
-			Render(titleText)
-		logContent.WriteString(title + "\n\n")
+		logLines = append(logLines, titleStyle.Render(titleText), "")
 
-		// Transcribed text
-		var textStyle lipgloss.Style
+		style := textStyle
 		if entry.noSpeech {
-			textStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
-		} else {
-			textStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
 		}
-		lines := wrapText(entry.text, wrapWidth)
-		for i, line := range lines {
-			logContent.WriteString(textStyle.Render(line))
-			if i == len(lines)-1 && entry.copied && !entry.noSpeech {
-				clipboardStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-				logContent.WriteString(" " + clipboardStyle.Render("[✓ copied]"))
-			}
-			logContent.WriteString("\n")
+		for _, line := range wrapText(entry.text, wrapWidth) {
+			logLines = append(logLines, style.Render(line))
 		}
 
-		// Metrics
 		if len(entry.metrics) > 0 {
-			logContent.WriteString("\n")
-			metricsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+			logLines = append(logLines, "")
 			for _, metric := range entry.metrics {
 				if m.expertMode {
-					logContent.WriteString(metricsStyle.Render(metric) + "\n")
+					logLines = append(logLines, metricsStyle.Render(metric))
 				} else if strings.HasPrefix(metric, "audio:") {
-					// Show only duration part (before "|")
 					if idx := strings.Index(metric, "|"); idx > 0 {
-						logContent.WriteString(metricsStyle.Render(strings.TrimSpace(metric[:idx])) + "\n")
+						logLines = append(logLines, metricsStyle.Render(strings.TrimSpace(metric[:idx])))
 					}
 				} else if strings.HasPrefix(metric, "total:") {
-					logContent.WriteString(metricsStyle.Render(metric) + "\n")
+					logLines = append(logLines, metricsStyle.Render(metric))
 				}
 			}
 		}
 	} else {
-		placeholder := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Render("No transcriptions yet")
-		logContent.WriteString(placeholder)
+		logLines = append(logLines, dimStyle.Render("No transcriptions yet"))
 	}
 
-	logPanel := lipgloss.NewStyle().
-		Width(logWidth).
-		Height(m.height).
-		PaddingLeft(1).
-		Render(logContent.String())
-
-	// Pad eye panel to full height (eye at top)
+	// Pad to terminal height, prefix each line with a space for left margin
+	logPadded := make([]string, m.height)
+	for i := range logPadded {
+		if i < len(logLines) {
+			logPadded[i] = " " + logLines[i]
+		} else {
+			logPadded[i] = ""
+		}
+	}
+	// Pad eye panel to full height
 	eyePadded := make([]string, m.height)
+	eyeBlank := strings.Repeat(" ", eyeWidth-1)
 	for i := range eyePadded {
 		if i < len(eyeLines) {
 			eyePadded[i] = eyeLines[i]
 		} else {
-			eyePadded[i] = strings.Repeat(" ", eyeWidth-1)
+			eyePadded[i] = eyeBlank
 		}
 	}
 
-	eyePanel := lipgloss.NewStyle().
-		Width(eyeWidth - 1).
-		Height(m.height).
-		Render(strings.Join(eyePadded, "\n"))
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, eyePanel, logPanel)
+	// Join panels side by side
+	var screen strings.Builder
+	for i := 0; i < m.height; i++ {
+		screen.WriteString(eyePadded[i])
+		screen.WriteString(logPadded[i])
+		if i < m.height-1 {
+			screen.WriteByte('\n')
+		}
+	}
+	return screen.String()
 }
 
 func renderHALEye(frame int, level float64, recording bool) string {

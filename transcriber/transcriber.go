@@ -1,6 +1,7 @@
 package transcriber
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -40,12 +41,38 @@ type Result struct {
 	Segments     []Segment // per-segment details (Whisper only)
 }
 
+type StreamConfig struct {
+	SampleRate     int
+	Channels       int
+	Language       string
+	InterimResults bool
+	Model          string
+}
+
+type StreamUpdate struct {
+	Transcript   string
+	IsFinal      bool
+	SpeechFinal  bool
+	FromFinalize bool
+}
+
+type StreamSession interface {
+	Send(pcm []byte) error
+	CloseSend() error
+	Recv() (StreamUpdate, error)
+	Close() error
+}
+
 type Transcriber interface {
 	Transcribe(audio []byte, format string) (*Result, error)
 	WarmConnection() time.Duration // returns TLS handshake time
 	Name() string
 	SetLanguage(lang string)
 	GetLanguage() string
+}
+
+type Streamer interface {
+	StartStream(ctx context.Context, cfg StreamConfig) (StreamSession, error)
 }
 
 type baseTranscriber struct {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -55,6 +56,144 @@ type TranscriptionRecord struct {
 	TotalTimeMs      float64
 	MemoryAllocMB    float64
 	MemoryPeakMB     float64
+}
+
+const streamChunkMs = 200
+
+const streamChunkBytes = encoder.SampleRate * encoder.Channels * (encoder.BitsPerSample / 8) * streamChunkMs / 1000
+const streamRecordTail = 250 * time.Millisecond // keep mic open briefly after key-up to catch last syllable
+const streamFinalizeIdle = 200 * time.Millisecond
+const streamFinalizePoll = 40 * time.Millisecond
+const streamFinalizeMax = 1000 * time.Millisecond
+
+type streamCommitter struct {
+	mu        sync.Mutex
+	committed []string
+	lastSeen  []string
+}
+
+func overlapSuffixPrefix(left, right []string) int {
+	max := len(left)
+	if len(right) < max {
+		max = len(right)
+	}
+	for k := max; k > 0; k-- {
+		match := true
+		for i := 0; i < k; i++ {
+			if left[len(left)-k+i] != right[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return k
+		}
+	}
+	return 0
+}
+
+func (c *streamCommitter) Apply(transcript string, isFinal bool) (string, string) {
+	fullWords := strings.Fields(transcript)
+	if len(fullWords) == 0 {
+		return "", c.Text()
+	}
+	words := fullWords
+	if !isFinal && len(words) > 2 {
+		words = words[:len(words)-2]
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastSeen = fullWords
+
+	overlap := overlapSuffixPrefix(c.committed, words)
+	if overlap == len(words) {
+		return "", strings.Join(c.committed, " ")
+	}
+	newWords := words[overlap:]
+	if len(newWords) == 0 {
+		return "", strings.Join(c.committed, " ")
+	}
+
+	delta := strings.Join(newWords, " ")
+	if len(c.committed) > 0 {
+		delta = " " + delta
+	}
+	c.committed = append(c.committed, newWords...)
+
+	return delta, strings.Join(c.committed, " ")
+}
+
+func (c *streamCommitter) FinalizeRemaining() (string, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.lastSeen) == 0 {
+		return "", strings.Join(c.committed, " ")
+	}
+
+	overlap := overlapSuffixPrefix(c.committed, c.lastSeen)
+	if overlap == len(c.lastSeen) {
+		return "", strings.Join(c.committed, " ")
+	}
+	newWords := c.lastSeen[overlap:]
+	if len(newWords) == 0 {
+		return "", strings.Join(c.committed, " ")
+	}
+
+	delta := strings.Join(newWords, " ")
+	if len(c.committed) > 0 {
+		delta = " " + delta
+	}
+	c.committed = append(c.committed, newWords...)
+	return delta, strings.Join(c.committed, " ")
+}
+
+func (c *streamCommitter) Text() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Join(c.committed, " ")
+}
+
+func (c *streamCommitter) HasText() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.committed) > 0
+}
+
+type streamingPasteSession struct {
+	previous string
+	enabled  bool
+}
+
+func startStreamingPasteSession(enabled bool) *streamingPasteSession {
+	if !enabled {
+		return &streamingPasteSession{enabled: false}
+	}
+	previous, _ := clipboard.Read()
+	return &streamingPasteSession{previous: previous, enabled: true}
+}
+
+func (s *streamingPasteSession) Paste(delta string) error {
+	if !s.enabled || delta == "" {
+		return nil
+	}
+	if err := clipboard.Copy(delta); err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	if err := clipboard.Paste(); err != nil {
+		return fmt.Errorf("paste: %w", err)
+	}
+	return nil
+}
+
+func (s *streamingPasteSession) End() {
+	if !s.enabled || s.previous == "" {
+		return
+	}
+	go func(prev string) {
+		time.Sleep(800 * time.Millisecond)
+		_ = clipboard.Copy(prev)
+	}(s.previous)
 }
 
 type modeConfig struct {
@@ -116,22 +255,250 @@ func formatLabelForMode(mode modeConfig, adaptiveSuffix string) string {
 	}
 }
 
+type streamingSession struct {
+	session   transcriber.StreamSession
+	audioCh   chan []byte
+	committer *streamCommitter
+	paste     *streamingPasteSession
+	autoPaste bool
+	startedAt time.Time
+
+	sendDone chan struct{}
+	recvDone chan struct{}
+
+	mu      sync.Mutex
+	pasted  bool
+	err     error
+	errOnce sync.Once
+	closing bool
+	stats   streamStats
+}
+
+type streamStats struct {
+	UpgradeRequests int
+	ConnectDur      time.Duration
+	SentChunks      int
+	SentBytes       uint64
+	RecvMessages    int
+	RecvFinal       int
+	RecvInterim     int
+	CommitEvents    int
+	CommittedWords  int
+	FinalizeWait    time.Duration
+	SessionDur      time.Duration
+}
+
+func startStreamingSession(streamer transcriber.Streamer, lang string, autoPaste bool) (*streamingSession, error) {
+	cfg := transcriber.StreamConfig{
+		SampleRate:     encoder.SampleRate,
+		Channels:       encoder.Channels,
+		Language:       lang,
+		InterimResults: true,
+		Model:          "nova-3",
+	}
+
+	connectStart := time.Now()
+	session, err := streamer.StartStream(context.Background(), cfg)
+	if err != nil {
+		return nil, err
+	}
+	connectDur := time.Since(connectStart)
+
+	ss := &streamingSession{
+		session:   session,
+		audioCh:   make(chan []byte, 64),
+		committer: &streamCommitter{},
+		paste:     startStreamingPasteSession(autoPaste),
+		autoPaste: autoPaste,
+		startedAt: time.Now(),
+		sendDone:  make(chan struct{}),
+		recvDone:  make(chan struct{}),
+		stats: streamStats{
+			UpgradeRequests: 1,
+			ConnectDur:      connectDur,
+		},
+	}
+
+	go ss.runSender()
+	go ss.runReceiver()
+	return ss, nil
+}
+
+func (s *streamingSession) runSender() {
+	defer close(s.sendDone)
+	for chunk := range s.audioCh {
+		if err := s.session.Send(chunk); err != nil {
+			s.setErr(err)
+			return
+		}
+		s.mu.Lock()
+		s.stats.SentChunks++
+		s.stats.SentBytes += uint64(len(chunk))
+		s.mu.Unlock()
+	}
+	if err := s.session.CloseSend(); err != nil {
+		s.setErr(err)
+	}
+}
+
+func (s *streamingSession) runReceiver() {
+	defer close(s.recvDone)
+	for {
+		update, err := s.session.Recv()
+		if err != nil {
+			if s.isClosing() {
+				return
+			}
+			s.setErr(err)
+			return
+		}
+
+		isFinal := update.IsFinal || update.SpeechFinal || update.FromFinalize
+		s.mu.Lock()
+		s.stats.RecvMessages++
+		if isFinal {
+			s.stats.RecvFinal++
+		} else {
+			s.stats.RecvInterim++
+		}
+		s.mu.Unlock()
+
+		delta, committed := s.committer.Apply(update.Transcript, isFinal)
+		if delta == "" {
+			continue
+		}
+		s.mu.Lock()
+		s.stats.CommitEvents++
+		s.stats.CommittedWords += len(strings.Fields(delta))
+		s.mu.Unlock()
+
+		tuiSend(LiveTranscriptionMsg{Text: committed})
+		if s.autoPaste {
+			if err := s.paste.Paste(delta); err != nil {
+				log.Error(fmt.Sprintf("stream paste error: %v", err))
+				continue
+			}
+			s.mu.Lock()
+			s.pasted = true
+			s.mu.Unlock()
+		}
+	}
+}
+
+func (s *streamingSession) setErr(err error) {
+	if err == nil {
+		return
+	}
+	s.errOnce.Do(func() {
+		s.mu.Lock()
+		s.err = err
+		s.mu.Unlock()
+		_ = s.session.Close()
+	})
+}
+
+func (s *streamingSession) Pasted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pasted
+}
+
+func (s *streamingSession) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+func (s *streamingSession) isClosing() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closing
+}
+
+func (s *streamingSession) snapshotStats() streamStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stats
+}
+
+func (s *streamingSession) Finalize() (string, bool, bool, streamStats, error) {
+	finalizeStart := time.Now()
+
+	// Block until ALL audio bytes are sent and CloseSend completes
+	<-s.sendDone
+
+	// Wait for Deepgram to return remaining results (poll for recv quiet)
+	waitStart := time.Now()
+	lastRecv := s.snapshotStats().RecvMessages
+	lastChange := time.Now()
+	for time.Since(waitStart) < streamFinalizeMax {
+		time.Sleep(streamFinalizePoll)
+		recvNow := s.snapshotStats().RecvMessages
+		if recvNow != lastRecv {
+			lastRecv = recvNow
+			lastChange = time.Now()
+			continue
+		}
+		if time.Since(lastChange) >= streamFinalizeIdle {
+			break
+		}
+	}
+
+	// Close connection and drain receiver
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+	_ = s.session.Close()
+	select {
+	case <-s.recvDone:
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// NOW commit trailing words — receiver has seen everything Deepgram sent
+	delta, committed := s.committer.FinalizeRemaining()
+	if delta != "" {
+		tuiSend(LiveTranscriptionMsg{Text: committed})
+		s.mu.Lock()
+		s.stats.CommitEvents++
+		s.stats.CommittedWords += len(strings.Fields(delta))
+		s.mu.Unlock()
+		if s.autoPaste {
+			if err := s.paste.Paste(delta); err != nil {
+				log.Error(fmt.Sprintf("stream paste error (finalize): %v", err))
+			} else {
+				s.mu.Lock()
+				s.pasted = true
+				s.mu.Unlock()
+			}
+		}
+	}
+
+	s.paste.End()
+
+	text := s.committer.Text()
+	stats := s.snapshotStats()
+	stats.FinalizeWait = time.Since(finalizeStart)
+	stats.SessionDur = time.Since(s.startedAt)
+	return text, s.committer.HasText(), s.Pasted(), stats, s.Err()
+}
+
 func run() {
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
-    autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
-    setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
-    modeFlag := flag.String("mode", "fast", "Transcription mode: fast, balanced, or precise")
-    versionFlag := flag.Bool("version", false, "Print version and exit")
-    saveRecording := flag.Bool("saverecording", false, "Save last recording to zee_last.<format>")
-    doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
-    expertFlag := flag.Bool("expert", false, "Show full TUI with HAL eye animation")
-    langFlag := flag.String("lang", "", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
-    crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
-    logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
-    profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
-    hybridFlag := flag.Bool("hybrid", false, "Enable hybrid tap+hold recording mode")
-    longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
+	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
+	streamFlag := flag.Bool("stream", false, "Enable streaming transcription (Deepgram only)")
+	setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
+	modeFlag := flag.String("mode", "fast", "Transcription mode: fast, balanced, or precise")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
+	saveRecording := flag.Bool("saverecording", false, "Save last recording to zee_last.<format>")
+	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
+	expertFlag := flag.Bool("expert", false, "Show full TUI with HAL eye animation")
+	langFlag := flag.String("lang", "", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
+	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
+	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
+	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
+	hybridFlag := flag.Bool("hybrid", false, "Enable hybrid tap+hold recording mode")
+	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -194,6 +561,16 @@ func run() {
 	activeTranscriber = transcriber.New()
 	if *langFlag != "" {
 		activeTranscriber.SetLanguage(*langFlag)
+	}
+	streamEnabled := *streamFlag
+	var streamer transcriber.Streamer
+	if streamEnabled {
+		if s, ok := activeTranscriber.(transcriber.Streamer); ok {
+			streamer = s
+		} else {
+			streamEnabled = false
+			fmt.Printf("Warning: streaming not supported by %s, falling back to batch\n", activeTranscriber.Name())
+		}
 	}
 
 	// Only enable verbose logging in expert mode
@@ -316,120 +693,180 @@ func run() {
 	if lang := activeTranscriber.GetLanguage(); lang != "" {
 		providerLabel += " (" + lang + ")"
 	}
-    tuiSend(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, providerLabel)})
-    tuiSend(DeviceLineMsg{Text: deviceLineText(selectedDevice)})
-    tuiSend(HybridHelpMsg{Enabled: *hybridFlag})
+	if streamEnabled && streamer != nil {
+		providerLabel += " (stream)"
+	}
+	tuiSend(ModeLineMsg{Text: fmt.Sprintf("[%s | %s | %s]", activeMode.name, formatLabel, providerLabel)})
+	tuiSend(DeviceLineMsg{Text: deviceLineText(selectedDevice)})
+	tuiSend(HybridHelpMsg{Enabled: *hybridFlag})
 
-    if *hybridFlag {
-        hy := hotkey.NewHybrid(hk, *longPressFlag)
-        for {
-            select {
-            case ev := <-hy.Start():
-                log.Info("hotkey_start_" + string(ev.Mode))
-                tuiSend(RecordingStartMsg{})
-                beep.PlayStart()
-                go activeTranscriber.WarmConnection()
+	if *hybridFlag {
+		hy := hotkey.NewHybrid(hk, *longPressFlag)
+		for {
+			select {
+			case ev := <-hy.Start():
+				log.Info("hotkey_start_" + string(ev.Mode))
+				tuiSend(RecordingStartMsg{})
+				beep.PlayStart()
+				go activeTranscriber.WarmConnection()
 
-                state, err := recordWithStreaming(captureDevice, hy.StopChan())
-                tuiSend(RecordingStopMsg{})
-                if err != nil {
-                    logToTUI("Error recording: %v", err)
-                    log.Error(fmt.Sprintf("recording error: %v", err))
-                    continue
-                }
+				err := handleRecording(captureDevice, hy.StopChan(), streamEnabled, streamer)
+				tuiSend(RecordingStopMsg{})
+				if err != nil {
+					logToTUI("Error recording: %v", err)
+					log.Error(fmt.Sprintf("recording error: %v", err))
+					continue
+				}
+				// Reset warm timer - transcription just used the connection
+				select {
+				case warmReset <- struct{}{}:
+				default:
+				}
 
-                if state.TotalFrames() < uint64(encoder.SampleRate/10) {
-                    continue
-                }
+			case <-deviceSelectChan:
+				// Pause TUI for device selection
+				tuiProgram.ReleaseTerminal()
 
-                processRecording(state)
-                // Reset warm timer - transcription just used the connection
-                select {
-                case warmReset <- struct{}{}:
-                default:
-                }
+				newDevice, err := selectDevice(ctx)
 
-            case <-deviceSelectChan:
-                // Pause TUI for device selection
-                tuiProgram.ReleaseTerminal()
+				tuiProgram.RestoreTerminal()
 
-                newDevice, err := selectDevice(ctx)
+				if err != nil {
+					log.Warn(fmt.Sprintf("device selection failed: %v", err))
+					continue
+				}
+				if newDevice != nil {
+					captureDevice.Close()
+					captureDevice, err = ctx.NewCapture(newDevice, captureConfig)
+					if err != nil {
+						log.Error(fmt.Sprintf("capture device reinit error: %v", err))
+						continue
+					}
+					selectedDevice = newDevice
+					tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
+				}
+			}
+		}
+	} else {
+		for {
+			select {
+			case <-hk.Keydown():
+				log.Info("hotkey_down")
+				tuiSend(RecordingStartMsg{})
+				beep.PlayStart()
+				go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
 
-                tuiProgram.RestoreTerminal()
+				err := handleRecording(captureDevice, hk.Keyup(), streamEnabled, streamer)
+				log.Info("hotkey_up")
+				tuiSend(RecordingStopMsg{})
+				if err != nil {
+					logToTUI("Error recording: %v", err)
+					log.Error(fmt.Sprintf("recording error: %v", err))
+					continue
+				}
+				// Reset warm timer - transcription just used the connection
+				select {
+				case warmReset <- struct{}{}:
+				default:
+				}
 
-                if err != nil {
-                    log.Warn(fmt.Sprintf("device selection failed: %v", err))
-                    continue
-                }
-                if newDevice != nil {
-                    captureDevice.Close()
-                    captureDevice, err = ctx.NewCapture(newDevice, captureConfig)
-                    if err != nil {
-                        log.Error(fmt.Sprintf("capture device reinit error: %v", err))
-                        continue
-                    }
-                    selectedDevice = newDevice
-                    tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
-                }
-            }
-        }
-    } else {
-        for {
-            select {
-            case <-hk.Keydown():
-                log.Info("hotkey_down")
-                tuiSend(RecordingStartMsg{})
-                beep.PlayStart()
-                go activeTranscriber.WarmConnection() // Ensure fresh connection before recording
+			case <-deviceSelectChan:
+				// Pause TUI for device selection
+				tuiProgram.ReleaseTerminal()
 
-                state, err := recordWithStreaming(captureDevice, hk.Keyup())
-                log.Info("hotkey_up")
-                tuiSend(RecordingStopMsg{})
-                if err != nil {
-                    logToTUI("Error recording: %v", err)
-                    log.Error(fmt.Sprintf("recording error: %v", err))
-                    continue
-                }
+				newDevice, err := selectDevice(ctx)
 
-                if state.TotalFrames() < uint64(encoder.SampleRate/10) {
-                    continue
-                }
+				tuiProgram.RestoreTerminal()
 
-                processRecording(state)
-                // Reset warm timer - transcription just used the connection
-                select {
-                case warmReset <- struct{}{}:
-                default:
-                }
-
-            case <-deviceSelectChan:
-                // Pause TUI for device selection
-                tuiProgram.ReleaseTerminal()
-
-                newDevice, err := selectDevice(ctx)
-
-                tuiProgram.RestoreTerminal()
-
-                if err != nil {
-                    log.Warn(fmt.Sprintf("device selection failed: %v", err))
-                    continue
-                }
-                if newDevice != nil {
-                    captureDevice.Close()
-                    captureDevice, err = ctx.NewCapture(newDevice, captureConfig)
-                    if err != nil {
-                        log.Error(fmt.Sprintf("capture device reinit error: %v", err))
-                        continue
-                    }
-                    selectedDevice = newDevice
-                    tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
-                }
-            }
-        }
-    }
+				if err != nil {
+					log.Warn(fmt.Sprintf("device selection failed: %v", err))
+					continue
+				}
+				if newDevice != nil {
+					captureDevice.Close()
+					captureDevice, err = ctx.NewCapture(newDevice, captureConfig)
+					if err != nil {
+						log.Error(fmt.Sprintf("capture device reinit error: %v", err))
+						continue
+					}
+					selectedDevice = newDevice
+					tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
+				}
+			}
+		}
+	}
 }
 
-func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (encoder.Encoder, error) {
+func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}, streamEnabled bool, streamer transcriber.Streamer) error {
+	if streamEnabled && streamer != nil {
+		type streamStartResult struct {
+			stream *streamingSession
+			err    error
+		}
+
+		bridgeAudio := make(chan []byte, 256)
+		startCh := make(chan streamStartResult, 1)
+		forwardDone := make(chan struct{})
+
+		go func() {
+			defer close(forwardDone)
+			stream, err := startStreamingSession(streamer, activeTranscriber.GetLanguage(), autoPaste)
+			startCh <- streamStartResult{stream: stream, err: err}
+			if err != nil {
+				for range bridgeAudio {
+				}
+				return
+			}
+			for chunk := range bridgeAudio {
+				stream.audioCh <- chunk
+			}
+			close(stream.audioCh)
+		}()
+
+		totalFrames, err := recordStreamingOnly(capture, keyup, bridgeAudio)
+		startResult := <-startCh
+		<-forwardDone
+		if err != nil {
+			if startResult.stream != nil {
+				_, _, _, _, _ = startResult.stream.Finalize()
+				tuiSend(LiveTranscriptionMsg{Text: ""})
+			}
+			return err
+		}
+		if startResult.err != nil {
+			logToTUI("Streaming unavailable: %v", startResult.err)
+			log.Error(fmt.Sprintf("streaming start error: %v", startResult.err))
+			return startResult.err
+		}
+
+		text, hadText, _, stats, streamErr := startResult.stream.Finalize()
+		tuiSend(LiveTranscriptionMsg{Text: ""})
+		if streamErr != nil {
+			logToTUI("Streaming error: %v", streamErr)
+			log.Error(fmt.Sprintf("streaming error: %v", streamErr))
+		}
+		if totalFrames < uint64(encoder.SampleRate/10) {
+			return nil
+		}
+
+		processStreamingRecording(totalFrames, text, !hadText, stats)
+		return nil
+	}
+
+	state, err := recordWithStreaming(capture, keyup, nil)
+	if err != nil {
+		return err
+	}
+
+	if state.TotalFrames() < uint64(encoder.SampleRate/10) {
+		return nil
+	}
+
+	processRecording(state)
+	return nil
+}
+
+func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}, streamAudio chan<- []byte) (encoder.Encoder, error) {
 	enc, err := newEncoderForMode(activeMode)
 	if err != nil {
 		return nil, err
@@ -452,6 +889,7 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 
 	// Audio capture state
 	var sampleBuf []int16
+	var streamBuf []byte
 	var bufMu sync.Mutex
 	var stopped bool
 	var peakLevel float64
@@ -460,6 +898,12 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 
 	// Set callback for this recording
 	capture.SetCallback(func(data []byte, frameCount uint32) {
+		var dataCopy []byte
+		if streamAudio != nil && len(data) > 0 {
+			dataCopy = make([]byte, len(data))
+			copy(dataCopy, data)
+		}
+
 		bufMu.Lock()
 		if stopped {
 			bufMu.Unlock()
@@ -483,6 +927,18 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 			sampleBuf = sampleBuf[encoder.BlockSize:]
 			blocks = append(blocks, block)
 		}
+
+		// Collect streaming chunks while holding lock
+		var streamChunks [][]byte
+		if streamAudio != nil && len(dataCopy) > 0 {
+			streamBuf = append(streamBuf, dataCopy...)
+			for len(streamBuf) >= streamChunkBytes {
+				chunk := make([]byte, streamChunkBytes)
+				copy(chunk, streamBuf[:streamChunkBytes])
+				streamBuf = streamBuf[streamChunkBytes:]
+				streamChunks = append(streamChunks, chunk)
+			}
+		}
 		bufMu.Unlock()
 
 		// Send audio level to TUI (outside lock)
@@ -500,15 +956,26 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 		for _, block := range blocks {
 			blockChan <- block
 		}
+
+		// Send stream chunks (outside lock — avoid blocking capture callback)
+		for _, chunk := range streamChunks {
+			select {
+			case streamAudio <- chunk:
+			default:
+			}
+		}
 	})
 
 	if err := capture.Start(); err != nil {
 		capture.ClearCallback()
 		close(blockChan)
+		if streamAudio != nil {
+			close(streamAudio)
+		}
 		return nil, err
 	}
 
-    // Start beep happens on key press in main()
+	// Start beep happens on key press in main()
 
 	recordStart := time.Now()
 
@@ -558,9 +1025,26 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 		copy(partial, sampleBuf)
 		blockChan <- partial
 	}
+	var tailChunks [][]byte
+	if streamAudio != nil && len(streamBuf) > 0 {
+		chunk := make([]byte, len(streamBuf))
+		copy(chunk, streamBuf)
+		streamBuf = nil
+		tailChunks = append(tailChunks, chunk)
+	}
 	bufMu.Unlock()
 
+	for _, chunk := range tailChunks {
+		select {
+		case streamAudio <- chunk:
+		default:
+		}
+	}
+
 	close(blockChan)
+	if streamAudio != nil {
+		close(streamAudio)
+	}
 	<-encodeDone
 
 	if err := enc.Close(); err != nil {
@@ -568,6 +1052,116 @@ func recordWithStreaming(capture audio.CaptureDevice, keyup <-chan struct{}) (en
 	}
 
 	return enc, nil
+}
+
+func recordStreamingOnly(capture audio.CaptureDevice, keyup <-chan struct{}, streamAudio chan<- []byte) (uint64, error) {
+	var streamBuf []byte
+	var bufMu sync.Mutex
+	var stopped bool
+	var peakLevel float64
+	var noVoiceBeeped bool
+	var totalFrames uint64
+	done := make(chan struct{})
+
+	capture.SetCallback(func(data []byte, frameCount uint32) {
+		bufMu.Lock()
+		if stopped {
+			bufMu.Unlock()
+			return
+		}
+		totalFrames += uint64(frameCount)
+
+		var sumSquares float64
+		for i := 0; i+1 < len(data); i += 2 {
+			sample := int16(binary.LittleEndian.Uint16(data[i:]))
+			normalized := float64(sample) / 32768.0
+			sumSquares += normalized * normalized
+		}
+
+		var streamChunks [][]byte
+		if len(data) > 0 {
+			streamBuf = append(streamBuf, data...)
+			for len(streamBuf) >= streamChunkBytes {
+				chunk := make([]byte, streamChunkBytes)
+				copy(chunk, streamBuf[:streamChunkBytes])
+				streamBuf = streamBuf[streamChunkBytes:]
+				streamChunks = append(streamChunks, chunk)
+			}
+		}
+		bufMu.Unlock()
+
+		if len(data) > 1 {
+			rms := math.Sqrt(sumSquares / float64(len(data)/2))
+			tuiSend(AudioLevelMsg{Level: rms})
+			bufMu.Lock()
+			if rms > peakLevel {
+				peakLevel = rms
+			}
+			bufMu.Unlock()
+		}
+
+		for _, chunk := range streamChunks {
+			streamAudio <- chunk
+		}
+	})
+
+	if err := capture.Start(); err != nil {
+		capture.ClearCallback()
+		close(streamAudio)
+		return 0, err
+	}
+
+	recordStart := time.Now()
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				elapsed := time.Since(recordStart).Seconds()
+				tuiSend(RecordingTickMsg{Duration: elapsed})
+				bufMu.Lock()
+				shouldWarn := elapsed > 1.0 && peakLevel < 0.005 && !noVoiceBeeped
+				if shouldWarn {
+					noVoiceBeeped = true
+				}
+				bufMu.Unlock()
+				if shouldWarn {
+					tuiSend(NoVoiceWarningMsg{})
+					beep.PlayError()
+				}
+			}
+		}
+	}()
+
+	go func() {
+		<-keyup
+		time.Sleep(streamRecordTail) // keep mic open to capture last syllable
+		close(done)
+	}()
+	<-done
+
+	capture.Stop()
+	log.Info("beep_end")
+	beep.PlayEnd()
+	capture.ClearCallback()
+
+	bufMu.Lock()
+	stopped = true
+	tail := make([]byte, len(streamBuf))
+	copy(tail, streamBuf)
+	streamBuf = nil
+	capturedFrames := totalFrames
+	bufMu.Unlock()
+
+	if len(tail) > 0 {
+		streamAudio <- tail
+	}
+	close(streamAudio)
+
+	return capturedFrames, nil
 }
 
 func processRecording(enc encoder.Encoder) {
@@ -605,13 +1199,11 @@ func processRecording(enc encoder.Encoder) {
 
 	noSpeech := text == ""
 
-	pasteSucceeded := false
 	if !noSpeech && autoPaste {
 		log.Info("paste_start")
 		if err := clipboard.CopyAndPasteWithPreserve(text); err != nil {
 			log.Error(fmt.Sprintf("paste error: %v", err))
 		} else {
-			pasteSucceeded = true
 			log.Info("paste_done")
 		}
 	}
@@ -664,7 +1256,6 @@ func processRecording(enc encoder.Encoder) {
 	tuiSend(TranscriptionMsg{
 		Text:     displayText,
 		Metrics:  metricsLines,
-		Copied:   pasteSucceeded,
 		NoSpeech: noSpeech,
 	})
 
@@ -691,6 +1282,45 @@ func processRecording(enc encoder.Encoder) {
 	log.Confidence(result.Confidence)
 	if !noSpeech {
 		log.TranscriptionText(text)
+	}
+}
+
+func processStreamingRecording(totalFrames uint64, text string, noSpeech bool, stats streamStats) {
+	audioDuration := float64(totalFrames) / float64(encoder.SampleRate)
+	cleanText := strings.TrimSpace(text)
+	if cleanText != "" {
+		noSpeech = false
+	}
+	rawSize := totalFrames * 2
+
+	metricsLines := []string{
+		fmt.Sprintf("audio:      %.1fs | %.1f KB PCM sent", audioDuration, float64(rawSize)/1024),
+		fmt.Sprintf("stream:     deepgram | PCM16 %dHz mono | %dms chunks", encoder.SampleRate, streamChunkMs),
+		fmt.Sprintf("ws_req:     %d (HTTP upgrade)", stats.UpgradeRequests),
+		fmt.Sprintf("connect:    %dms", stats.ConnectDur.Milliseconds()),
+		fmt.Sprintf("sent:       %d chunks | %.1f KB", stats.SentChunks, float64(stats.SentBytes)/1024),
+		fmt.Sprintf("recv:       %d msgs (%d final, %d interim)", stats.RecvMessages, stats.RecvFinal, stats.RecvInterim),
+		fmt.Sprintf("commit:     %d updates | %d words", stats.CommitEvents, stats.CommittedWords),
+		fmt.Sprintf("finalize:   %dms", stats.FinalizeWait.Milliseconds()),
+		fmt.Sprintf("total:      %dms", stats.SessionDur.Milliseconds()),
+	}
+	if saveLastRecording {
+		metricsLines = append(metricsLines, "archive:    disabled in -stream mode")
+	}
+
+	displayText := cleanText
+	if noSpeech {
+		displayText = "(no speech detected)"
+	}
+
+	tuiSend(TranscriptionMsg{
+		Text:     displayText,
+		Metrics:  metricsLines,
+		NoSpeech: noSpeech,
+	})
+
+	if !noSpeech {
+		log.TranscriptionText(cleanText)
 	}
 }
 
