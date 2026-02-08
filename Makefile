@@ -35,6 +35,8 @@ clean:
 	rm -f zee
 
 release:
+	@echo "current: $(VERSION)"
+	@test "$$(git rev-parse --abbrev-ref HEAD)" = "main" || (echo "Error: must be on main branch" && exit 1)
 	@test -n "$(V)" || (echo "Usage: make release V=0.1.0" && exit 1)
 	git tag v$(V)
 	git push origin v$(V)

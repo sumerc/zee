@@ -9,7 +9,17 @@ permissions:
   contents: write
 
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify tag is on main
+        run: git merge-base --is-ancestor ${{ github.sha }} origin/main
+
   build:
+    needs: guard
     strategy:
       matrix:
         include:
