@@ -12,7 +12,7 @@ build-linux-arm64:
 	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-arm64
 
 test:
-	go test -v ./encoder/
+	go test -v ./...
 
 integration-test:
 	@test -n "$(WAV)" || (echo "Usage: make integration-test WAV=file.wav" && exit 1)

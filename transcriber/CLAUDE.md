@@ -31,4 +31,16 @@
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
 | #4876 | 12:14 AM | ⚖️ | Major refactoring plan: Move 400 lines of streaming logic into ManagedStream abstraction | ~595 |
+
+### Feb 9, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #5078 | 1:22 AM | 🔵 | Deepgram Implementation Proactively Warms HTTP Connection Pool | ~463 |
+| #5077 | " | 🔵 | Updates Goroutine Has No Explicit Join Point Creating Clipboard Race | ~635 |
+| #5073 | " | 🔵 | Session Interface Unifies Batch and Stream Modes with Common API | ~484 |
+| #5070 | " | 🔵 | Batch Session Uses Concurrent Goroutine for Audio Encoding | ~510 |
+| #5066 | 1:17 AM | 🔄 | Improved Test Structure with Subtests and Modern Go Idioms | ~417 |
+| #5065 | " | 🔵 | Transcriber Tests Use Fake Functions Without Concurrency or Timeout Scenarios | ~450 |
+| #5056 | 1:16 AM | 🔵 | Stream Session Finalization Uses Polling with Multiple Hardcoded Timeouts | ~474 |
 </claude-mem-context>
