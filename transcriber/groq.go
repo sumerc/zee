@@ -2,6 +2,7 @@ package transcriber
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
@@ -14,16 +15,28 @@ type Groq struct {
 }
 
 func NewGroq(apiKey string) *Groq {
+	apiURL := "https://api.groq.com/openai/v1/audio/transcriptions"
 	return &Groq{
 		baseTranscriber: baseTranscriber{
-			client: NewTracedClient(),
-			apiURL: "https://api.groq.com/openai/v1/audio/transcriptions",
+			client: NewTracedClient(apiURL),
+			apiURL: apiURL,
 		},
 		apiKey: apiKey,
 	}
 }
 
 func (g *Groq) Name() string { return "groq" }
+
+func (g *Groq) NewSession(_ context.Context, cfg SessionConfig) (Session, error) {
+	go g.client.Warm()
+	if cfg.Stream {
+		return nil, fmt.Errorf("groq does not support streaming transcription")
+	}
+	if cfg.Language != "" {
+		g.SetLanguage(cfg.Language)
+	}
+	return newBatchSession(cfg, g.transcribe)
+}
 
 type groqResponse struct {
 	Text     string  `json:"text"`
@@ -39,15 +52,11 @@ type groqResponse struct {
 	} `json:"segments"`
 }
 
-func (g *Groq) Transcribe(audioData []byte, format string) (*Result, error) {
+func (g *Groq) transcribe(audioData []byte, format string) (*Result, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
-	filename := "audio.flac"
-	if format == "mp3" {
-		filename = "audio.mp3"
-	}
-	part, err := writer.CreateFormFile("file", filename)
+	part, err := writer.CreateFormFile("file", "audio."+format)
 	if err != nil {
 		return nil, err
 	}
@@ -57,8 +66,8 @@ func (g *Groq) Transcribe(audioData []byte, format string) (*Result, error) {
 
 	writer.WriteField("model", "whisper-large-v3-turbo")
 	writer.WriteField("response_format", "verbose_json")
-	if g.baseTranscriber.lang != "" {
-		writer.WriteField("language", g.baseTranscriber.lang)
+	if g.lang != "" {
+		writer.WriteField("language", g.lang)
 	}
 	writer.Close()
 
@@ -106,14 +115,8 @@ func (g *Groq) Transcribe(audioData []byte, format string) (*Result, error) {
 		avgLogProb = logProbSum / float64(len(gResp.Segments))
 	}
 
-	remaining := resp.Header.Get("x-ratelimit-remaining-requests")
-	limit := resp.Header.Get("x-ratelimit-limit-requests")
-	if remaining == "" {
-		remaining = "?"
-	}
-	if limit == "" {
-		limit = "?"
-	}
+	remaining := firstNonEmpty(resp.Header, "x-ratelimit-remaining-requests")
+	limit := firstNonEmpty(resp.Header, "x-ratelimit-limit-requests")
 
 	return &Result{
 		Text:         gResp.Text,

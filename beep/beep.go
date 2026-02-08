@@ -1,5 +1,9 @@
 package beep
 
+var disabled bool
+
+func Disable() { disabled = true }
+
 const (
 	sampleRate = 44100
 

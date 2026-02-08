@@ -1,192 +1,208 @@
-//go:build ignore
+//go:build integration
 
-package main
+package test_test
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
-	"mime/multipart"
-	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
 	"time"
 
-	"github.com/mewkiz/flac"
-	"github.com/mewkiz/flac/frame"
-	"github.com/mewkiz/flac/meta"
+	"zee/clipboard"
 )
 
-const (
-	testSampleRate    = 16000
-	testChannels      = 1
-	testBitsPerSample = 16
-	testBlockSize     = 4096
-)
+var testBinary string
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run test_transcribe.go <wav_file>")
+func TestMain(m *testing.M) {
+	testBinary = os.Getenv("ZEE_TEST_BIN")
+	if testBinary == "" {
+		fmt.Fprintln(os.Stderr, "ZEE_TEST_BIN not set; run: make test-integration")
 		os.Exit(1)
 	}
 
-	apiKey := os.Getenv("GROQ_API_KEY")
-	if apiKey == "" {
-		fmt.Println("Error: GROQ_API_KEY not set")
+	silencePath := filepath.Join("data", "silence.wav")
+	if err := generateSilenceWAV(silencePath, 16000, 1.0); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to generate silence.wav: %v\n", err)
 		os.Exit(1)
 	}
+	defer os.Remove(silencePath)
 
-	samples, err := readWAV(os.Args[1])
-	if err != nil {
-		fmt.Printf("Error reading WAV: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Read %d samples (%.2fs)\n", len(samples), float64(len(samples))/testSampleRate)
-
-	encStart := time.Now()
-	flacData, err := encodeToFLAC(samples)
-	encTime := time.Since(encStart)
-	if err != nil {
-		fmt.Printf("Error encoding FLAC: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Encoded to %d bytes FLAC in %dms\n", len(flacData), encTime.Milliseconds())
-
-	netStart := time.Now()
-	text, remaining, err := transcribe(flacData, apiKey)
-	netTime := time.Since(netStart)
-	if err != nil {
-		fmt.Printf("Error transcribing: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("\n✓ %q (%s req remaining)\n", text, remaining)
-	fmt.Printf("  Network: %dms\n", netTime.Milliseconds())
+	os.Exit(m.Run())
 }
 
-func readWAV(path string) ([]int16, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+func generateSilenceWAV(path string, sampleRate int, durationS float64) error {
+	const headerSize = 44
+	numSamples := int(float64(sampleRate) * durationS)
+	dataSize := numSamples * 2
 
-	f.Seek(44, 0)
+	buf := make([]byte, headerSize+dataSize)
+	copy(buf[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(headerSize-8+dataSize))
+	copy(buf[8:12], "WAVE")
+	copy(buf[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(buf[16:20], 16)
+	binary.LittleEndian.PutUint16(buf[20:22], 1) // PCM
+	binary.LittleEndian.PutUint16(buf[22:24], 1) // mono
+	binary.LittleEndian.PutUint32(buf[24:28], uint32(sampleRate))
+	binary.LittleEndian.PutUint32(buf[28:32], uint32(sampleRate*2))
+	binary.LittleEndian.PutUint16(buf[32:34], 2)  // block align
+	binary.LittleEndian.PutUint16(buf[34:36], 16) // bits per sample
+	copy(buf[36:40], "data")
+	binary.LittleEndian.PutUint32(buf[40:44], uint32(dataSize))
 
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return nil, err
-	}
-
-	samples := make([]int16, len(data)/2)
-	for i := 0; i < len(data); i += 2 {
-		samples[i/2] = int16(binary.LittleEndian.Uint16(data[i:]))
-	}
-	return samples, nil
+	return os.WriteFile(path, buf, 0644)
 }
 
-func encodeToFLAC(samples []int16) ([]byte, error) {
-	var buf bytes.Buffer
-
-	info := &meta.StreamInfo{
-		BlockSizeMin:  testBlockSize,
-		BlockSizeMax:  testBlockSize,
-		SampleRate:    testSampleRate,
-		NChannels:     testChannels,
-		BitsPerSample: testBitsPerSample,
-		NSamples:      uint64(len(samples)),
-	}
-
-	enc, err := flac.NewEncoder(&buf, info)
-	if err != nil {
-		return nil, err
-	}
-
-	for i := 0; i < len(samples); i += testBlockSize {
-		end := i + testBlockSize
-		if end > len(samples) {
-			end = len(samples)
-		}
-		block := samples[i:end]
-
-		samples32 := make([]int32, len(block))
-		for j, s := range block {
-			samples32[j] = int32(s)
-		}
-
-		subframe := &frame.Subframe{
-			SubHeader: frame.SubHeader{
-				Pred: frame.PredVerbatim,
-			},
-			Samples:  samples32,
-			NSamples: len(block),
-		}
-
-		f := &frame.Frame{
-			Header: frame.Header{
-				BlockSize:     uint16(len(block)),
-				SampleRate:    testSampleRate,
-				Channels:      frame.ChannelsMono,
-				BitsPerSample: testBitsPerSample,
-			},
-			Subframes: []*frame.Subframe{subframe},
-		}
-
-		if err := enc.WriteFrame(f); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := enc.Close(); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
+func cmds(parts ...string) string {
+	return strings.Join(parts, "\n") + "\n"
 }
 
-func transcribe(audioData []byte, apiKey string) (string, string, error) {
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
+func runZee(t *testing.T, stdin string, args ...string) (logDir string) {
+	t.Helper()
+	logDir = t.TempDir()
+	cmdArgs := append([]string{"-logpath", logDir}, args...)
 
-	part, err := writer.CreateFormFile("file", "audio.flac")
+	cmd := exec.Command(testBinary, cmdArgs...)
+	cmd.Stdin = strings.NewReader(stdin)
+	cmd.Env = os.Environ()
+
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", "", err
+		t.Fatalf("zee exited with error: %v\noutput: %s", err, out)
 	}
-	if _, err := io.Copy(part, bytes.NewReader(audioData)); err != nil {
-		return "", "", err
-	}
+	return logDir
+}
 
-	writer.WriteField("model", "whisper-large-v3-turbo")
-	writer.WriteField("response_format", "text")
-	writer.Close()
-
-	req, err := http.NewRequest("POST", "https://api.groq.com/openai/v1/audio/transcriptions", &body)
+func readLog(t *testing.T, logDir, filename string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(logDir, filename))
 	if err != nil {
-		return "", "", err
+		if os.IsNotExist(err) {
+			return ""
+		}
+		t.Fatalf("failed to read %s: %v", filename, err)
 	}
+	return string(data)
+}
 
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+func requireTranscription(t *testing.T, logDir string) string {
+	t.Helper()
+	text := readLog(t, logDir, "transcribe_log.txt")
+	if strings.TrimSpace(text) == "" {
+		t.Fatal("transcribe_log.txt is empty, expected transcribed words")
+	}
+	return text
+}
 
-	resp, err := http.DefaultClient.Do(req)
+func requireGroqKey(t *testing.T) {
+	t.Helper()
+	if os.Getenv("GROQ_API_KEY") == "" {
+		t.Skip("GROQ_API_KEY not set")
+	}
+}
+
+func requireDeepgramKey(t *testing.T) {
+	t.Helper()
+	if os.Getenv("DEEPGRAM_API_KEY") == "" {
+		t.Skip("DEEPGRAM_API_KEY not set")
+	}
+}
+
+// --- Batch tests ---
+
+func TestBatchWords(t *testing.T) {
+	requireGroqKey(t)
+	logDir := runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "QUIT"), "-test", "data/short.wav")
+	requireTranscription(t, logDir)
+}
+
+func TestBatchConnReuse(t *testing.T) {
+	requireGroqKey(t)
+	logDir := runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "KEYDOWN", "KEYUP", "WAIT", "QUIT"),
+		"-test", "data/short.wav")
+	diag := readLog(t, logDir, "diagnostics_log.txt")
+	if strings.Count(diag, "transcription") < 2 {
+		t.Error("expected 2 transcription entries in diagnostics")
+	}
+	if !strings.Contains(diag, "conn=reused") {
+		t.Error("expected conn=reused in diagnostics")
+	}
+}
+
+func TestBatchNoVoice(t *testing.T) {
+	requireGroqKey(t)
+	_ = runZee(t, cmds("KEYDOWN", "SLEEP 1500", "KEYUP", "WAIT", "QUIT"), "-test", "data/silence.wav")
+}
+
+func TestBatchEarlyKeyup(t *testing.T) {
+	requireGroqKey(t)
+	logDir := runZee(t, cmds("KEYDOWN", "SLEEP 500", "KEYUP", "WAIT", "QUIT"), "-test", "data/short.wav")
+	_ = readLog(t, logDir, "diagnostics_log.txt")
+}
+
+// --- Stream tests ---
+
+func TestStreamWords(t *testing.T) {
+	requireDeepgramKey(t)
+	logDir := runZee(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "SLEEP 300", "KEYUP", "WAIT", "QUIT"),
+		"-test", "-stream", "data/short.wav")
+	requireTranscription(t, logDir)
+}
+
+func TestStreamMetrics(t *testing.T) {
+	requireDeepgramKey(t)
+	logDir := runZee(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "SLEEP 300", "KEYUP", "WAIT", "QUIT"),
+		"-test", "-stream", "data/short.wav")
+	diag := readLog(t, logDir, "diagnostics_log.txt")
+	if !strings.Contains(diag, "stream_transcription") {
+		t.Error("expected stream_transcription in diagnostics")
+	}
+	if !strings.Contains(diag, "connect_ms") {
+		t.Error("expected connect_ms in stream metrics")
+	}
+}
+
+func TestStreamKeyupAtBoundary(t *testing.T) {
+	requireDeepgramKey(t)
+	logDir := runZee(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "KEYUP", "WAIT", "QUIT"),
+		"-test", "-stream", "data/short.wav")
+	_ = readLog(t, logDir, "diagnostics_log.txt")
+}
+
+// --- Clipboard tests ---
+
+func TestPaste(t *testing.T) {
+	requireGroqKey(t)
+	logDir := runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "QUIT"), "-test", "data/short.wav")
+	requireTranscription(t, logDir)
+	clip, err := clipboard.Read()
 	if err != nil {
-		return "", "", err
+		t.Skip("clipboard not available")
 	}
-	defer resp.Body.Close()
+	if strings.TrimSpace(clip) == "" {
+		t.Log("Warning: clipboard is empty after paste test")
+	}
+}
 
-	respBody, err := io.ReadAll(resp.Body)
+func TestClipboardRestore(t *testing.T) {
+	requireGroqKey(t)
+
+	sentinel := fmt.Sprintf("zee-test-sentinel-%d", time.Now().UnixNano())
+	if err := clipboard.Copy(sentinel); err != nil {
+		t.Skip("clipboard not available")
+	}
+
+	_ = runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "SLEEP 1200", "QUIT"), "-test", "data/short.wav")
+
+	clip, err := clipboard.Read()
 	if err != nil {
-		return "", "", err
+		t.Skip("clipboard not available")
 	}
-
-	if resp.StatusCode != 200 {
-		return "", "", fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+	if strings.TrimSpace(clip) != sentinel {
+		t.Errorf("clipboard not restored: got %q, want %q", strings.TrimSpace(clip), sentinel)
 	}
-
-	remaining := resp.Header.Get("x-ratelimit-remaining-requests")
-	if remaining == "" {
-		remaining = "?"
-	}
-
-	return string(respBody), remaining, nil
 }

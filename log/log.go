@@ -106,7 +106,7 @@ func Init() error {
 
 	consoleWriter := zerolog.ConsoleWriter{
 		Out:        diagFile,
-		TimeFormat: "15:04:05",
+		TimeFormat: "2006-01-02 15:04:05",
 		NoColor:    true,
 	}
 	diagLog = zerolog.New(consoleWriter).With().Timestamp().Int("pid", pid).Logger()
@@ -141,13 +141,25 @@ func Error(msg string) {
 	}
 }
 
+func Errorf(format string, args ...any) {
+	if logReady {
+		diagLog.Error().Msg(fmt.Sprintf(format, args...))
+	}
+}
+
 func Warn(msg string) {
 	if logReady {
 		diagLog.Warn().Msg(msg)
 	}
 }
 
-func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused bool) {
+func Warnf(format string, args ...any) {
+	if logReady {
+		diagLog.Warn().Msg(fmt.Sprintf(format, args...))
+	}
+}
+
+func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused bool, tlsProto string) {
 	if !logReady {
 		return
 	}
@@ -157,12 +169,15 @@ func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused b
 		connStatus = "reused"
 	}
 
-	diagLog.Info().
+	ev := diagLog.Info().
 		Str("mode", mode).
 		Str("format", format).
 		Str("provider", provider).
-		Str("conn", connStatus).
-		Float64("audio_s", m.AudioLengthS).
+		Str("conn", connStatus)
+	if tlsProto != "" {
+		ev = ev.Str("tls_proto", tlsProto)
+	}
+	ev.Float64("audio_s", m.AudioLengthS).
 		Float64("raw_kb", m.RawSizeKB).
 		Float64("compressed_kb", m.CompressedSizeKB).
 		Float64("compression_pct", m.CompressionPct).
@@ -193,6 +208,35 @@ func Confidence(confidence float64) {
 	if confidence > 0 {
 		diagLog.Info().Float64("confidence", confidence).Msg("api_confidence")
 	}
+}
+
+type StreamMetricsData struct {
+	ConnectMs    float64
+	FinalizeMs   float64
+	TotalMs      float64
+	AudioS       float64
+	SentChunks   int
+	SentKB       float64
+	RecvMessages int
+	RecvFinal    int
+	CommitEvents int
+}
+
+func StreamMetrics(m StreamMetricsData) {
+	if !logReady {
+		return
+	}
+	diagLog.Info().
+		Float64("connect_ms", m.ConnectMs).
+		Float64("finalize_ms", m.FinalizeMs).
+		Float64("total_ms", m.TotalMs).
+		Float64("audio_s", m.AudioS).
+		Int("sent_chunks", m.SentChunks).
+		Float64("sent_kb", m.SentKB).
+		Int("recv_messages", m.RecvMessages).
+		Int("recv_final", m.RecvFinal).
+		Int("commit_events", m.CommitEvents).
+		Msg("stream_transcription")
 }
 
 func SessionStart(provider, mode, format string) {
