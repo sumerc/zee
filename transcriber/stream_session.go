@@ -6,13 +6,13 @@ import (
 	"sync"
 	"time"
 	"zee/encoder"
+	"zee/log"
 )
 
 const (
 	streamChunkMs      = 200
 	streamChunkBytes   = encoder.SampleRate * encoder.Channels * (encoder.BitsPerSample / 8) * streamChunkMs / 1000
 	streamFinalizeIdle = 200 * time.Millisecond
-	streamFinalizePoll = 40 * time.Millisecond
 	streamFinalizeMax  = 1000 * time.Millisecond
 )
 
@@ -38,8 +38,10 @@ type streamSession struct {
 	startedAt time.Time
 	connected chan struct{} // closed when WebSocket is ready (or failed)
 
-	sendDone chan struct{}
-	recvDone chan struct{}
+	sendDone      chan struct{}
+	recvDone      chan struct{}
+	finalized     chan struct{}
+	finalizedOnce sync.Once
 
 	feedBuf []byte
 	feedMu  sync.Mutex
@@ -74,6 +76,7 @@ func newStreamSession(dial func() (rawStreamSession, error)) *streamSession {
 		startedAt: time.Now(),
 		sendDone:  make(chan struct{}),
 		recvDone:  make(chan struct{}),
+		finalized: make(chan struct{}),
 		connected: make(chan struct{}),
 	}
 
@@ -170,21 +173,11 @@ func (s *streamSession) Close() (SessionResult, error) {
 
 	<-s.sendDone
 
-	// Wait for final responses (poll for recv quiet)
-	waitStart := time.Now()
-	lastRecv := s.snapshotRecvCount()
-	lastChange := time.Now()
-	for time.Since(waitStart) < streamFinalizeMax {
-		time.Sleep(streamFinalizePoll)
-		recvNow := s.snapshotRecvCount()
-		if recvNow != lastRecv {
-			lastRecv = recvNow
-			lastChange = time.Now()
-			continue
-		}
-		if time.Since(lastChange) >= streamFinalizeIdle {
-			break
-		}
+	// Wait for server finalize acknowledgment, then brief quiet period
+	select {
+	case <-s.finalized:
+		time.Sleep(streamFinalizeIdle)
+	case <-time.After(streamFinalizeMax):
 	}
 
 	s.mu.Lock()
@@ -193,9 +186,20 @@ func (s *streamSession) Close() (SessionResult, error) {
 	s.ws.Close()
 	select {
 	case <-s.recvDone:
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(2 * time.Second):
+		log.Warn("stream receiver drain timeout")
 	}
 
+	// Guarantee consumer sees final text even if last non-blocking send was dropped
+	s.mu.Lock()
+	finalText := s.committed
+	s.mu.Unlock()
+	if finalText != "" {
+		select {
+		case s.updates <- finalText:
+		default:
+		}
+	}
 	close(s.updates)
 
 	s.mu.Lock()
@@ -267,6 +271,10 @@ func (s *streamSession) runReceiver() {
 			return
 		}
 
+		if update.FromFinalize {
+			s.finalizedOnce.Do(func() { close(s.finalized) })
+		}
+
 		isFinal := update.IsFinal || update.SpeechFinal || update.FromFinalize
 
 		s.mu.Lock()
@@ -316,12 +324,6 @@ func (s *streamSession) setErr(err error) {
 			s.ws.Close()
 		}
 	})
-}
-
-func (s *streamSession) snapshotRecvCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.stats.RecvMessages
 }
 
 func (s *streamSession) formatMetrics(stats streamStats) []string {

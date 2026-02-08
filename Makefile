@@ -12,7 +12,7 @@ build-linux-arm64:
 	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-arm64
 
 test:
-	go test -v ./...
+	go test -race -v ./...
 
 integration-test:
 	@test -n "$(WAV)" || (echo "Usage: make integration-test WAV=file.wav" && exit 1)
@@ -28,7 +28,7 @@ benchmark: build
 test-integration:
 	@tmp=$$(mktemp -d) && \
 	go build -o "$$tmp/zee-test-bin" . && \
-	ZEE_TEST_BIN="$$tmp/zee-test-bin" go test -tags integration -v -timeout 120s -count=1 ./test/ ; \
+	ZEE_TEST_BIN="$$tmp/zee-test-bin" go test -race -tags integration -v -timeout 120s -count=1 ./test/ ; \
 	status=$$? ; rm -rf "$$tmp" ; exit $$status
 
 clean:

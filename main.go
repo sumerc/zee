@@ -234,7 +234,7 @@ func run() {
 		os.Exit(0)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	<-tuiReady
 
 	sigChan := make(chan os.Signal, 1)
 	shutdown.Notify(sigChan)

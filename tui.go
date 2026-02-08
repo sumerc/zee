@@ -84,13 +84,18 @@ func (m *tuiModel) clampViewIdx() {
 }
 
 var (
-	tuiProgram *tea.Program
-	tuiMu      sync.Mutex
+	tuiProgram   *tea.Program
+	tuiMu        sync.Mutex
+	tuiReady     = make(chan struct{})
+	tuiReadyOnce sync.Once
 )
 
 func tuiSend(msg tea.Msg) {
-	if tuiProgram != nil {
-		tuiProgram.Send(msg)
+	tuiMu.Lock()
+	p := tuiProgram
+	tuiMu.Unlock()
+	if p != nil {
+		p.Send(msg)
 	}
 }
 
@@ -151,6 +156,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		tuiReadyOnce.Do(func() { close(tuiReady) })
 
 	case tea.KeyMsg:
 		switch msg.String() {
