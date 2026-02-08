@@ -35,8 +35,9 @@ clean:
 	rm -f zee
 
 release:
-	@echo "current: $(VERSION)"
-	@test "$$(git rev-parse --abbrev-ref HEAD)" = "main" || (echo "Error: must be on main branch" && exit 1)
-	@test -n "$(V)" || (echo "Usage: make release V=0.1.0" && exit 1)
-	git tag v$(V)
-	git push origin v$(V)
+	@latest=$$(gh release view --json tagName -q .tagName 2>/dev/null || echo "none"); \
+	echo "latest release: $$latest"; \
+	read -p "new version (e.g. 0.2.0): " ver; \
+	test -n "$$ver" || (echo "aborted" && exit 1); \
+	echo "tagging v$$ver and pushing..."; \
+	git tag "v$$ver" && git push origin "v$$ver"
