@@ -84,6 +84,7 @@ func run() {
 	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
+	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hybridFlag := flag.Bool("hybrid", false, "Enable hybrid tap+hold recording mode")
 	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
 	flag.Parse()
@@ -165,6 +166,16 @@ func run() {
 		} else {
 			log.SessionStart(activeTranscriber.Name(), activeFormat, activeFormat)
 		}
+	}
+
+	if *testFlag {
+		args := flag.Args()
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "Usage: zee -test <wav-file>")
+			os.Exit(1)
+		}
+		runTestMode(args[0])
+		return
 	}
 
 	if *benchmarkFile != "" {
@@ -417,6 +428,21 @@ func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) error {
 		log.Confidence(bs.Confidence)
 	}
 
+	if result.Stream != nil {
+		ss := result.Stream
+		log.StreamMetrics(log.StreamMetricsData{
+			ConnectMs:    ss.ConnectMs,
+			FinalizeMs:   ss.FinalizeMs,
+			TotalMs:      ss.TotalMs,
+			AudioS:       ss.AudioS,
+			SentChunks:   ss.SentChunks,
+			SentKB:       ss.SentKB,
+			RecvMessages: ss.RecvMessages,
+			RecvFinal:    ss.RecvFinal,
+			CommitEvents: ss.CommitEvents,
+		})
+	}
+
 	if !result.NoSpeech {
 		log.TranscriptionText(result.Text)
 	}
@@ -579,12 +605,12 @@ func runBenchmark(wavFile string, runs int) {
 			fmt.Printf("Error reading file: %v\n", err)
 			return
 		}
-		if len(data) < 44 {
+		if len(data) < audio.WAVHeaderSize {
 			fmt.Println("Error: invalid WAV file")
 			return
 		}
 
-		audioData := data[44:]
+		audioData := data[audio.WAVHeaderSize:]
 		audioDuration := float64(len(audioData)/2) / float64(encoder.SampleRate)
 		fmt.Printf("Simulating %.1fs recording...\n", audioDuration)
 

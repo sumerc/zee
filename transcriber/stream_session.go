@@ -63,6 +63,10 @@ type streamStats struct {
 	SessionDur   time.Duration
 }
 
+func (s streamStats) audioDuration() float64 {
+	return float64(s.SentBytes) / float64(encoder.SampleRate*encoder.Channels*(encoder.BitsPerSample/8))
+}
+
 func newStreamSession(dial func() (rawStreamSession, error)) *streamSession {
 	ss := &streamSession{
 		audioCh:   make(chan []byte, 128),
@@ -207,11 +211,25 @@ func (s *streamSession) Close() (SessionResult, error) {
 
 	metrics := s.formatMetrics(stats)
 
+	audioDuration := stats.audioDuration()
+
 	sr := SessionResult{
 		Text:     cleanText,
 		HasText:  !noSpeech,
 		NoSpeech: noSpeech,
 		Metrics:  metrics,
+		Stream: &StreamStats{
+			ConnectMs:    float64(stats.ConnectDur.Milliseconds()),
+			SentChunks:   stats.SentChunks,
+			SentKB:       float64(stats.SentBytes) / 1024,
+			RecvMessages: stats.RecvMessages,
+			RecvFinal:    stats.RecvFinal,
+			RecvInterim:  stats.RecvInterim,
+			CommitEvents: stats.CommitEvents,
+			FinalizeMs:   float64(stats.FinalizeWait.Milliseconds()),
+			TotalMs:      float64(stats.SessionDur.Milliseconds()),
+			AudioS:       audioDuration,
+		},
 	}
 	sr.captureMemStats()
 	return sr, sessionErr
@@ -307,7 +325,7 @@ func (s *streamSession) snapshotRecvCount() int {
 }
 
 func (s *streamSession) formatMetrics(stats streamStats) []string {
-	audioDuration := float64(stats.SentBytes) / float64(encoder.SampleRate*encoder.Channels*(encoder.BitsPerSample/8))
+	audioDuration := stats.audioDuration()
 
 	return []string{
 		fmt.Sprintf("audio:      %.1fs | %.1f KB PCM sent", audioDuration, float64(stats.SentBytes)/1024),

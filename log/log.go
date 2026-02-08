@@ -210,6 +210,35 @@ func Confidence(confidence float64) {
 	}
 }
 
+type StreamMetricsData struct {
+	ConnectMs    float64
+	FinalizeMs   float64
+	TotalMs      float64
+	AudioS       float64
+	SentChunks   int
+	SentKB       float64
+	RecvMessages int
+	RecvFinal    int
+	CommitEvents int
+}
+
+func StreamMetrics(m StreamMetricsData) {
+	if !logReady {
+		return
+	}
+	diagLog.Info().
+		Float64("connect_ms", m.ConnectMs).
+		Float64("finalize_ms", m.FinalizeMs).
+		Float64("total_ms", m.TotalMs).
+		Float64("audio_s", m.AudioS).
+		Int("sent_chunks", m.SentChunks).
+		Float64("sent_kb", m.SentKB).
+		Int("recv_messages", m.RecvMessages).
+		Int("recv_final", m.RecvFinal).
+		Int("commit_events", m.CommitEvents).
+		Msg("stream_transcription")
+}
+
 func SessionStart(provider, mode, format string) {
 	if !logReady {
 		return

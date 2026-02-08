@@ -1,5 +1,7 @@
 package audio
 
+const WAVHeaderSize = 44
+
 type DataCallback func(data []byte, frameCount uint32)
 
 type CaptureConfig struct {

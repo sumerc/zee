@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test benchmark integration-test clean release
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean release
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -24,6 +24,12 @@ benchmark: build
 	@test -n "$(WAV)" || (echo "Usage: make benchmark WAV=file.wav [RUNS=5]" && exit 1)
 	@if [ -f .env ]; then export $$(grep -v '^#' .env | xargs); fi; \
 	./zee -benchmark $(WAV) -runs $(or $(RUNS),3)
+
+test-integration:
+	@tmp=$$(mktemp -d) && \
+	go build -o "$$tmp/zee-test-bin" . && \
+	ZEE_TEST_BIN="$$tmp/zee-test-bin" go test -tags integration -v -timeout 120s -count=1 ./test/ ; \
+	status=$$? ; rm -rf "$$tmp" ; exit $$status
 
 clean:
 	rm -f zee

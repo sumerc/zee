@@ -155,16 +155,25 @@ func Init() {
 }
 
 func PlayStart() {
+	if disabled {
+		return
+	}
 	soundOnce.Do(initSound)
 	playBytes(startSamples)
 }
 
 func PlayEnd() {
+	if disabled {
+		return
+	}
 	soundOnce.Do(initSound)
 	playBytes(endSamples)
 }
 
 func PlayError() {
+	if disabled {
+		return
+	}
 	soundOnce.Do(initSound)
 	playBytes(errorSamples)
 }

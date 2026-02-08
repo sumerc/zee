@@ -30,15 +30,29 @@ type BatchStats struct {
 	Confidence       float64
 }
 
+type StreamStats struct {
+	ConnectMs    float64
+	SentChunks   int
+	SentKB       float64
+	RecvMessages int
+	RecvFinal    int
+	RecvInterim  int
+	CommitEvents int
+	FinalizeMs   float64
+	TotalMs      float64
+	AudioS       float64
+}
+
 type SessionResult struct {
 	Text          string
 	HasText       bool
 	NoSpeech      bool
-	RateLimit     string      // "remaining/limit" or empty
+	RateLimit     string       // "remaining/limit" or empty
 	MemoryAllocMB float64
 	MemoryPeakMB  float64
-	Batch         *BatchStats // non-nil for batch sessions
-	Metrics       []string    // pre-formatted lines for TUI
+	Batch         *BatchStats  // non-nil for batch sessions
+	Stream        *StreamStats // non-nil for stream sessions
+	Metrics       []string     // pre-formatted lines for TUI
 }
 
 type Session interface {
