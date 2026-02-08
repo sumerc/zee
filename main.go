@@ -65,7 +65,7 @@ func deviceLineText(dev *audio.DeviceInfo) string {
 	if dev != nil {
 		name = dev.Name
 	}
-	return "mic: " + name + " (ctrl+g to change)"
+	return "mic: " + name + " (ctrl+g)"
 }
 
 const recordTail = 250 * time.Millisecond
