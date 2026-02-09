@@ -31,7 +31,8 @@ type RateLimitMsg struct{ Text string }   // Rate limit info
 type RequestDeviceSelectionMsg struct{}   // Request to change microphone
 type NoVoiceWarningMsg struct{}            // No voice detected during recording
 type TranscriptSilenceMsg struct{}        // No transcript updates from backend
-type HybridHelpMsg struct{ Enabled bool } // Whether hybrid tap+hold is enabled
+type HybridHelpMsg struct{ Enabled bool }      // Whether hybrid tap+hold is enabled
+type UpdateAvailableMsg struct{ Version string } // New version available
 type tickMsg time.Time
 
 type tuiState int
@@ -66,6 +67,7 @@ type tuiModel struct {
 	viewIdx           int  // 0 = newest, higher = older
 	expertMode        bool // show full TUI with HAL eye
 	hybridEnabled     bool // show hybrid help text when true
+	updateAvailable   string
 }
 
 func (m tuiModel) maxViewIdx() int {
@@ -256,6 +258,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case HybridHelpMsg:
 		m.hybridEnabled = msg.Enabled
 
+	case UpdateAvailableMsg:
+		m.updateAvailable = msg.Version
+
 	case RequestDeviceSelectionMsg:
 		select {
 		case deviceSelectChan <- struct{}{}:
@@ -370,6 +375,12 @@ func (m tuiModel) View() string {
 		helpLine = helpStyle.Render("Hold ") + boldStyle.Render("Ctrl+Shift+Space") + helpStyle.Render(" to record")
 	}
 	infoLines = append(infoLines, helpLine)
+	if m.updateAvailable != "" {
+		updateLine := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("6")).
+			Render(fmt.Sprintf("update available: %s (zee update)", m.updateAvailable))
+		infoLines = append(infoLines, updateLine)
+	}
 	infoLines = append(infoLines, helpStyle.Render("zee "+version))
 
 	// Append info to eye

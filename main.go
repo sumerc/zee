@@ -25,6 +25,7 @@ import (
 	"zee/log"
 	"zee/shutdown"
 	"zee/transcriber"
+	"zee/update"
 )
 
 var version = "dev"
@@ -73,6 +74,38 @@ func deviceLineText(dev *audio.DeviceInfo) string {
 const recordTail = 500 * time.Millisecond
 
 func run() {
+	if len(os.Args) > 1 && os.Args[1] == "update" {
+		if version == "dev" {
+			fmt.Println("Dev build — cannot check for updates.")
+			os.Exit(0)
+		}
+		fmt.Printf("zee %s — checking for updates...\n", version)
+		rel, err := update.CheckLatest(version)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		if rel == nil {
+			fmt.Println("Already up to date.")
+			os.Exit(0)
+		}
+		fmt.Printf("Update available: %s -> %s\n", version, rel.Version)
+		fmt.Print("Continue? [y/N] ")
+		var answer string
+		fmt.Scanln(&answer)
+		if answer != "y" && answer != "Y" {
+			fmt.Println("Aborted.")
+			os.Exit(0)
+		}
+		fmt.Printf("Downloading %s...\n", rel.Version)
+		if err := update.Apply(rel); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Updated to %s\n", rel.Version)
+		os.Exit(0)
+	}
+
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
 	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
@@ -237,6 +270,10 @@ func run() {
 	}()
 
 	<-tuiReady
+
+	update.StartBackgroundCheck(version, log.Dir(), func(rel update.Release) {
+		tuiSend(UpdateAvailableMsg{Version: rel.Version})
+	})
 
 	sigChan := make(chan os.Signal, 1)
 	shutdown.Notify(sigChan)
