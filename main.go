@@ -400,10 +400,9 @@ func finishTranscription(sess transcriber.Session, clipCh chan string) {
 	if closeErr != nil {
 		log.Errorf("transcription error: %v", closeErr)
 		logToTUI("Error: %v", closeErr)
-		return
 	}
 
-	if !streamEnabled && result.HasText && autoPaste {
+	if closeErr == nil && !streamEnabled && result.HasText && autoPaste {
 		clipboard.Copy(result.Text)
 		clipboard.Paste()
 	}
@@ -413,6 +412,10 @@ func finishTranscription(sess transcriber.Session, clipCh chan string) {
 			time.Sleep(800 * time.Millisecond)
 			clipboard.Copy(clipPrev)
 		}()
+	}
+
+	if closeErr != nil {
+		return
 	}
 
 	displayText := result.Text
