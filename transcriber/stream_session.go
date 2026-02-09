@@ -13,7 +13,7 @@ const (
 	streamChunkMs      = 200
 	streamChunkBytes   = encoder.SampleRate * encoder.Channels * (encoder.BitsPerSample / 8) * streamChunkMs / 1000
 	streamFinalizeIdle = 200 * time.Millisecond
-	streamFinalizeMax  = 1000 * time.Millisecond
+	streamFinalizeMax  = 2000 * time.Millisecond
 )
 
 type rawStreamSession interface {

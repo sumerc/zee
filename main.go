@@ -69,7 +69,7 @@ func deviceLineText(dev *audio.DeviceInfo) string {
 	return "mic: " + name + " (ctrl+g)"
 }
 
-const recordTail = 250 * time.Millisecond
+const recordTail = 500 * time.Millisecond
 
 func run() {
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
