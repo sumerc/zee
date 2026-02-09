@@ -32,6 +32,7 @@ const voiceThreshold = 0.002
 
 var activeTranscriber transcriber.Transcriber
 var autoPaste bool
+var transcriptionsMu sync.Mutex
 var transcriptions []TranscriptionRecord
 var percentileStats PercentileStats
 var streamEnabled bool
@@ -280,7 +281,7 @@ func run() {
 				tuiSend(RecordingStartMsg{})
 				go beep.PlayStart()
 
-				err := handleRecording(captureDevice, hy.StopChan())
+				_, err := handleRecording(captureDevice, hy.StopChan())
 				if err != nil {
 					logToTUI("Error recording: %v", err)
 					log.Errorf("recording error: %v", err)
@@ -298,7 +299,7 @@ func run() {
 				tuiSend(RecordingStartMsg{})
 				go beep.PlayStart()
 
-				err := handleRecording(captureDevice, hk.Keyup())
+				_, err := handleRecording(captureDevice, hk.Keyup())
 				log.Info("hotkey_up")
 				if err != nil {
 					logToTUI("Error recording: %v", err)
@@ -334,17 +335,16 @@ func handleDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, ca
 	}
 }
 
-func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) error {
+func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) (<-chan struct{}, error) {
 	sess, err := activeTranscriber.NewSession(context.Background(), transcriber.SessionConfig{
 		Stream:   streamEnabled,
 		Format:   activeFormat,
 		Language: activeTranscriber.GetLanguage(),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// Read clipboard in background — we only need it after recording ends
 	clipCh := make(chan string, 1)
 	if autoPaste {
 		go func() {
@@ -370,6 +370,25 @@ func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) error {
 
 	totalFrames, err := record(capture, keyup, sess)
 	tuiSend(RecordingStopMsg{})
+
+	if err != nil {
+		sess.Close()
+		return nil, err
+	}
+	if totalFrames < uint64(encoder.SampleRate/10) {
+		sess.Close()
+		return nil, nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		finishTranscription(sess, clipCh)
+		close(done)
+	}()
+	return done, nil
+}
+
+func finishTranscription(sess transcriber.Session, clipCh chan string) {
 	result, closeErr := sess.Close()
 
 	var clipPrev string
@@ -378,11 +397,10 @@ func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) error {
 	}
 	tuiSend(LiveTranscriptionMsg{Text: ""})
 
-	if err != nil {
-		return err
-	}
-	if totalFrames < uint64(encoder.SampleRate/10) {
-		return nil
+	if closeErr != nil {
+		log.Errorf("transcription error: %v", closeErr)
+		logToTUI("Error: %v", closeErr)
+		return
 	}
 
 	if !streamEnabled && result.HasText && autoPaste {
@@ -422,8 +440,10 @@ func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) error {
 			MemoryAllocMB:    result.MemoryAllocMB,
 			MemoryPeakMB:     result.MemoryPeakMB,
 		}
+		transcriptionsMu.Lock()
 		transcriptions = append(transcriptions, record)
 		updatePercentileStats()
+		transcriptionsMu.Unlock()
 		log.TranscriptionMetrics(log.Metrics(record), activeFormat, activeFormat, activeTranscriber.Name(), bs.ConnReused, bs.TLSProtocol)
 		log.Confidence(bs.Confidence)
 	}
@@ -446,11 +466,6 @@ func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) error {
 	if !result.NoSpeech {
 		log.TranscriptionText(result.Text)
 	}
-
-	if closeErr != nil {
-		log.Errorf("session close error: %v", closeErr)
-	}
-	return nil
 }
 
 func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber.Session) (uint64, error) {
@@ -459,6 +474,8 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 	var peakLevel float64
 	var noVoiceBeeped bool
 	var stopped bool
+	var voiceDetected bool
+	var lastVoiceTime time.Time
 	done := make(chan struct{})
 
 	capture.SetCallback(func(data []byte, frameCount uint32) {
@@ -489,6 +506,12 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 			if rms > peakLevel {
 				peakLevel = rms
 			}
+			if rms >= voiceThreshold {
+				if !voiceDetected {
+					voiceDetected = true
+				}
+				lastVoiceTime = time.Now()
+			}
 			bufMu.Unlock()
 		}
 	})
@@ -510,6 +533,12 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 				elapsed := time.Since(recordStart).Seconds()
 				tuiSend(RecordingTickMsg{Duration: elapsed})
 				checkNoVoice(&bufMu, elapsed, &peakLevel, &noVoiceBeeped)
+				bufMu.Lock()
+				vd := voiceDetected
+				bufMu.Unlock()
+				if vd {
+					checkSilenceDuring(&bufMu, &lastVoiceTime)
+				}
 			}
 		}
 	}()
@@ -541,6 +570,21 @@ func checkNoVoice(mu *sync.Mutex, elapsed float64, peakLevel *float64, beeped *b
 	shouldWarn := elapsed > 1.0 && *peakLevel < voiceThreshold && !*beeped
 	if shouldWarn {
 		*beeped = true
+	}
+	mu.Unlock()
+	if shouldWarn {
+		tuiSend(NoVoiceWarningMsg{})
+		beep.PlayError()
+	}
+}
+
+const silenceTimeout = 8 * time.Second
+
+func checkSilenceDuring(mu *sync.Mutex, lastVoiceTime *time.Time) {
+	mu.Lock()
+	shouldWarn := time.Since(*lastVoiceTime) > silenceTimeout
+	if shouldWarn {
+		*lastVoiceTime = time.Now()
 	}
 	mu.Unlock()
 	if shouldWarn {
