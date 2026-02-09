@@ -29,7 +29,8 @@ type ModeLineMsg struct{ Text string }    // Mode/provider info
 type DeviceLineMsg struct{ Text string }  // Microphone device name
 type RateLimitMsg struct{ Text string }   // Rate limit info
 type RequestDeviceSelectionMsg struct{}   // Request to change microphone
-type NoVoiceWarningMsg struct{}           // No voice detected during recording
+type NoVoiceWarningMsg struct{}            // No voice detected during recording
+type TranscriptSilenceMsg struct{}        // No transcript updates from backend
 type HybridHelpMsg struct{ Enabled bool } // Whether hybrid tap+hold is enabled
 type tickMsg time.Time
 
@@ -53,7 +54,8 @@ type tuiModel struct {
 	frame             int
 	recordingDuration float64
 	audioLevel        float64
-	noVoiceWarning    bool // show no voice warning
+	noVoiceWarning          bool // show no voice warning
+	transcriptSilenceWarning bool // show transcript silence warning
 	msgCount          int
 	width, height     int
 	modeLine          string // "[fast | MP3@16kbps | deepgram]"
@@ -186,13 +188,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recordingDuration = 0
 		m.audioLevel = 0
 		m.noVoiceWarning = false
+		m.transcriptSilenceWarning = false
 		m.liveText = ""
 		m.clampViewIdx()
 
 	case RecordingStopMsg:
 		m.state = tuiStateIdle
 		m.audioLevel = 0
-		m.liveText = ""
 		m.clampViewIdx()
 
 	case RecordingTickMsg:
@@ -213,13 +215,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NoVoiceWarningMsg:
 		m.noVoiceWarning = true
 
+	case TranscriptSilenceMsg:
+		m.transcriptSilenceWarning = true
+
 	case LiveTranscriptionMsg:
 		m.liveText = msg.Text
+		if msg.Text != "" {
+			m.transcriptSilenceWarning = false
+		}
 		m.clampViewIdx()
 
 	case TranscriptionMsg:
 		m.msgCount++
 		m.liveText = ""
+		m.transcriptSilenceWarning = false
 		// Deep copy metrics slice to avoid aliasing
 		metricsCopy := make([]string, len(msg.Metrics))
 		copy(metricsCopy, msg.Metrics)
@@ -281,11 +290,17 @@ func (m tuiModel) View() string {
 			Bold(true).
 			Render(fmt.Sprintf("● REC %.1fs", m.recordingDuration))
 		infoLines = append(infoLines, status)
-		// Voice detection warning
-		if m.noVoiceWarning {
+		// Voice detection warning (transcript silence overrides no-voice)
+		var warnText string
+		if m.transcriptSilenceWarning {
+			warnText = "  ⚠ are you talking?"
+		} else if m.noVoiceWarning {
+			warnText = "  ⚠ no voice detected"
+		}
+		if warnText != "" {
 			warn := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("208")).
-				Render("  ⚠ no voice detected")
+				Render(warnText)
 			infoLines = append(infoLines, warn)
 		}
 	} else {
@@ -380,10 +395,14 @@ func (m tuiModel) View() string {
 	metricsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
 	var logLines []string
-	showLive := recording && strings.TrimSpace(m.liveText) != "" && m.viewIdx == 0
+	showLive := strings.TrimSpace(m.liveText) != "" && m.viewIdx == 0
 
 	if showLive {
-		logLines = append(logLines, titleStyle.Render("Transcription (live)"), "")
+		liveLabel := "Transcription (live)"
+		if !recording {
+			liveLabel = "Transcription (processing...)"
+		}
+		logLines = append(logLines, titleStyle.Render(liveLabel), "")
 		for _, line := range wrapText(m.liveText, wrapWidth) {
 			logLines = append(logLines, textStyle.Render(line))
 		}
