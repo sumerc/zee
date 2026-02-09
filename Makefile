@@ -34,7 +34,7 @@ test-integration:
 clean:
 	rm -f zee
 
-release:
+release: test test-integration
 	@latest=$$(gh release view --json tagName -q .tagName 2>/dev/null || echo "none"); \
 	echo "latest release: $$latest"; \
 	read -p "new version (e.g. 0.2.0): " ver; \
