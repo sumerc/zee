@@ -21,6 +21,7 @@ func NewTracedClient(apiURL string) *TracedClient {
 	}
 	tc := &TracedClient{
 		client: &http.Client{
+			Timeout: 2 * time.Minute,
 			Transport: &http.Transport{
 				MaxIdleConns:        4,
 				MaxIdleConnsPerHost: 4,

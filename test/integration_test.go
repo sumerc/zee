@@ -61,16 +61,32 @@ func cmds(parts ...string) string {
 	return strings.Join(parts, "\n") + "\n"
 }
 
+type runOpts struct {
+	env     []string // extra KEY=VALUE pairs
+	wantErr bool     // expect non-zero exit
+}
+
 func runZee(t *testing.T, stdin string, args ...string) (logDir string) {
+	t.Helper()
+	return runZeeOpts(t, stdin, runOpts{}, args...)
+}
+
+func runZeeOpts(t *testing.T, stdin string, opts runOpts, args ...string) (logDir string) {
 	t.Helper()
 	logDir = t.TempDir()
 	cmdArgs := append([]string{"-logpath", logDir}, args...)
 
 	cmd := exec.Command(testBinary, cmdArgs...)
 	cmd.Stdin = strings.NewReader(stdin)
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), opts.env...)
 
 	out, err := cmd.CombinedOutput()
+	if opts.wantErr {
+		if err == nil {
+			t.Fatalf("expected zee to exit with error, but it succeeded\noutput: %s", out)
+		}
+		return logDir
+	}
 	if err != nil {
 		t.Fatalf("zee exited with error: %v\noutput: %s", err, out)
 	}
@@ -204,5 +220,78 @@ func TestClipboardRestore(t *testing.T) {
 	}
 	if strings.TrimSpace(clip) != sentinel {
 		t.Errorf("clipboard not restored: got %q, want %q", strings.TrimSpace(clip), sentinel)
+	}
+}
+
+// --- Silence detection tests (no API key needed) ---
+
+func TestNoVoiceWarningBatch(t *testing.T) {
+	logDir := runZeeOpts(t, cmds("KEYDOWN", "SLEEP 1500", "KEYUP", "WAIT", "QUIT"),
+		runOpts{env: []string{"ZEE_FAKE_TEXT=hello", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
+		"-test", "data/silence.wav")
+	diag := readLog(t, logDir, "diagnostics_log.txt")
+	if !strings.Contains(diag, "no_voice_warning") {
+		t.Errorf("expected 'no_voice_warning' in diagnostics, got: %q", diag)
+	}
+}
+
+func TestNoVoiceWarningStream(t *testing.T) {
+	logDir := runZeeOpts(t, cmds("KEYDOWN", "SLEEP 1500", "KEYUP", "WAIT", "QUIT"),
+		runOpts{env: []string{"ZEE_FAKE_TEXT=hello", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
+		"-test", "-stream", "data/silence.wav")
+	diag := readLog(t, logDir, "diagnostics_log.txt")
+	if !strings.Contains(diag, "no_voice_warning") {
+		t.Errorf("expected 'no_voice_warning' in diagnostics, got: %q", diag)
+	}
+}
+
+func TestTranscriptSilenceStream(t *testing.T) {
+	logDir := runZeeOpts(t, cmds("KEYDOWN", "SLEEP 9000", "KEYUP", "WAIT", "QUIT"),
+		runOpts{env: []string{"ZEE_FAKE_TEXT=hello", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
+		"-test", "-stream", "data/silence.wav")
+	diag := readLog(t, logDir, "diagnostics_log.txt")
+	if !strings.Contains(diag, "transcript_silence_warning") {
+		t.Errorf("expected 'transcript_silence_warning' in diagnostics, got: %q", diag)
+	}
+}
+
+// --- Fake transcriber tests (no API key needed) ---
+
+func TestFakeTranscriberWords(t *testing.T) {
+	logDir := runZeeOpts(t, cmds("KEYDOWN", "KEYUP", "WAIT", "QUIT"),
+		runOpts{env: []string{"ZEE_FAKE_TEXT=hello world", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
+		"-test", "data/short.wav")
+	text := readLog(t, logDir, "transcribe_log.txt")
+	if !strings.Contains(text, "hello world") {
+		t.Errorf("expected 'hello world' in transcribe log, got: %q", text)
+	}
+}
+
+func TestFakeTranscriberError(t *testing.T) {
+	logDir := runZeeOpts(t, cmds("KEYDOWN", "KEYUP", "WAIT", "QUIT"),
+		runOpts{env: []string{"ZEE_FAKE_TEXT=test", "ZEE_FAKE_ERROR=1", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
+		"-test", "data/short.wav")
+	diag := readLog(t, logDir, "diagnostics_log.txt")
+	if !strings.Contains(diag, "fake transcriber error") {
+		t.Errorf("expected 'fake transcriber error' in diagnostics, got: %q", diag)
+	}
+}
+
+func TestClipboardRestoreOnError(t *testing.T) {
+	sentinel := fmt.Sprintf("zee-test-sentinel-%d", time.Now().UnixNano())
+	if err := clipboard.Copy(sentinel); err != nil {
+		t.Skip("clipboard not available")
+	}
+
+	_ = runZeeOpts(t, cmds("KEYDOWN", "KEYUP", "WAIT", "SLEEP 1200", "QUIT"),
+		runOpts{env: []string{"ZEE_FAKE_TEXT=test", "ZEE_FAKE_ERROR=1", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
+		"-test", "data/short.wav")
+
+	clip, err := clipboard.Read()
+	if err != nil {
+		t.Skip("clipboard not available")
+	}
+	if strings.TrimSpace(clip) != sentinel {
+		t.Errorf("clipboard not restored on error: got %q, want %q", strings.TrimSpace(clip), sentinel)
 	}
 }

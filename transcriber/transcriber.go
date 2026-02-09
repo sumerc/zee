@@ -74,6 +74,14 @@ func (b *baseTranscriber) SetLanguage(lang string) { b.lang = lang }
 func (b *baseTranscriber) GetLanguage() string { return b.lang }
 
 func New() (Transcriber, error) {
+	if fakeText, ok := os.LookupEnv("ZEE_FAKE_TEXT"); ok {
+		var fakeErr error
+		if os.Getenv("ZEE_FAKE_ERROR") == "1" {
+			fakeErr = fmt.Errorf("simulated API failure")
+		}
+		return NewFake(fakeText, fakeErr), nil
+	}
+
 	dgKey := os.Getenv("DEEPGRAM_API_KEY")
 	groqKey := os.Getenv("GROQ_API_KEY")
 
