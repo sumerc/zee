@@ -521,6 +521,8 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 	var voiceDetected bool
 	var lastVoiceTime time.Time
 	done := make(chan struct{})
+	var closeOnce sync.Once
+	closeDone := func() { closeOnce.Do(func() { close(done) }) }
 
 	capture.SetCallback(func(data []byte, frameCount uint32) {
 		bufMu.Lock()
@@ -569,6 +571,7 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
+		var lastTranscriptWarn time.Time
 		for {
 			select {
 			case <-done:
@@ -584,7 +587,15 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 					checkSilenceDuring(&bufMu, &lastVoiceTime)
 				}
 				if streamEnabled {
-					checkTranscriptSilence(lastTranscript)
+					checkTranscriptSilence(lastTranscript, &lastTranscriptWarn)
+					if shouldAutoClose(lastTranscript, recordStart) {
+						log.Info("silence_auto_close")
+						tuiSend(SilenceAutoCloseMsg{})
+						go beep.PlayEnd()
+						time.Sleep(recordTail)
+						closeDone()
+						return
+					}
 				}
 			}
 		}
@@ -598,7 +609,7 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 		if streamEnabled {
 			time.Sleep(recordTail)
 		}
-		close(done)
+		closeDone()
 	}()
 	<-done
 
@@ -628,6 +639,7 @@ func checkNoVoice(mu *sync.Mutex, elapsed float64, peakLevel *float64, beeped *b
 }
 
 const silenceTimeout = 8 * time.Second
+const silenceAutoCloseTimeout = 30 * time.Second
 
 func checkSilenceDuring(mu *sync.Mutex, lastVoiceTime *time.Time) {
 	mu.Lock()
@@ -643,17 +655,31 @@ func checkSilenceDuring(mu *sync.Mutex, lastVoiceTime *time.Time) {
 	}
 }
 
-func checkTranscriptSilence(lastTranscript *atomic.Int64) {
+func shouldAutoClose(lastTranscript *atomic.Int64, recordStart time.Time) bool {
+	ref := recordStart
+	if ts := lastTranscript.Load(); ts != 0 {
+		ref = time.Unix(0, ts)
+	}
+	return time.Since(ref) > silenceAutoCloseTimeout
+}
+
+func checkTranscriptSilence(lastTranscript *atomic.Int64, lastWarn *time.Time) {
 	ts := lastTranscript.Load()
 	if ts == 0 {
-		return // no transcript received yet
+		return
 	}
-	if time.Since(time.Unix(0, ts)) > silenceTimeout {
-		lastTranscript.Store(time.Now().UnixNano())
-		log.Info("transcript_silence_warning")
-		tuiSend(TranscriptSilenceMsg{})
-		beep.PlayError()
+	timeSinceTranscript := time.Since(time.Unix(0, ts))
+	if timeSinceTranscript <= silenceTimeout {
+		*lastWarn = time.Time{}
+		return
 	}
+	if !lastWarn.IsZero() && time.Since(*lastWarn) <= silenceTimeout {
+		return
+	}
+	*lastWarn = time.Now()
+	log.Info("transcript_silence_warning")
+	tuiSend(TranscriptSilenceMsg{})
+	beep.PlayError()
 }
 
 func updatePercentileStats() {
