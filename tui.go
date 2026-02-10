@@ -31,6 +31,7 @@ type RateLimitMsg struct{ Text string }   // Rate limit info
 type RequestDeviceSelectionMsg struct{}   // Request to change microphone
 type NoVoiceWarningMsg struct{}            // No voice detected during recording
 type TranscriptSilenceMsg struct{}        // No transcript updates from backend
+type SilenceAutoCloseMsg struct{}          // Recording auto-closed due to prolonged silence
 type HybridHelpMsg struct{ Enabled bool }      // Whether hybrid tap+hold is enabled
 type UpdateAvailableMsg struct{ Version string } // New version available
 type tickMsg time.Time
@@ -194,7 +195,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.liveText = ""
 		m.clampViewIdx()
 
-	case RecordingStopMsg:
+	case RecordingStopMsg, SilenceAutoCloseMsg:
 		m.state = tuiStateIdle
 		m.audioLevel = 0
 		m.clampViewIdx()
