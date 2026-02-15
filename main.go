@@ -9,6 +9,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"sort"
@@ -25,6 +26,7 @@ import (
 	"zee/log"
 	"zee/shutdown"
 	"zee/transcriber"
+	"zee/tray"
 	"zee/update"
 )
 
@@ -39,6 +41,7 @@ var transcriptions []TranscriptionRecord
 var percentileStats PercentileStats
 var streamEnabled bool
 var activeFormat string
+var lastText string
 
 type PercentileStats struct {
 	TotalMs  [5]float64 // min, p50, p90, p95, max
@@ -62,6 +65,25 @@ type TranscriptionRecord struct {
 }
 
 var deviceSelectChan = make(chan struct{}, 1)
+
+var shutdownOnce sync.Once
+
+func gracefulShutdown() {
+	shutdownOnce.Do(func() {
+		transcriptionsMu.Lock()
+		n := len(transcriptions)
+		transcriptionsMu.Unlock()
+		if n > 0 {
+			log.SessionEnd(n)
+		}
+		log.Close()
+		tray.Quit()
+		if tuiProgram != nil {
+			tuiProgram.Quit()
+		}
+		os.Exit(0)
+	})
+}
 
 func deviceLineText(dev *audio.DeviceInfo) string {
 	name := "system default"
@@ -111,6 +133,7 @@ func run() {
 	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
 	streamFlag := flag.Bool("stream", false, "Enable streaming transcription (Deepgram only)")
 	setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
+	deviceFlag := flag.String("device", "", "Use named microphone device")
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
@@ -122,6 +145,7 @@ func run() {
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hybridFlag := flag.Bool("hybrid", false, "Enable hybrid tap+hold recording mode")
 	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
+	noTUIFlag := flag.Bool("notui", false, "Run without TUI (headless mode)")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -170,6 +194,29 @@ func run() {
 	}
 	autoPaste = *autoPasteFlag
 	streamEnabled = *streamFlag
+
+	// Daemonize in -notui mode: re-exec in background, return shell prompt
+	if *noTUIFlag && os.Getenv("_ZEE_BG") == "" {
+		args := os.Args[1:]
+		if *setupFlag {
+			if ctx, err := audio.NewContext(); err == nil {
+				if dev, _ := selectDevice(ctx); dev != nil {
+					args = append(args, "-device", dev.Name)
+				}
+				ctx.Close()
+			}
+		}
+		exe, _ := os.Executable()
+		cmd := exec.Command(exe, args...)
+		cmd.Env = append(os.Environ(), "_ZEE_BG=1")
+		devnull, _ := os.Open(os.DevNull)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	// Validate format
 	switch *formatFlag {
@@ -234,7 +281,16 @@ func run() {
 	defer ctx.Close()
 
 	var selectedDevice *audio.DeviceInfo
-	if *setupFlag {
+	if *deviceFlag != "" {
+		if devices, err := ctx.Devices(); err == nil {
+			for i := range devices {
+				if devices[i].Name == *deviceFlag {
+					selectedDevice = &devices[i]
+					break
+				}
+			}
+		}
+	} else if *setupFlag {
 		selectedDevice, err = selectDevice(ctx)
 		if err != nil {
 			log.Warnf("device selection failed: %v", err)
@@ -257,19 +313,46 @@ func run() {
 	defer captureDevice.Close()
 
 	// Start TUI
-	tuiMu.Lock()
-	tuiProgram = NewTUIProgram(*expertFlag)
-	tuiMu.Unlock()
+	if *noTUIFlag {
+		tuiReadyOnce.Do(func() { close(tuiReady) })
+	} else {
+		tuiMu.Lock()
+		tuiProgram = NewTUIProgram(*expertFlag)
+		tuiMu.Unlock()
 
-	go func() {
-		if _, err := tuiProgram.Run(); err != nil {
-			log.Errorf("TUI error: %v", err)
-			os.Exit(1)
+		go func() {
+			if _, err := tuiProgram.Run(); err != nil {
+				log.Errorf("TUI error: %v", err)
+				os.Exit(1)
+			}
+			gracefulShutdown()
+		}()
+
+		<-tuiReady
+	}
+
+	tray.OnCopyLast(func() {
+		transcriptionsMu.Lock()
+		text := lastText
+		transcriptionsMu.Unlock()
+		if text != "" {
+			clipboard.Copy(text)
 		}
-		os.Exit(0)
-	}()
-
-	<-tuiReady
+	})
+	if devices, err := ctx.Devices(); err == nil && len(devices) > 0 {
+		names := make([]string, len(devices))
+		for i := range devices {
+			names[i] = devices[i].Name
+		}
+		currentName := ""
+		if selectedDevice != nil {
+			currentName = selectedDevice.Name
+		}
+		tray.SetDevices(names, currentName, func(name string) {
+			switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, name)
+		})
+	}
+	trayQuit := tray.Init()
 
 	update.StartBackgroundCheck(version, log.Dir(), func(rel update.Release) {
 		tuiSend(UpdateAvailableMsg{Version: rel.Version})
@@ -278,13 +361,11 @@ func run() {
 	sigChan := make(chan os.Signal, 1)
 	shutdown.Notify(sigChan)
 	go func() {
-		<-sigChan
-		if len(transcriptions) > 0 {
-			log.SessionEnd(len(transcriptions))
+		select {
+		case <-sigChan:
+		case <-trayQuit:
 		}
-		log.Close()
-		tuiProgram.Quit()
-		os.Exit(0)
+		gracefulShutdown()
 	}()
 
 	go beep.Init()
@@ -317,9 +398,11 @@ func run() {
 			case ev := <-hy.Start():
 				log.Info("hotkey_start_" + string(ev.Mode))
 				tuiSend(RecordingStartMsg{})
+				tray.SetRecording(true)
 				go beep.PlayStart()
 
 				_, err := handleRecording(captureDevice, hy.StopChan())
+				tray.SetRecording(false)
 				if err != nil {
 					logToTUI("Error recording: %v", err)
 					log.Errorf("recording error: %v", err)
@@ -335,9 +418,11 @@ func run() {
 			case <-hk.Keydown():
 				log.Info("hotkey_down")
 				tuiSend(RecordingStartMsg{})
+				tray.SetRecording(true)
 				go beep.PlayStart()
 
 				_, err := handleRecording(captureDevice, hk.Keyup())
+				tray.SetRecording(false)
 				if err != nil {
 					logToTUI("Error recording: %v", err)
 					log.Errorf("recording error: %v", err)
@@ -351,25 +436,48 @@ func run() {
 }
 
 func handleDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, captureDevice *audio.CaptureDevice, selectedDevice **audio.DeviceInfo) {
-	tuiProgram.ReleaseTerminal()
+	if tuiProgram != nil {
+		tuiProgram.ReleaseTerminal()
+	}
 	newDevice, err := selectDevice(ctx)
-	tuiProgram.RestoreTerminal()
+	if tuiProgram != nil {
+		tuiProgram.RestoreTerminal()
+	}
 
 	if err != nil {
 		log.Warnf("device selection failed: %v", err)
 		return
 	}
 	if newDevice != nil {
-		(*captureDevice).Close()
-		newCapture, err := ctx.NewCapture(newDevice, captureConfig)
-		if err != nil {
-			log.Errorf("capture device reinit error: %v", err)
+		applyDeviceSwitch(ctx, captureConfig, captureDevice, selectedDevice, newDevice)
+	}
+}
+
+func switchDeviceByName(ctx audio.Context, captureConfig audio.CaptureConfig, captureDevice *audio.CaptureDevice, selectedDevice **audio.DeviceInfo, name string) {
+	devices, err := ctx.Devices()
+	if err != nil {
+		log.Warnf("device enumeration failed: %v", err)
+		return
+	}
+	for i := range devices {
+		if devices[i].Name == name {
+			applyDeviceSwitch(ctx, captureConfig, captureDevice, selectedDevice, &devices[i])
 			return
 		}
-		*captureDevice = newCapture
-		*selectedDevice = newDevice
-		tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
 	}
+	log.Warnf("device not found: %s", name)
+}
+
+func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, captureDevice *audio.CaptureDevice, selectedDevice **audio.DeviceInfo, newDevice *audio.DeviceInfo) {
+	(*captureDevice).Close()
+	newCapture, err := ctx.NewCapture(newDevice, captureConfig)
+	if err != nil {
+		log.Errorf("capture device reinit error: %v", err)
+		return
+	}
+	*captureDevice = newCapture
+	*selectedDevice = newDevice
+	tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
 }
 
 func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) (<-chan struct{}, error) {
@@ -508,6 +616,9 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	}
 
 	if !result.NoSpeech {
+		transcriptionsMu.Lock()
+		lastText = result.Text
+		transcriptionsMu.Unlock()
 		log.TranscriptionText(result.Text)
 	}
 }
