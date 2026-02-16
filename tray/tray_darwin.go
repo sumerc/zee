@@ -26,6 +26,11 @@ var (
 	mDevices      *systray.MenuItem
 	deviceItems   []*systray.MenuItem
 	deviceReady   chan struct{}
+
+	autoPasteOn bool
+	autoPasteCb func(bool)
+	mSettings   *systray.MenuItem
+	mAutoPaste  *systray.MenuItem
 )
 
 func Init() <-chan struct{} {
@@ -57,6 +62,9 @@ func SetRecording(rec bool) {
 
 func OnCopyLast(fn func()) { copyLastFn = fn }
 func OnRecord(start, stop func()) { recordFn = start; stopFn = stop }
+
+func SetAutoPaste(on bool)       { autoPasteOn = on }
+func OnAutoPaste(fn func(bool))  { autoPasteCb = fn }
 
 func Quit() {
 	closeOnce.Do(func() { close(quitCh) })
@@ -177,6 +185,19 @@ func onReady() {
 		deviceItems = append(deviceItems, item)
 	}
 	deviceMu.Unlock()
+
+	mSettings = systray.AddMenuItem("Settings", "Settings")
+	mAutoPaste = mSettings.AddSubMenuItemCheckbox("Auto-paste", "Auto-paste transcribed text", autoPasteOn)
+	mAutoPaste.Click(func() {
+		if mAutoPaste.Checked() {
+			mAutoPaste.Uncheck()
+		} else {
+			mAutoPaste.Check()
+		}
+		if autoPasteCb != nil {
+			autoPasteCb(mAutoPaste.Checked())
+		}
+	})
 
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit zee")

@@ -366,7 +366,9 @@ func run() {
 			switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, name)
 		})
 	}
+	tray.SetAutoPaste(autoPaste)
 	trayQuit := tray.Init()
+	tray.OnAutoPaste(func(on bool) { autoPaste = on })
 
 	// Poll for device changes (hotplug)
 	go func() {
