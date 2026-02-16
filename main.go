@@ -65,6 +65,8 @@ type TranscriptionRecord struct {
 }
 
 var deviceSelectChan = make(chan struct{}, 1)
+var trayRecordChan = make(chan struct{}, 1)
+var trayStopChan = make(chan struct{}, 1)
 
 var shutdownOnce sync.Once
 
@@ -195,29 +197,6 @@ func run() {
 	autoPaste = *autoPasteFlag
 	streamEnabled = *streamFlag
 
-	// Daemonize in -notui mode: re-exec in background, return shell prompt
-	if *noTUIFlag && os.Getenv("_ZEE_BG") == "" {
-		args := os.Args[1:]
-		if *setupFlag {
-			if ctx, err := audio.NewContext(); err == nil {
-				if dev, _ := selectDevice(ctx); dev != nil {
-					args = append(args, "-device", dev.Name)
-				}
-				ctx.Close()
-			}
-		}
-		exe, _ := os.Executable()
-		cmd := exec.Command(exe, args...)
-		cmd.Env = append(os.Environ(), "_ZEE_BG=1")
-		devnull, _ := os.Open(os.DevNull)
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
-		if err := cmd.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-
 	// Validate format
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
@@ -239,6 +218,29 @@ func run() {
 	}
 	if *langFlag != "" {
 		activeTranscriber.SetLanguage(*langFlag)
+	}
+
+	// Daemonize in -notui mode: re-exec in background, return shell prompt
+	if *noTUIFlag && os.Getenv("_ZEE_BG") == "" {
+		args := os.Args[1:]
+		if *setupFlag {
+			if ctx, err := audio.NewContext(); err == nil {
+				if dev, _ := selectDevice(ctx); dev != nil {
+					args = append(args, "-device", dev.Name)
+				}
+				ctx.Close()
+			}
+		}
+		exe, _ := os.Executable()
+		cmd := exec.Command(exe, args...)
+		cmd.Env = append(os.Environ(), "_ZEE_BG=1")
+		devnull, _ := os.Open(os.DevNull)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 
 	// Only enable verbose logging in expert mode
@@ -339,6 +341,10 @@ func run() {
 			clipboard.Copy(text)
 		}
 	})
+	tray.OnRecord(
+		func() { select { case trayRecordChan <- struct{}{}: default: } },
+		func() { select { case trayStopChan <- struct{}{}: default: } },
+	)
 	if devices, err := ctx.Devices(); err == nil && len(devices) > 0 {
 		names := make([]string, len(devices))
 		for i := range devices {
@@ -353,6 +359,37 @@ func run() {
 		})
 	}
 	trayQuit := tray.Init()
+
+	// Poll for device changes (hotplug)
+	go func() {
+		var last []string
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			devices, err := ctx.Devices()
+			if err != nil {
+				continue
+			}
+			names := make([]string, len(devices))
+			for i := range devices {
+				names[i] = devices[i].Name
+			}
+			if sliceEqual(last, names) {
+				continue
+			}
+			last = names
+			selName := ""
+			if selectedDevice != nil {
+				selName = selectedDevice.Name
+			}
+			// If active device was unplugged, fall back to default
+			if selName != "" && !sliceContains(names, selName) {
+				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
+				selName = ""
+			}
+			tray.RefreshDevices(names, selName)
+		}
+	}()
 
 	update.StartBackgroundCheck(version, log.Dir(), func(rel update.Release) {
 		tuiSend(UpdateAvailableMsg{Version: rel.Version})
@@ -391,6 +428,20 @@ func run() {
 	tuiSend(DeviceLineMsg{Text: deviceLineText(selectedDevice)})
 	tuiSend(HybridHelpMsg{Enabled: *hybridFlag})
 
+	startTrayRecording := func() {
+		log.Info("tray_record_start")
+		tuiSend(RecordingStartMsg{})
+		tray.SetRecording(true)
+		go beep.PlayStart()
+
+		_, err := handleRecording(captureDevice, trayStopChan)
+		tray.SetRecording(false)
+		if err != nil {
+			logToTUI("Error recording: %v", err)
+			log.Errorf("recording error: %v", err)
+		}
+	}
+
 	if *hybridFlag {
 		hy := hotkey.NewHybrid(hk, *longPressFlag)
 		for {
@@ -407,6 +458,9 @@ func run() {
 					logToTUI("Error recording: %v", err)
 					log.Errorf("recording error: %v", err)
 				}
+
+			case <-trayRecordChan:
+				startTrayRecording()
 
 			case <-deviceSelectChan:
 				handleDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice)
@@ -427,6 +481,9 @@ func run() {
 					logToTUI("Error recording: %v", err)
 					log.Errorf("recording error: %v", err)
 				}
+
+			case <-trayRecordChan:
+				startTrayRecording()
 
 			case <-deviceSelectChan:
 				handleDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice)
@@ -478,6 +535,27 @@ func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, cap
 	*captureDevice = newCapture
 	*selectedDevice = newDevice
 	tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
+}
+
+func sliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sliceContains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) (<-chan struct{}, error) {

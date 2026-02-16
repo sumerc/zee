@@ -21,7 +21,7 @@ func init() {
 	red := color.RGBA{R: 255, G: 59, B: 48, A: 255}
 	iconIdle = renderIcon(22, &transparent, 22.0/8)
 	iconIdleHi = renderIcon(44, &transparent, 44.0/8)
-	iconRecHi = renderIcon(44, &red, 44.0/5)
+	iconRecHi = renderIcon(44, &red, 44.0/6.5)
 }
 
 func renderIcon(size int, dot *color.RGBA, dotR float64) []byte {
