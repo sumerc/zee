@@ -220,16 +220,24 @@ func run() {
 		activeTranscriber.SetLanguage(*langFlag)
 	}
 
+	// Resolve -setup into -device early (before daemonization)
+	if *setupFlag && *deviceFlag == "" {
+		ctx, err := audio.NewContext()
+		if err != nil {
+			fmt.Printf("Error initializing audio: %v\n", err)
+			os.Exit(1)
+		}
+		if dev, _ := selectDevice(ctx); dev != nil {
+			*deviceFlag = dev.Name
+		}
+		ctx.Close()
+	}
+
 	// Daemonize in -notui mode: re-exec in background, return shell prompt
 	if *noTUIFlag && os.Getenv("_ZEE_BG") == "" {
 		args := os.Args[1:]
-		if *setupFlag {
-			if ctx, err := audio.NewContext(); err == nil {
-				if dev, _ := selectDevice(ctx); dev != nil {
-					args = append(args, "-device", dev.Name)
-				}
-				ctx.Close()
-			}
+		if *deviceFlag != "" {
+			args = append(args, "-device", *deviceFlag)
 		}
 		exe, _ := os.Executable()
 		cmd := exec.Command(exe, args...)
