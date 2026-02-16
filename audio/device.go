@@ -20,7 +20,6 @@ func SelectDevice(ctx Context) (*DeviceInfo, error) {
 	}
 
 	if len(devices) == 1 {
-		fmt.Printf("Using device: %s\n", devices[0].Name)
 		return &devices[0], nil
 	}
 

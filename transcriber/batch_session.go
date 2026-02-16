@@ -162,7 +162,6 @@ func (bs *batchSession) formatMetrics(rawSize, encodedSize uint64, compressionPc
 	if result.Confidence > 0 {
 		lines = append(lines, fmt.Sprintf("confidence: %.4f", result.Confidence))
 	}
-
 	return lines
 }
 
