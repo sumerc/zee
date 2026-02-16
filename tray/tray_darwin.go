@@ -153,7 +153,7 @@ func onReady() {
 		}
 	})
 
-	mCopy := systray.AddMenuItem("Copy Last Recording", "Copy last transcription to clipboard")
+	mCopy := systray.AddMenuItem("Copy Last Recorded Text", "Copy last transcription to clipboard")
 	mCopy.Click(func() {
 		if copyLastFn != nil {
 			copyLastFn()

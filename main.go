@@ -32,7 +32,6 @@ import (
 
 var version = "dev"
 
-const voiceThreshold = 0.002
 
 var activeTranscriber transcriber.Transcriber
 var autoPaste bool
@@ -444,7 +443,7 @@ func run() {
 		tray.SetRecording(true)
 		go beep.PlayStart()
 
-		_, err := handleRecording(captureDevice, trayStopChan)
+		_, err := handleRecording(captureDevice, trayStopChan, nil)
 		tray.SetRecording(false)
 		if err != nil {
 			logToTUI("Error recording: %v", err)
@@ -462,7 +461,7 @@ func run() {
 				tray.SetRecording(true)
 				go beep.PlayStart()
 
-				_, err := handleRecording(captureDevice, hy.StopChan())
+				_, err := handleRecording(captureDevice, hy.StopChan(), hy.IsToggle)
 				tray.SetRecording(false)
 				if err != nil {
 					logToTUI("Error recording: %v", err)
@@ -485,7 +484,7 @@ func run() {
 				tray.SetRecording(true)
 				go beep.PlayStart()
 
-				_, err := handleRecording(captureDevice, hk.Keyup())
+				_, err := handleRecording(captureDevice, hk.Keyup(), nil)
 				tray.SetRecording(false)
 				if err != nil {
 					logToTUI("Error recording: %v", err)
@@ -568,7 +567,7 @@ func sliceContains(s []string, v string) bool {
 	return false
 }
 
-func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) (<-chan struct{}, error) {
+func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}, isToggleFn func() bool) (<-chan struct{}, error) {
 	sess, err := activeTranscriber.NewSession(context.Background(), transcriber.SessionConfig{
 		Stream:   streamEnabled,
 		Format:   activeFormat,
@@ -605,7 +604,7 @@ func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) (<-chan
 		}
 	}()
 
-	totalFrames, err := record(capture, keyup, sess, &lastTranscript)
+	totalFrames, silenceClose, err := record(capture, keyup, sess, isToggleFn)
 
 	if err != nil {
 		sess.Close()
@@ -618,13 +617,13 @@ func handleRecording(capture audio.CaptureDevice, keyup <-chan struct{}) (<-chan
 
 	done := make(chan struct{})
 	go func() {
-		finishTranscription(sess, clipCh, updatesDone)
+		finishTranscription(sess, clipCh, updatesDone, silenceClose)
 		close(done)
 	}()
 	return done, nil
 }
 
-func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDone <-chan struct{}) {
+func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDone <-chan struct{}, skipPaste bool) {
 	result, closeErr := sess.Close()
 	<-updatesDone // wait for updates goroutine to drain
 
@@ -639,12 +638,12 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 		logToTUI("Error: %v", closeErr)
 	}
 
-	if closeErr == nil && !streamEnabled && result.HasText && autoPaste {
+	if closeErr == nil && !streamEnabled && result.HasText && autoPaste && !skipPaste {
 		clipboard.Copy(result.Text)
 		clipboard.Paste()
 	}
 
-	if autoPaste && clipPrev != "" {
+	if autoPaste && !skipPaste && clipPrev != "" {
 		go func() {
 			time.Sleep(600 * time.Millisecond)
 			clipboard.Copy(clipPrev)
@@ -711,14 +710,17 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	}
 }
 
-func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber.Session, lastTranscript *atomic.Int64) (uint64, error) {
+func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber.Session, isToggleFn func() bool) (uint64, bool, error) {
+	vp, err := newVADProcessor()
+	if err != nil {
+		return 0, false, fmt.Errorf("VAD init: %w", err)
+	}
+
 	var bufMu sync.Mutex
 	var totalFrames uint64
-	var peakLevel float64
 	var noVoiceBeeped bool
 	var stopped bool
-	var voiceDetected bool
-	var lastVoiceTime time.Time
+	var autoClosed atomic.Bool
 	done := make(chan struct{})
 	var closeOnce sync.Once
 	closeDone := func() { closeOnce.Do(func() { close(done) }) }
@@ -747,30 +749,28 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 			}
 			rms := math.Sqrt(sumSquares / float64(len(data)/2))
 			tuiSend(AudioLevelMsg{Level: rms})
-			bufMu.Lock()
-			if rms > peakLevel {
-				peakLevel = rms
-			}
-			if rms >= voiceThreshold {
-				if !voiceDetected {
-					voiceDetected = true
-				}
-				lastVoiceTime = time.Now()
-			}
-			bufMu.Unlock()
+			vp.Process(data)
 		}
 	})
 
 	if err := capture.Start(); err != nil {
 		capture.ClearCallback()
-		return 0, err
+		return 0, false, err
+	}
+
+	isToggle := func() bool {
+		return isToggleFn != nil && isToggleFn()
 	}
 
 	recordStart := time.Now()
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
-		var lastTranscriptWarn time.Time
+		var silenceTicks int
+		var lastBeepAt int
+		var totalTicks int
+		var speechTicks int
+		speechWindow := make([]bool, 300) // rolling 30s window
 		for {
 			select {
 			case <-done:
@@ -778,23 +778,65 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 			case <-ticker.C:
 				elapsed := time.Since(recordStart).Seconds()
 				tuiSend(RecordingTickMsg{Duration: elapsed})
-				checkNoVoice(&bufMu, elapsed, &peakLevel, &noVoiceBeeped)
-				bufMu.Lock()
-				vd := voiceDetected
-				bufMu.Unlock()
-				if vd {
-					checkSilenceDuring(&bufMu, &lastVoiceTime)
+
+				hasSpeech := vp.HasSpeechTick()
+
+				// Update rolling window
+				idx := totalTicks % 300
+				if totalTicks >= 300 && speechWindow[idx] {
+					speechTicks-- // remove old value
 				}
-				if streamEnabled {
-					checkTranscriptSilence(lastTranscript, &lastTranscriptWarn)
-					if shouldAutoClose(lastTranscript, recordStart) {
-						log.Info("silence_auto_close")
-						tuiSend(SilenceAutoCloseMsg{})
-						go beep.PlayEnd()
-						time.Sleep(recordTail)
-						closeDone()
-						return
+				speechWindow[idx] = hasSpeech
+				if hasSpeech {
+					speechTicks++
+				}
+				totalTicks++
+
+				// Update consecutive silence counter
+				if hasSpeech {
+					silenceTicks = 0
+					lastBeepAt = 0
+					if noVoiceBeeped {
+						noVoiceBeeped = false
+						tuiSend(VoiceClearedMsg{})
 					}
+				} else {
+					silenceTicks++
+				}
+
+				if !isToggle() {
+					if silenceTicks == 40 && !noVoiceBeeped { // 4s, PTT mode only
+						noVoiceBeeped = true
+						log.Info("no_voice_warning")
+						tuiSend(NoVoiceWarningMsg{})
+						beep.PlayError()
+					}
+					continue
+				}
+
+				// Toggle mode: 4s warning, 8s repeating beeps, 30s auto-close
+				if silenceTicks == 40 && !noVoiceBeeped {
+					noVoiceBeeped = true
+					log.Info("no_voice_warning")
+					tuiSend(NoVoiceWarningMsg{})
+					beep.PlayError()
+					lastBeepAt = silenceTicks
+				} else if silenceTicks >= 80 && silenceTicks-lastBeepAt >= 80 {
+					lastBeepAt = silenceTicks
+					log.Info("silence_during_warning")
+					tuiSend(NoVoiceWarningMsg{})
+					beep.PlayError()
+				}
+
+				// Auto-close: 30s passed AND less than 2s of speech in that window
+				if totalTicks >= 300 && speechTicks <= 20 {
+					autoClosed.Store(true)
+					log.Info("silence_auto_close")
+					tuiSend(SilenceAutoCloseMsg{})
+					go beep.PlayEnd()
+					time.Sleep(recordTail)
+					closeDone()
+					return
 				}
 			}
 		}
@@ -820,65 +862,7 @@ func record(capture audio.CaptureDevice, keyup <-chan struct{}, sess transcriber
 	frames := totalFrames
 	bufMu.Unlock()
 
-	return frames, nil
-}
-
-func checkNoVoice(mu *sync.Mutex, elapsed float64, peakLevel *float64, beeped *bool) {
-	mu.Lock()
-	shouldWarn := elapsed > 1.0 && *peakLevel < voiceThreshold && !*beeped
-	if shouldWarn {
-		*beeped = true
-	}
-	mu.Unlock()
-	if shouldWarn {
-		log.Info("no_voice_warning")
-		tuiSend(NoVoiceWarningMsg{})
-		beep.PlayError()
-	}
-}
-
-const silenceTimeout = 8 * time.Second
-const silenceAutoCloseTimeout = 30 * time.Second
-
-func checkSilenceDuring(mu *sync.Mutex, lastVoiceTime *time.Time) {
-	mu.Lock()
-	shouldWarn := time.Since(*lastVoiceTime) > silenceTimeout
-	if shouldWarn {
-		*lastVoiceTime = time.Now()
-	}
-	mu.Unlock()
-	if shouldWarn {
-		log.Info("silence_during_warning")
-		tuiSend(NoVoiceWarningMsg{})
-		beep.PlayError()
-	}
-}
-
-func shouldAutoClose(lastTranscript *atomic.Int64, recordStart time.Time) bool {
-	ref := recordStart
-	if ts := lastTranscript.Load(); ts != 0 {
-		ref = time.Unix(0, ts)
-	}
-	return time.Since(ref) > silenceAutoCloseTimeout
-}
-
-func checkTranscriptSilence(lastTranscript *atomic.Int64, lastWarn *time.Time) {
-	ts := lastTranscript.Load()
-	if ts == 0 {
-		return
-	}
-	timeSinceTranscript := time.Since(time.Unix(0, ts))
-	if timeSinceTranscript <= silenceTimeout {
-		*lastWarn = time.Time{}
-		return
-	}
-	if !lastWarn.IsZero() && time.Since(*lastWarn) <= silenceTimeout {
-		return
-	}
-	*lastWarn = time.Now()
-	log.Info("transcript_silence_warning")
-	tuiSend(TranscriptSilenceMsg{})
-	beep.PlayError()
+	return frames, autoClosed.Load(), nil
 }
 
 func updatePercentileStats() {

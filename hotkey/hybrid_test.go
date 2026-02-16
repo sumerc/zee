@@ -32,6 +32,9 @@ func TestHybridLongPress(t *testing.T) {
 	waitStart(t, hy)
 
 	time.Sleep(threshold + 20*time.Millisecond)
+	if hy.IsToggle() {
+		t.Error("expected PTT (not toggle) after long press")
+	}
 	fk.SimKeyup()
 	waitStop(t, hy)
 }
@@ -44,6 +47,10 @@ func TestHybridShortTap(t *testing.T) {
 	fk.SimKeydown()
 	waitStart(t, hy)
 	fk.SimKeyup() // release before threshold → toggle mode
+	time.Sleep(10 * time.Millisecond)
+	if !hy.IsToggle() {
+		t.Error("expected toggle mode after short tap")
+	}
 
 	// Should NOT have stopped yet
 	select {

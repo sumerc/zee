@@ -32,6 +32,7 @@ type RequestDeviceSelectionMsg struct{}   // Request to change microphone
 type NoVoiceWarningMsg struct{}            // No voice detected during recording
 type TranscriptSilenceMsg struct{}        // No transcript updates from backend
 type SilenceAutoCloseMsg struct{}          // Recording auto-closed due to prolonged silence
+type VoiceClearedMsg struct{}              // Voice detected after no-voice warning
 type HybridHelpMsg struct{ Enabled bool }      // Whether hybrid tap+hold is enabled
 type UpdateAvailableMsg struct{ Version string } // New version available
 type tickMsg time.Time
@@ -210,13 +211,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.audioLevel = m.audioLevel*0.7 + msg.Level*0.3
 			}
-			if m.noVoiceWarning && msg.Level >= voiceThreshold {
-				m.noVoiceWarning = false
-			}
 		}
 
 	case NoVoiceWarningMsg:
 		m.noVoiceWarning = true
+
+	case VoiceClearedMsg:
+		m.noVoiceWarning = false
 
 	case TranscriptSilenceMsg:
 		m.transcriptSilenceWarning = true

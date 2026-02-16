@@ -82,7 +82,7 @@ func runTestMode(wavPath string) {
 	// Event loop -- same pattern as run()
 	for {
 		<-hk.Keydown()
-		done, err := handleRecording(capture, hk.Keyup())
+		done, err := handleRecording(capture, hk.Keyup(), nil)
 		if err != nil {
 			log.Errorf("recording error: %v", err)
 		}
