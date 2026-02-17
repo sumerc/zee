@@ -38,7 +38,7 @@ func SelectDevice(ctx Context) (*DeviceInfo, error) {
 		for i, d := range devices {
 			btTag := ""
 			if IsBluetooth(d.Name) {
-				btTag = " \x1b[33m[BT]\x1b[0m"
+				btTag = " \x1b[33m[⚠ Lower audio quality]\x1b[0m"
 			}
 			if i == cursor {
 				fmt.Printf("  \x1b[1;36m▶ %s%s\x1b[0m\r\n", d.Name, btTag)

@@ -47,4 +47,5 @@ type CaptureDevice interface {
 	Close()
 	SetCallback(cb DataCallback)
 	ClearCallback()
+	DeviceName() string
 }

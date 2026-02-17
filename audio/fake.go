@@ -60,6 +60,8 @@ func (f *FakeCapture) ClearCallback() {
 	f.mu.Unlock()
 }
 
+func (f *FakeCapture) DeviceName() string { return "fake" }
+
 func (f *FakeCapture) feedChunk(cb DataCallback, pos, chunkBytes int) int {
 	end := min(pos+chunkBytes, len(f.pcm))
 	chunk := make([]byte, end-pos)

@@ -35,6 +35,8 @@ var (
 	providerMu    sync.Mutex
 	providers     []Provider
 	providerCb    func(string)
+
+	isBTFn func(string) bool
 )
 
 func OnCopyLast(fn func())            { copyLastFn = fn }
@@ -98,4 +100,15 @@ func SetLastRecording(dur time.Duration) {
 
 func SetUpdateAvailable(version string) {
 	addUpdateMenuItem(version)
+}
+
+func SetBTCheck(fn func(string) bool) {
+	isBTFn = fn
+}
+
+func deviceDisplayName(name string) string {
+	if isBTFn != nil && isBTFn(name) {
+		return name + " [⚠ Lower audio quality]"
+	}
+	return name
 }

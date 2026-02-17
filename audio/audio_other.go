@@ -122,3 +122,10 @@ func (c *malgoCapture) SetCallback(cb DataCallback) {
 func (c *malgoCapture) ClearCallback() {
 	c.callback.Store(nil)
 }
+
+func (c *malgoCapture) DeviceName() string {
+	if c.deviceInfo != nil {
+		return c.deviceInfo.Name
+	}
+	return "system default"
+}

@@ -66,7 +66,8 @@ type TranscriptionRecord struct {
 
 var deviceSelectChan = make(chan struct{}, 1)
 var trayRecordChan = make(chan struct{}, 1)
-var trayStopChan = make(chan struct{}, 1)
+var trayStopMu sync.Mutex
+var trayStopChan chan struct{}
 
 var shutdownOnce sync.Once
 
@@ -122,6 +123,25 @@ func reportRecordingError(err error) {
 }
 
 const recordTail = 500 * time.Millisecond
+
+func newTrayStop() <-chan struct{} {
+	trayStopMu.Lock()
+	trayStopChan = make(chan struct{})
+	ch := trayStopChan
+	trayStopMu.Unlock()
+	return ch
+}
+
+func fireTrayStop() {
+	trayStopMu.Lock()
+	if trayStopChan != nil {
+		select {
+		case trayStopChan <- struct{}{}:
+		default:
+		}
+	}
+	trayStopMu.Unlock()
+}
 
 // mergeStop returns a channel that closes when any source fires.
 func mergeStop(sources ...<-chan struct{}) chan struct{} {
@@ -399,13 +419,14 @@ func run() {
 	})
 	tray.OnRecord(
 		func() { select { case trayRecordChan <- struct{}{}: default: } },
-		func() { select { case trayStopChan <- struct{}{}: default: } },
+		func() { fireTrayStop() },
 	)
 	// preferredDevice remembers the user's choice so we can auto-reconnect
 	preferredDevice := ""
 	if selectedDevice != nil {
 		preferredDevice = selectedDevice.Name
 	}
+	tray.SetBTCheck(audio.IsBluetooth)
 	if devices, err := ctx.Devices(); err == nil && len(devices) > 0 {
 		names := make([]string, len(devices))
 		for i := range devices {
@@ -510,13 +531,18 @@ func run() {
 	tuiSend(BluetoothWarningMsg{IsBT: selectedDevice != nil && audio.IsBluetooth(selectedDevice.Name)})
 	tuiSend(HybridHelpMsg{Enabled: *hybridFlag})
 
+	logRecordDevice := func() {
+		log.Info("recording_device: " + captureDevice.DeviceName())
+	}
+
 	startTrayRecording := func() {
 		log.Info("tray_record_start")
+		logRecordDevice()
 		tuiSend(RecordingStartMsg{})
 		tray.SetRecording(true)
 		go beep.PlayStart()
 
-		stop := mergeStop(trayStopChan)
+		stop := mergeStop(newTrayStop())
 		_, err := handleRecording(captureDevice, stop, nil)
 		tray.SetRecording(false)
 		reportRecordingError(err)
@@ -528,11 +554,12 @@ func run() {
 			select {
 			case ev := <-hy.Start():
 				log.Info("hotkey_start_" + string(ev.Mode))
+				logRecordDevice()
 				tuiSend(RecordingStartMsg{})
 				tray.SetRecording(true)
 				go beep.PlayStart()
 
-				stop := mergeStop(hy.StopChan(), trayStopChan)
+				stop := mergeStop(hy.StopChan(), newTrayStop())
 				_, err := handleRecording(captureDevice, stop, hy.IsToggle)
 				tray.SetRecording(false)
 				reportRecordingError(err)
@@ -553,7 +580,7 @@ func run() {
 				tray.SetRecording(true)
 				go beep.PlayStart()
 
-				stop := mergeStop(hk.Keyup(), trayStopChan)
+				stop := mergeStop(hk.Keyup(), newTrayStop())
 				_, err := handleRecording(captureDevice, stop, nil)
 				tray.SetRecording(false)
 				reportRecordingError(err)
@@ -846,6 +873,7 @@ func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.
 				case SilenceAutoClose:
 					log.Info("silence_auto_close")
 					tuiSend(SilenceAutoCloseMsg{})
+					tray.SetRecording(false)
 					go beep.PlayEnd()
 					time.Sleep(recordTail)
 					autoClosed.Store(true)
@@ -864,6 +892,7 @@ func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.
 		}
 		log.Info("recording_stop")
 		tuiSend(RecordingStopMsg{})
+		tray.SetRecording(false)
 		go beep.PlayEnd()
 		if streamEnabled {
 			time.Sleep(recordTail)

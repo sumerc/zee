@@ -74,20 +74,29 @@ func updateTooltip(msg string) {
 	systray.SetTooltip(msg)
 }
 
-func addDeviceItem(parent *systray.MenuItem, name string, idx int, checked bool) *systray.MenuItem {
-	item := parent.AddSubMenuItemCheckbox(name, name, checked)
+func addDeviceItem(parent *systray.MenuItem, idx int, name string, checked bool) *systray.MenuItem {
+	label := deviceDisplayName(name)
+	item := parent.AddSubMenuItemCheckbox(label, label, checked)
 	item.Click(func() {
 		deviceMu.Lock()
+		// Use current name from deviceNames, not the captured name
+		// (RefreshDevices may have changed the title)
+		currentName := ""
+		if idx < len(deviceNames) {
+			currentName = deviceNames[idx]
+		}
 		cb := deviceCb
 		deviceMu.Unlock()
-		if cb != nil {
-			cb(name)
+		if cb != nil && currentName != "" {
+			cb(currentName)
 		}
 		deviceMu.Lock()
 		for _, it := range deviceItems {
 			it.Uncheck()
 		}
-		deviceItems[idx].Check()
+		if idx < len(deviceItems) {
+			deviceItems[idx].Check()
+		}
 		deviceMu.Unlock()
 	})
 	return item
@@ -107,7 +116,8 @@ func RefreshDevices(names []string, selected string) {
 
 	for i, item := range deviceItems {
 		if i < len(names) {
-			item.SetTitle(names[i])
+			label := deviceDisplayName(names[i])
+			item.SetTitle(label)
 			item.SetTooltip(names[i])
 			item.Show()
 			if names[i] == selected {
@@ -122,7 +132,7 @@ func RefreshDevices(names []string, selected string) {
 	}
 
 	for i := len(deviceItems); i < len(names); i++ {
-		item := addDeviceItem(mDevices, names[i], i, names[i] == selected)
+		item := addDeviceItem(mDevices, i, names[i], names[i] == selected)
 		deviceItems = append(deviceItems, item)
 	}
 }
@@ -161,7 +171,7 @@ func onReady() {
 	deviceMu.Lock()
 	deviceItems = make([]*systray.MenuItem, 0, len(deviceNames))
 	for i, name := range deviceNames {
-		item := addDeviceItem(mDevices, name, i, name == deviceSel)
+		item := addDeviceItem(mDevices, i, name, name == deviceSel)
 		deviceItems = append(deviceItems, item)
 	}
 	deviceMu.Unlock()
