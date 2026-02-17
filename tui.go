@@ -35,6 +35,7 @@ type SilenceAutoCloseMsg struct{}          // Recording auto-closed due to prolo
 type VoiceClearedMsg struct{}              // Voice detected after no-voice warning
 type HybridHelpMsg struct{ Enabled bool }      // Whether hybrid tap+hold is enabled
 type UpdateAvailableMsg struct{ Version string } // New version available
+type BluetoothWarningMsg struct{ IsBT bool }     // BT mic detected/cleared
 type tickMsg time.Time
 
 type tuiState int
@@ -70,6 +71,7 @@ type tuiModel struct {
 	expertMode        bool // show full TUI with HAL eye
 	hybridEnabled     bool // show hybrid help text when true
 	updateAvailable   string
+	bluetoothWarning  bool
 }
 
 func (m tuiModel) maxViewIdx() int {
@@ -263,6 +265,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UpdateAvailableMsg:
 		m.updateAvailable = msg.Version
 
+	case BluetoothWarningMsg:
+		m.bluetoothWarning = msg.IsBT
+
 	case RequestDeviceSelectionMsg:
 		select {
 		case deviceSelectChan <- struct{}{}:
@@ -331,6 +336,12 @@ func (m tuiModel) View() string {
 			Foreground(lipgloss.Color("241")).
 			Render(m.deviceLine)
 		infoLines = append(infoLines, deviceLine)
+	}
+	if m.bluetoothWarning {
+		btWarn := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("208")).
+			Render("  ⚠ BT mic — use built-in for better results")
+		infoLines = append(infoLines, btWarn)
 	}
 
 	// Talk mode (expert only), shown under mic line

@@ -89,10 +89,14 @@ func gracefulShutdown() {
 
 func deviceLineText(dev *audio.DeviceInfo) string {
 	name := "system default"
+	suffix := ""
 	if dev != nil {
 		name = dev.Name
+		if audio.IsBluetooth(dev.Name) {
+			suffix = " (BT!)"
+		}
 	}
-	return "mic: " + name + " (ctrl+g)"
+	return "mic: " + name + suffix + " (ctrl+g)"
 }
 
 func modeLineText() string {
@@ -503,6 +507,7 @@ func run() {
 
 	tuiSend(ModeLineMsg{Text: modeLineText()})
 	tuiSend(DeviceLineMsg{Text: deviceLineText(selectedDevice)})
+	tuiSend(BluetoothWarningMsg{IsBT: selectedDevice != nil && audio.IsBluetooth(selectedDevice.Name)})
 	tuiSend(HybridHelpMsg{Enabled: *hybridFlag})
 
 	startTrayRecording := func() {
@@ -611,6 +616,7 @@ func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, cap
 	*captureDevice = newCapture
 	*selectedDevice = newDevice
 	tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
+	tuiSend(BluetoothWarningMsg{IsBT: newDevice != nil && audio.IsBluetooth(newDevice.Name)})
 }
 
 func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggleFn func() bool) (<-chan struct{}, error) {
