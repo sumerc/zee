@@ -205,7 +205,7 @@ func run() {
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
 	expertFlag := flag.Bool("expert", false, "Show full TUI with HAL eye animation")
-	langFlag := flag.String("lang", "", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
+	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
 	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
@@ -457,6 +457,11 @@ func run() {
 		if lang := *langFlag; lang != "" {
 			activeTranscriber.SetLanguage(lang)
 		}
+		tuiSend(ModeLineMsg{Text: modeLineText()})
+	})
+
+	tray.SetLanguage(*langFlag, func(code string) {
+		activeTranscriber.SetLanguage(code)
 		tuiSend(ModeLineMsg{Text: modeLineText()})
 	})
 

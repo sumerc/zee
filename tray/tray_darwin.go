@@ -19,6 +19,8 @@ var (
 	mSettings  *systray.MenuItem
 	mAutoPaste *systray.MenuItem
 	mBackend   *systray.MenuItem
+	mLanguage  *systray.MenuItem
+	langItems  []*systray.MenuItem
 	mUpdate    *systray.MenuItem
 
 	providerItems []*systray.MenuItem
@@ -226,6 +228,26 @@ func onReady() {
 		}
 	}
 	providerMu.Unlock()
+
+	mLanguage = mSettings.AddSubMenuItem("Language", "Select transcription language")
+	langItems = make([]*systray.MenuItem, 0, len(Languages))
+	for i, lang := range Languages {
+		idx := i
+		item := mLanguage.AddSubMenuItemCheckbox(lang.Label, lang.Label, lang.Code == langCode)
+		item.Click(func() {
+			for j, it := range langItems {
+				if j == idx {
+					it.Check()
+				} else {
+					it.Uncheck()
+				}
+			}
+			if langCb != nil {
+				langCb(Languages[idx].Code)
+			}
+		})
+		langItems = append(langItems, item)
+	}
 
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit zee")

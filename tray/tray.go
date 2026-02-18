@@ -37,7 +37,53 @@ var (
 	providerCb    func(string)
 
 	isBTFn func(string) bool
+
+	langCode string // current language code ("" = auto-detect)
+	langCb   func(string)
 )
+
+type Language struct {
+	Code  string // ISO-639-1
+	Label string
+}
+
+// Languages supported by both Groq (Whisper) and Deepgram Nova-2.
+var Languages = []Language{
+	{"", "Auto-detect"},
+	{"bg", "Bulgarian"},
+	{"ca", "Catalan"},
+	{"zh", "Chinese"},
+	{"cs", "Czech"},
+	{"da", "Danish"},
+	{"nl", "Dutch"},
+	{"en", "English"},
+	{"et", "Estonian"},
+	{"fi", "Finnish"},
+	{"fr", "French"},
+	{"de", "German"},
+	{"el", "Greek"},
+	{"hi", "Hindi"},
+	{"hu", "Hungarian"},
+	{"id", "Indonesian"},
+	{"it", "Italian"},
+	{"ja", "Japanese"},
+	{"ko", "Korean"},
+	{"lv", "Latvian"},
+	{"lt", "Lithuanian"},
+	{"ms", "Malay"},
+	{"no", "Norwegian"},
+	{"pl", "Polish"},
+	{"pt", "Portuguese"},
+	{"ro", "Romanian"},
+	{"ru", "Russian"},
+	{"sk", "Slovak"},
+	{"es", "Spanish"},
+	{"sv", "Swedish"},
+	{"th", "Thai"},
+	{"tr", "Turkish"},
+	{"uk", "Ukrainian"},
+	{"vi", "Vietnamese"},
+}
 
 func OnCopyLast(fn func())            { copyLastFn = fn }
 func OnRecord(start, stop func())     { recordFn = start; stopFn = stop }
@@ -100,6 +146,11 @@ func SetLastRecording(dur time.Duration) {
 
 func SetUpdateAvailable(version string) {
 	addUpdateMenuItem(version)
+}
+
+func SetLanguage(code string, onSwitch func(string)) {
+	langCode = code
+	langCb = onSwitch
 }
 
 func SetBTCheck(fn func(string) bool) {
