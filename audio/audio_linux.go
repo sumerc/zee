@@ -151,3 +151,10 @@ func (c *pulseCapture) SetCallback(cb DataCallback) {
 func (c *pulseCapture) ClearCallback() {
 	c.callback.Store(nil)
 }
+
+func (c *pulseCapture) DeviceName() string {
+	if c.device != nil {
+		return c.device.Name
+	}
+	return "system default"
+}

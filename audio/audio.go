@@ -1,6 +1,27 @@
 package audio
 
+import "strings"
+
 const WAVHeaderSize = 44
+
+var btKeywords = []string{
+	"airpods", "beats", "bose", "wh-1000", "wf-1000",
+	"sony wh-", "sony wf-",
+	"jabra", "galaxy buds", "pixel buds", "powerbeats",
+	"jbl ", "sennheiser momentum", "plantronics",
+	"tozo", "anker soundcore", "skullcandy",
+	"bluetooth", " bt ", " bt)", " bt]",
+}
+
+func IsBluetooth(name string) bool {
+	lower := strings.ToLower(name)
+	for _, kw := range btKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
 
 type DataCallback func(data []byte, frameCount uint32)
 
@@ -26,4 +47,5 @@ type CaptureDevice interface {
 	Close()
 	SetCallback(cb DataCallback)
 	ClearCallback()
+	DeviceName() string
 }

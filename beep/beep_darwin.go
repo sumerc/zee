@@ -124,29 +124,21 @@ func playBytes(samples []byte) {
 	playMu.Lock()
 	defer playMu.Unlock()
 
-	if device == nil {
+	// Always reinitialize to pick up current default output device
+	// (handles BT connect/disconnect, sleep/wake)
+	if device != nil {
+		device.Stop()
+		device.Uninit()
+	}
+	if err := initDevice(); err != nil {
 		return
 	}
 
-	// Stop device first to ensure clean state (no-op if not running)
-	device.Stop()
-
-	// Set up playback state
 	playPos.Store(0)
 	playSamples.Store(&samples)
 
-	// Start device
 	if err := device.Start(); err != nil {
-		// Try recreating device (handles macOS sleep/wake)
-		device.Uninit()
-		if err := initDevice(); err != nil {
-			playSamples.Store(nil)
-			return
-		}
-		if err := device.Start(); err != nil {
-			playSamples.Store(nil)
-			return
-		}
+		playSamples.Store(nil)
 	}
 }
 

@@ -2,12 +2,14 @@
 
 package tray
 
-func Init() <-chan struct{}                                        { return make(chan struct{}) }
-func SetRecording(bool)                                            {}
-func OnCopyLast(func())                                            {}
-func OnRecord(start, stop func())                                  {}
-func SetDevices(names []string, selected string, fn func(string))  {}
-func RefreshDevices(names []string, selected string)               {}
-func SetAutoPaste(bool)                                            {}
-func OnAutoPaste(func(bool))                                       {}
-func Quit()                                                        {}
+func Init() <-chan struct{}                              { return make(chan struct{}) }
+func RefreshDevices(names []string, selected string)     {}
+func updateRecordingIcon(bool)                           {}
+func updateWarningIcon(bool)                             {}
+func updateTooltip(string)                               {}
+func updateCopyLastTitle(string)                         {}
+func addUpdateMenuItem(string)                           {}
+func disableDevices()                                    {}
+func enableDevices()                                     {}
+func disableBackend()                                    {}
+func enableBackend()                                     {}

@@ -32,8 +32,10 @@ type RequestDeviceSelectionMsg struct{}   // Request to change microphone
 type NoVoiceWarningMsg struct{}            // No voice detected during recording
 type TranscriptSilenceMsg struct{}        // No transcript updates from backend
 type SilenceAutoCloseMsg struct{}          // Recording auto-closed due to prolonged silence
+type VoiceClearedMsg struct{}              // Voice detected after no-voice warning
 type HybridHelpMsg struct{ Enabled bool }      // Whether hybrid tap+hold is enabled
 type UpdateAvailableMsg struct{ Version string } // New version available
+type BluetoothWarningMsg struct{ IsBT bool }     // BT mic detected/cleared
 type tickMsg time.Time
 
 type tuiState int
@@ -66,9 +68,10 @@ type tuiModel struct {
 	liveText          string // live streaming text (committed only)
 	history           []historyEntry
 	viewIdx           int  // 0 = newest, higher = older
-	expertMode        bool // show full TUI with HAL eye
+	debugMode        bool // show full TUI with HAL eye
 	hybridEnabled     bool // show hybrid help text when true
 	updateAvailable   string
+	bluetoothWarning  bool
 }
 
 func (m tuiModel) maxViewIdx() int {
@@ -141,8 +144,8 @@ func init() {
 	}
 }
 
-func NewTUIProgram(expertMode bool) *tea.Program {
-	m := tuiModel{expertMode: expertMode}
+func NewTUIProgram(debugMode bool) *tea.Program {
+	m := tuiModel{debugMode: debugMode}
 	return tea.NewProgram(m, tea.WithAltScreen())
 }
 
@@ -210,13 +213,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.audioLevel = m.audioLevel*0.7 + msg.Level*0.3
 			}
-			if m.noVoiceWarning && msg.Level >= voiceThreshold {
-				m.noVoiceWarning = false
-			}
 		}
 
 	case NoVoiceWarningMsg:
 		m.noVoiceWarning = true
+
+	case VoiceClearedMsg:
+		m.noVoiceWarning = false
 
 	case TranscriptSilenceMsg:
 		m.transcriptSilenceWarning = true
@@ -261,6 +264,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case UpdateAvailableMsg:
 		m.updateAvailable = msg.Version
+
+	case BluetoothWarningMsg:
+		m.bluetoothWarning = msg.IsBT
 
 	case RequestDeviceSelectionMsg:
 		select {
@@ -331,9 +337,15 @@ func (m tuiModel) View() string {
 			Render(m.deviceLine)
 		infoLines = append(infoLines, deviceLine)
 	}
+	if m.bluetoothWarning {
+		btWarn := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("208")).
+			Render("  ⚠ BT mic — use built-in for better results")
+		infoLines = append(infoLines, btWarn)
+	}
 
 	// Talk mode (expert only), shown under mic line
-	if m.expertMode {
+	if m.debugMode {
 		talk := "PTT"
 		if m.hybridEnabled {
 			talk = "hybrid"
@@ -353,7 +365,7 @@ func (m tuiModel) View() string {
 	}
 
 	// Percentile table (expert mode only)
-	if m.expertMode {
+	if m.debugMode {
 		if table := renderPercentileTable(); table != "" {
 			infoLines = append(infoLines, "")
 			tableStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
@@ -443,7 +455,7 @@ func (m tuiModel) View() string {
 		if len(entry.metrics) > 0 {
 			logLines = append(logLines, "")
 			for _, metric := range entry.metrics {
-				if m.expertMode {
+				if m.debugMode {
 					logLines = append(logLines, metricsStyle.Render(metric))
 				} else if strings.HasPrefix(metric, "audio:") {
 					if idx := strings.Index(metric, "|"); idx > 0 {

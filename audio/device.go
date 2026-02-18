@@ -36,10 +36,14 @@ func SelectDevice(ctx Context) (*DeviceInfo, error) {
 		fmt.Print("\r\x1b[J")
 		fmt.Print("Select input device (↑/↓, Enter to confirm):\r\n\r\n")
 		for i, d := range devices {
+			btTag := ""
+			if IsBluetooth(d.Name) {
+				btTag = " \x1b[33m[⚠ Lower audio quality]\x1b[0m"
+			}
 			if i == cursor {
-				fmt.Printf("  \x1b[1;36m▶ %s\x1b[0m\r\n", d.Name)
+				fmt.Printf("  \x1b[1;36m▶ %s%s\x1b[0m\r\n", d.Name, btTag)
 			} else {
-				fmt.Printf("    %s\r\n", d.Name)
+				fmt.Printf("    %s%s\r\n", d.Name, btTag)
 			}
 		}
 	}
