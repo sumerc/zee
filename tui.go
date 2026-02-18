@@ -68,7 +68,7 @@ type tuiModel struct {
 	liveText          string // live streaming text (committed only)
 	history           []historyEntry
 	viewIdx           int  // 0 = newest, higher = older
-	expertMode        bool // show full TUI with HAL eye
+	debugMode        bool // show full TUI with HAL eye
 	hybridEnabled     bool // show hybrid help text when true
 	updateAvailable   string
 	bluetoothWarning  bool
@@ -144,8 +144,8 @@ func init() {
 	}
 }
 
-func NewTUIProgram(expertMode bool) *tea.Program {
-	m := tuiModel{expertMode: expertMode}
+func NewTUIProgram(debugMode bool) *tea.Program {
+	m := tuiModel{debugMode: debugMode}
 	return tea.NewProgram(m, tea.WithAltScreen())
 }
 
@@ -345,7 +345,7 @@ func (m tuiModel) View() string {
 	}
 
 	// Talk mode (expert only), shown under mic line
-	if m.expertMode {
+	if m.debugMode {
 		talk := "PTT"
 		if m.hybridEnabled {
 			talk = "hybrid"
@@ -365,7 +365,7 @@ func (m tuiModel) View() string {
 	}
 
 	// Percentile table (expert mode only)
-	if m.expertMode {
+	if m.debugMode {
 		if table := renderPercentileTable(); table != "" {
 			infoLines = append(infoLines, "")
 			tableStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
@@ -455,7 +455,7 @@ func (m tuiModel) View() string {
 		if len(entry.metrics) > 0 {
 			logLines = append(logLines, "")
 			for _, metric := range entry.metrics {
-				if m.expertMode {
+				if m.debugMode {
 					logLines = append(logLines, metricsStyle.Render(metric))
 				} else if strings.HasPrefix(metric, "audio:") {
 					if idx := strings.Index(metric, "|"); idx > 0 {

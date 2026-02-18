@@ -204,7 +204,7 @@ func run() {
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
-	expertFlag := flag.Bool("expert", false, "Show full TUI with HAL eye animation")
+	debugFlag := flag.Bool("debug", false, "Enable diagnostic and transcription logging")
 	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
 	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
@@ -212,7 +212,7 @@ func run() {
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hybridFlag := flag.Bool("hybrid", false, "Enable hybrid tap+hold recording mode")
 	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
-	tuiFlag := flag.Bool("tui", true, "Run with terminal UI")
+	tuiFlag := flag.Bool("tui", false, "Run with terminal UI")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -302,7 +302,7 @@ func run() {
 	}
 
 	// Daemonize in non-TUI mode: re-exec in background, return shell prompt
-	if !*tuiFlag && os.Getenv("_ZEE_BG") == "" {
+	if !*tuiFlag && !*testFlag && os.Getenv("_ZEE_BG") == "" {
 		args := os.Args[1:]
 		if *deviceFlag != "" {
 			args = append(args, "-device", *deviceFlag)
@@ -319,8 +319,8 @@ func run() {
 		os.Exit(0)
 	}
 
-	// Enable diagnostic logging in tray mode (always) or expert TUI mode
-	if !*tuiFlag || *expertFlag {
+	// Enable diagnostic and transcription logging only when -debug is set
+	if *debugFlag {
 		if err := log.Init(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not init logging: %v\n", err)
 		} else {
@@ -395,7 +395,7 @@ func run() {
 		tuiReadyOnce.Do(func() { close(tuiReady) })
 	} else {
 		tuiMu.Lock()
-		tuiProgram = NewTUIProgram(*expertFlag)
+		tuiProgram = NewTUIProgram(*debugFlag)
 		tuiMu.Unlock()
 
 		go func() {

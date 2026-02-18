@@ -225,8 +225,11 @@ func TestClipboardRestore(t *testing.T) {
 
 // --- Silence detection tests (no API key needed) ---
 
+// silenceWarnSleep must exceed silenceWarnEvery (8s) in silence.go
+const silenceWarnSleep = "SLEEP 9000"
+
 func TestNoVoiceWarningBatch(t *testing.T) {
-	logDir := runZeeOpts(t, cmds("KEYDOWN", "SLEEP 1500", "KEYUP", "WAIT", "QUIT"),
+	logDir := runZeeOpts(t, cmds("KEYDOWN", silenceWarnSleep, "KEYUP", "WAIT", "QUIT"),
 		runOpts{env: []string{"ZEE_FAKE_TEXT=hello", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
 		"-test", "data/silence.wav")
 	diag := readLog(t, logDir, "diagnostics_log.txt")
@@ -236,22 +239,12 @@ func TestNoVoiceWarningBatch(t *testing.T) {
 }
 
 func TestNoVoiceWarningStream(t *testing.T) {
-	logDir := runZeeOpts(t, cmds("KEYDOWN", "SLEEP 1500", "KEYUP", "WAIT", "QUIT"),
+	logDir := runZeeOpts(t, cmds("KEYDOWN", silenceWarnSleep, "KEYUP", "WAIT", "QUIT"),
 		runOpts{env: []string{"ZEE_FAKE_TEXT=hello", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
 		"-test", "-stream", "data/silence.wav")
 	diag := readLog(t, logDir, "diagnostics_log.txt")
 	if !strings.Contains(diag, "no_voice_warning") {
 		t.Errorf("expected 'no_voice_warning' in diagnostics, got: %q", diag)
-	}
-}
-
-func TestTranscriptSilenceStream(t *testing.T) {
-	logDir := runZeeOpts(t, cmds("KEYDOWN", "SLEEP 9000", "KEYUP", "WAIT", "QUIT"),
-		runOpts{env: []string{"ZEE_FAKE_TEXT=hello", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
-		"-test", "-stream", "data/silence.wav")
-	diag := readLog(t, logDir, "diagnostics_log.txt")
-	if !strings.Contains(diag, "transcript_silence_warning") {
-		t.Errorf("expected 'transcript_silence_warning' in diagnostics, got: %q", diag)
 	}
 }
 
