@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Note:** SES9000 - push-to-talk transcription app. Runs as a system tray icon on macOS with optional terminal UI (`-expert` for HAL 9000 eye animation).
+**Note:** zee - push-to-talk transcription app. Runs as a system tray icon on macOS with optional terminal UI (`-tui` flag).
 
 ## Build & Run
 

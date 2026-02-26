@@ -140,8 +140,8 @@ func SetProviders(p []Provider, onSwitch func(string)) {
 	providerMu.Unlock()
 }
 
-func SetLastRecording(dur time.Duration) {
-	updateCopyLastTitle(fmt.Sprintf("Copy Last Recorded Text (%.1fs)", dur.Seconds()))
+func SetLastRecording(dur time.Duration, totalMs float64) {
+	updateCopyLastTitle(fmt.Sprintf("Copy Last Recorded Text (%.1fs | %dms)", dur.Seconds(), int(totalMs)))
 }
 
 func SetUpdateAvailable(version string) {

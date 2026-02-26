@@ -796,7 +796,13 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 		lastText = result.Text
 		transcriptionsMu.Unlock()
 		log.TranscriptionText(result.Text)
-		tray.SetLastRecording(recDur)
+		var totalMs float64
+		if result.Batch != nil {
+			totalMs = result.Batch.TotalTimeMs
+		} else if result.Stream != nil {
+			totalMs = result.Stream.TotalMs
+		}
+		tray.SetLastRecording(recDur, totalMs)
 	}
 }
 

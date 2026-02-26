@@ -20,10 +20,11 @@ var (
 func init() {
 	transparent := color.RGBA{A: 0}
 	red := color.RGBA{R: 255, G: 59, B: 48, A: 255}
-	iconIdle = renderIcon(22, &transparent, 22.0/8)
-	iconIdleHi = renderIcon(44, &transparent, 44.0/8)
-	iconRecHi = renderIcon(44, &red, 44.0/6.5)
-	iconWarnHi = renderWarnIcon(44, &red, 44.0/6.5)
+	dotR := 44.0 / 6.5
+	iconIdle = renderIcon(22, &transparent, 22.0/8, nil, 0)
+	iconIdleHi = renderIcon(44, &transparent, 44.0/8, nil, 0)
+	iconRecHi = renderIcon(44, &red, dotR, nil, 0)
+	iconWarnHi = renderWarnIcon(44, &red, dotR, nil, 0)
 }
 
 func encodePNG(img image.Image) []byte {
@@ -34,13 +35,15 @@ func encodePNG(img image.Image) []byte {
 	return buf.Bytes()
 }
 
-func drawCircleIcon(img *image.RGBA, size int, dot *color.RGBA, dotR float64) {
+func drawCircleIcon(img *image.RGBA, size int, dot *color.RGBA, dotR float64, inner *color.RGBA, innerR float64) {
 	cx, cy := float64(size)/2, float64(size)/2
 	r := float64(size)/2 - 1
 	for y := range size {
 		for x := range size {
 			d := math.Hypot(float64(x)+0.5-cx, float64(y)+0.5-cy)
-			if dot != nil && d <= dotR {
+			if inner != nil && d <= innerR {
+				img.Set(x, y, inner)
+			} else if dot != nil && d <= dotR {
 				img.Set(x, y, dot)
 			} else if d <= r {
 				img.Set(x, y, color.Black)
@@ -49,15 +52,15 @@ func drawCircleIcon(img *image.RGBA, size int, dot *color.RGBA, dotR float64) {
 	}
 }
 
-func renderIcon(size int, dot *color.RGBA, dotR float64) []byte {
+func renderIcon(size int, dot *color.RGBA, dotR float64, inner *color.RGBA, innerR float64) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	drawCircleIcon(img, size, dot, dotR)
+	drawCircleIcon(img, size, dot, dotR, inner, innerR)
 	return encodePNG(img)
 }
 
-func renderWarnIcon(size int, dot *color.RGBA, dotR float64) []byte {
+func renderWarnIcon(size int, dot *color.RGBA, dotR float64, inner *color.RGBA, innerR float64) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	drawCircleIcon(img, size, dot, dotR)
+	drawCircleIcon(img, size, dot, dotR, inner, innerR)
 
 	// Small yellow badge with "!" in bottom-right corner
 	s := float64(size)
