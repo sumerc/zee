@@ -32,6 +32,9 @@ var (
 	autoPasteOn bool
 	autoPasteCb func(bool)
 
+	loginOn bool
+	loginCb func(bool)
+
 	providerMu    sync.Mutex
 	providers     []Provider
 	providerCb    func(string)
@@ -89,6 +92,8 @@ func OnCopyLast(fn func())            { copyLastFn = fn }
 func OnRecord(start, stop func())     { recordFn = start; stopFn = stop }
 func SetAutoPaste(on bool)            { autoPasteOn = on }
 func OnAutoPaste(fn func(bool))       { autoPasteCb = fn }
+func SetLogin(on bool)                { loginOn = on }
+func OnLogin(fn func(bool))          { loginCb = fn }
 
 func SetRecording(rec bool) {
 	recording = rec

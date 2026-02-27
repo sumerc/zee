@@ -18,6 +18,7 @@ var (
 
 	mSettings  *systray.MenuItem
 	mAutoPaste *systray.MenuItem
+	mLogin     *systray.MenuItem
 	mBackend   *systray.MenuItem
 	mLanguage  *systray.MenuItem
 	langItems  []*systray.MenuItem
@@ -186,6 +187,18 @@ func onReady() {
 		}
 		if autoPasteCb != nil {
 			autoPasteCb(mAutoPaste.Checked())
+		}
+	})
+
+	mLogin = mSettings.AddSubMenuItemCheckbox("Start on Login", "Launch zee when you log in", loginOn)
+	mLogin.Click(func() {
+		if mLogin.Checked() {
+			mLogin.Uncheck()
+		} else {
+			mLogin.Check()
+		}
+		if loginCb != nil {
+			loginCb(mLogin.Checked())
 		}
 	})
 

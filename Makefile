@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean release
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean release icns app
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -31,8 +31,14 @@ test-integration:
 	ZEE_TEST_BIN="$$tmp/zee-test-bin" go test -race -tags integration -v -timeout 120s -count=1 ./test/ ; \
 	status=$$? ; rm -rf "$$tmp" ; exit $$status
 
+icns:
+	packaging/mkicns.sh packaging/appicon.png
+
+app: build icns
+	packaging/mkdmg.sh zee $(VERSION) Zee-$(VERSION).dmg
+
 clean:
-	rm -f zee
+	rm -f zee Zee-*.dmg
 
 release: test test-integration
 	@latest=$$(gh release view --json tagName -q .tagName 2>/dev/null || echo "none"); \

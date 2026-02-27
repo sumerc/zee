@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"flag"
 	"fmt"
-	"math"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -13,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +22,7 @@ import (
 	"zee/encoder"
 	"zee/hotkey"
 	"zee/log"
+	"zee/login"
 	"zee/shutdown"
 	"zee/transcriber"
 	"zee/tray"
@@ -33,38 +31,14 @@ import (
 
 var version = "dev"
 
-
 var activeTranscriber transcriber.Transcriber
 var autoPaste bool
 var transcriptionsMu sync.Mutex
-var transcriptions []TranscriptionRecord
-var percentileStats PercentileStats
+var transcriptionCount int
 var streamEnabled bool
 var activeFormat string
 var lastText string
 
-type PercentileStats struct {
-	TotalMs  [5]float64 // min, p50, p90, p95, max
-	EncodeMs [5]float64
-	TLSMs    [5]float64
-	CompPct  [5]float64
-}
-
-type TranscriptionRecord struct {
-	AudioLengthS     float64
-	RawSizeKB        float64
-	CompressedSizeKB float64
-	CompressionPct   float64
-	EncodeTimeMs     float64
-	DNSTimeMs        float64
-	TLSTimeMs        float64
-	TTFBMs           float64
-	TotalTimeMs      float64
-	MemoryAllocMB    float64
-	MemoryPeakMB     float64
-}
-
-var deviceSelectChan = make(chan struct{}, 1)
 var trayRecordChan = make(chan struct{}, 1)
 var trayStopMu sync.Mutex
 var trayStopChan chan struct{}
@@ -74,50 +48,21 @@ var shutdownOnce sync.Once
 func gracefulShutdown() {
 	shutdownOnce.Do(func() {
 		transcriptionsMu.Lock()
-		n := len(transcriptions)
+		n := transcriptionCount
 		transcriptionsMu.Unlock()
 		if n > 0 {
 			log.SessionEnd(n)
 		}
 		log.Close()
 		tray.Quit()
-		if tuiProgram != nil {
-			tuiProgram.Quit()
-		}
 		os.Exit(0)
 	})
-}
-
-func deviceLineText(dev *audio.DeviceInfo) string {
-	name := "system default"
-	suffix := ""
-	if dev != nil {
-		name = dev.Name
-		if audio.IsBluetooth(dev.Name) {
-			suffix = " (BT!)"
-		}
-	}
-	return "mic: " + name + suffix + " (ctrl+g)"
-}
-
-func modeLineText() string {
-	providerLabel := activeTranscriber.Name()
-	if lang := activeTranscriber.GetLanguage(); lang != "" {
-		providerLabel += " (" + lang + ")"
-	}
-	formatLabel := activeFormat
-	if streamEnabled {
-		providerLabel += " (stream)"
-		formatLabel = "PCM16"
-	}
-	return fmt.Sprintf("[%s | %s]", formatLabel, providerLabel)
 }
 
 func reportRecordingError(err error) {
 	if err == nil {
 		return
 	}
-	logToTUI("Error recording: %v", err)
 	log.Errorf("recording error: %v", err)
 	tray.SetError(err.Error())
 }
@@ -212,7 +157,6 @@ func run() {
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hybridFlag := flag.Bool("hybrid", false, "Enable hybrid tap+hold recording mode")
 	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
-	tuiFlag := flag.Bool("tui", false, "Run with terminal UI")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -301,8 +245,8 @@ func run() {
 		ctx.Close()
 	}
 
-	// Daemonize in non-TUI mode: re-exec in background, return shell prompt
-	if !*tuiFlag && !*testFlag && os.Getenv("_ZEE_BG") == "" {
+	// Daemonize: re-exec in background, return shell prompt
+	if !*testFlag && os.Getenv("_ZEE_BG") == "" {
 		args := os.Args[1:]
 		if *deviceFlag != "" {
 			args = append(args, "-device", *deviceFlag)
@@ -390,25 +334,6 @@ func run() {
 	}
 	defer captureDevice.Close()
 
-	// Start TUI
-	if !*tuiFlag {
-		tuiReadyOnce.Do(func() { close(tuiReady) })
-	} else {
-		tuiMu.Lock()
-		tuiProgram = NewTUIProgram(*debugFlag)
-		tuiMu.Unlock()
-
-		go func() {
-			if _, err := tuiProgram.Run(); err != nil {
-				log.Errorf("TUI error: %v", err)
-				os.Exit(1)
-			}
-			gracefulShutdown()
-		}()
-
-		<-tuiReady
-	}
-
 	tray.OnCopyLast(func() {
 		transcriptionsMu.Lock()
 		text := lastText
@@ -457,16 +382,27 @@ func run() {
 		if lang := *langFlag; lang != "" {
 			activeTranscriber.SetLanguage(lang)
 		}
-		tuiSend(ModeLineMsg{Text: modeLineText()})
 	})
 
 	tray.SetLanguage(*langFlag, func(code string) {
 		activeTranscriber.SetLanguage(code)
-		tuiSend(ModeLineMsg{Text: modeLineText()})
 	})
+	tray.SetLogin(login.Enabled())
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) { autoPaste = on })
+	tray.OnLogin(func(on bool) {
+		var err error
+		if on {
+			err = login.Enable()
+		} else {
+			err = login.Disable()
+		}
+		if err != nil {
+			log.Errorf("login toggle: %v", err)
+			tray.SetError(err.Error())
+		}
+	})
 
 	// Poll for device changes (hotplug)
 	go func() {
@@ -491,12 +427,10 @@ func run() {
 				selName = selectedDevice.Name
 			}
 			if selName != "" && !slices.Contains(names, selName) {
-				// Selected device disappeared — fall back to default
 				log.Info("device_disconnected: " + selName)
 				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
 				selName = ""
 			} else if selName == "" && preferredDevice != "" && slices.Contains(names, preferredDevice) {
-				// Preferred device reappeared — auto-reconnect
 				log.Info("device_reconnected: " + preferredDevice)
 				switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, preferredDevice)
 				selName = preferredDevice
@@ -507,7 +441,6 @@ func run() {
 
 	update.StartBackgroundCheck(version, log.Dir(), func(rel update.Release) {
 		log.Info("update_available: " + rel.Version)
-		tuiSend(UpdateAvailableMsg{Version: rel.Version})
 		tray.SetUpdateAvailable(rel.Version)
 	})
 
@@ -531,11 +464,6 @@ func run() {
 	}
 	defer hk.Unregister()
 
-	tuiSend(ModeLineMsg{Text: modeLineText()})
-	tuiSend(DeviceLineMsg{Text: deviceLineText(selectedDevice)})
-	tuiSend(BluetoothWarningMsg{IsBT: selectedDevice != nil && audio.IsBluetooth(selectedDevice.Name)})
-	tuiSend(HybridHelpMsg{Enabled: *hybridFlag})
-
 	logRecordDevice := func() {
 		log.Info("recording_device: " + captureDevice.DeviceName())
 	}
@@ -543,7 +471,6 @@ func run() {
 	startTrayRecording := func() {
 		log.Info("tray_record_start")
 		logRecordDevice()
-		tuiSend(RecordingStartMsg{})
 		tray.SetRecording(true)
 		go beep.PlayStart()
 
@@ -560,7 +487,6 @@ func run() {
 			case ev := <-hy.Start():
 				log.Info("hotkey_start_" + string(ev.Mode))
 				logRecordDevice()
-				tuiSend(RecordingStartMsg{})
 				tray.SetRecording(true)
 				go beep.PlayStart()
 
@@ -571,9 +497,6 @@ func run() {
 
 			case <-trayRecordChan:
 				startTrayRecording()
-
-			case <-deviceSelectChan:
-				handleDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice)
 			}
 		}
 	} else {
@@ -581,7 +504,6 @@ func run() {
 			select {
 			case <-hk.Keydown():
 				log.Info("hotkey_down")
-				tuiSend(RecordingStartMsg{})
 				tray.SetRecording(true)
 				go beep.PlayStart()
 
@@ -592,29 +514,8 @@ func run() {
 
 			case <-trayRecordChan:
 				startTrayRecording()
-
-			case <-deviceSelectChan:
-				handleDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice)
 			}
 		}
-	}
-}
-
-func handleDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, captureDevice *audio.CaptureDevice, selectedDevice **audio.DeviceInfo) {
-	if tuiProgram != nil {
-		tuiProgram.ReleaseTerminal()
-	}
-	newDevice, err := selectDevice(ctx)
-	if tuiProgram != nil {
-		tuiProgram.RestoreTerminal()
-	}
-
-	if err != nil {
-		log.Warnf("device selection failed: %v", err)
-		return
-	}
-	if newDevice != nil {
-		applyDeviceSwitch(ctx, captureConfig, captureDevice, selectedDevice, newDevice)
 	}
 }
 
@@ -647,8 +548,6 @@ func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, cap
 	}
 	*captureDevice = newCapture
 	*selectedDevice = newDevice
-	tuiSend(DeviceLineMsg{Text: deviceLineText(newDevice)})
-	tuiSend(BluetoothWarningMsg{IsBT: newDevice != nil && audio.IsBluetooth(newDevice.Name)})
 }
 
 func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggleFn func() bool) (<-chan struct{}, error) {
@@ -674,7 +573,6 @@ func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggle
 		defer close(updatesDone)
 		var prev string
 		for text := range sess.Updates() {
-			tuiSend(LiveTranscriptionMsg{Text: text})
 			if autoPaste {
 				delta := text[len(prev):]
 				if delta != "" {
@@ -708,17 +606,15 @@ func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggle
 
 func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDone <-chan struct{}, skipPaste bool, recDur time.Duration) {
 	result, closeErr := sess.Close()
-	<-updatesDone // wait for updates goroutine to drain
+	<-updatesDone
 
 	var clipPrev string
 	if autoPaste {
 		clipPrev = <-clipCh
 	}
-	tuiSend(LiveTranscriptionMsg{Text: ""})
 
 	if closeErr != nil {
 		log.Errorf("transcription error: %v", closeErr)
-		logToTUI("Error: %v", closeErr)
 		tray.SetError(closeErr.Error())
 	}
 
@@ -738,15 +634,8 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 		return
 	}
 
-	displayText := result.Text
-	if result.NoSpeech {
-		displayText = "(no speech detected)"
-	}
-	tuiSend(TranscriptionMsg{Text: displayText, Metrics: result.Metrics, NoSpeech: result.NoSpeech})
-
 	if result.RateLimit != "" && result.RateLimit != "?/?" {
 		log.Info("rate_limit: " + result.RateLimit)
-		tuiSend(RateLimitMsg{Text: "requests: " + result.RateLimit + " remaining"})
 	}
 
 	if result.NoSpeech {
@@ -755,7 +644,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 
 	if result.Batch != nil {
 		bs := result.Batch
-		record := TranscriptionRecord{
+		m := log.Metrics{
 			AudioLengthS:     bs.AudioLengthS,
 			RawSizeKB:        bs.RawSizeKB,
 			CompressedSizeKB: bs.CompressedSizeKB,
@@ -769,10 +658,9 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 			MemoryPeakMB:     result.MemoryPeakMB,
 		}
 		transcriptionsMu.Lock()
-		transcriptions = append(transcriptions, record)
-		updatePercentileStats()
+		transcriptionCount++
 		transcriptionsMu.Unlock()
-		log.TranscriptionMetrics(log.Metrics(record), activeFormat, activeFormat, activeTranscriber.Name(), bs.ConnReused, bs.TLSProtocol)
+		log.TranscriptionMetrics(m, activeFormat, activeFormat, activeTranscriber.Name(), bs.ConnReused, bs.TLSProtocol)
 		log.Confidence(bs.Confidence)
 	}
 
@@ -836,14 +724,6 @@ func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.
 		}
 
 		if len(data) > 1 {
-			var sumSquares float64
-			for i := 0; i+1 < len(data); i += 2 {
-				sample := int16(binary.LittleEndian.Uint16(data[i:]))
-				normalized := float64(sample) / 32768.0
-				sumSquares += normalized * normalized
-			}
-			rms := math.Sqrt(sumSquares / float64(len(data)/2))
-			tuiSend(AudioLevelMsg{Level: rms})
 			vp.Process(data)
 		}
 	})
@@ -858,7 +738,6 @@ func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.
 	}
 
 	mon := newSilenceMonitor(isToggle)
-	recordStart := time.Now()
 	go func() {
 		ticker := time.NewTicker(tickInterval)
 		defer ticker.Stop()
@@ -867,23 +746,18 @@ func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.
 			case <-done:
 				return
 			case <-ticker.C:
-				tuiSend(RecordingTickMsg{Duration: time.Since(recordStart).Seconds()})
 				switch mon.Tick(vp.HasSpeechTick()) {
 				case SilenceWarn:
 					log.Info("no_voice_warning")
-					tuiSend(NoVoiceWarningMsg{})
 					tray.SetWarning(true)
 					beep.PlayError()
 				case SilenceWarnClear:
-					tuiSend(VoiceClearedMsg{})
 					tray.SetWarning(false)
 				case SilenceRepeat:
 					log.Info("silence_during_warning")
-					tuiSend(NoVoiceWarningMsg{})
 					beep.PlayError()
 				case SilenceAutoClose:
 					log.Info("silence_auto_close")
-					tuiSend(SilenceAutoCloseMsg{})
 					tray.SetRecording(false)
 					go beep.PlayEnd()
 					time.Sleep(recordTail)
@@ -902,7 +776,6 @@ func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.
 			return
 		}
 		log.Info("recording_stop")
-		tuiSend(RecordingStopMsg{})
 		tray.SetRecording(false)
 		go beep.PlayEnd()
 		if streamEnabled {
@@ -921,42 +794,6 @@ func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.
 	bufMu.Unlock()
 
 	return frames, autoClosed.Load(), nil
-}
-
-func updatePercentileStats() {
-	n := len(transcriptions)
-	if n == 0 {
-		return
-	}
-
-	extract := func(fn func(TranscriptionRecord) float64) []float64 {
-		vals := make([]float64, n)
-		for i, r := range transcriptions {
-			vals[i] = fn(r)
-		}
-		sort.Float64s(vals)
-		return vals
-	}
-
-	percentile := func(sorted []float64, p float64) float64 {
-		idx := int(float64(len(sorted)-1) * p)
-		return sorted[idx]
-	}
-
-	calcStats := func(sorted []float64) [5]float64 {
-		return [5]float64{
-			sorted[0],
-			percentile(sorted, 0.50),
-			percentile(sorted, 0.90),
-			percentile(sorted, 0.95),
-			sorted[len(sorted)-1],
-		}
-	}
-
-	percentileStats.TotalMs = calcStats(extract(func(r TranscriptionRecord) float64 { return r.TotalTimeMs }))
-	percentileStats.EncodeMs = calcStats(extract(func(r TranscriptionRecord) float64 { return r.EncodeTimeMs }))
-	percentileStats.TLSMs = calcStats(extract(func(r TranscriptionRecord) float64 { return r.TLSTimeMs }))
-	percentileStats.CompPct = calcStats(extract(func(r TranscriptionRecord) float64 { return r.CompressionPct }))
 }
 
 func runBenchmark(wavFile string, runs int) {

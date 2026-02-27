@@ -66,7 +66,7 @@ func runTestMode(wavPath string) {
 			case "WAIT_AUDIO_DONE":
 				<-fakeCapture.AudioDone()
 			case "QUIT":
-				log.SessionEnd(len(transcriptions))
+				log.SessionEnd(transcriptionCount)
 				os.Exit(0)
 			default:
 				if strings.HasPrefix(cmd, "SLEEP ") {
