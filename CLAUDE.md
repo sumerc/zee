@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Note:** zee - push-to-talk transcription app. Runs as a system tray icon on macOS with optional terminal UI (`-tui` flag).
+**Note:** zee - push-to-talk transcription app. Runs as a system tray icon on macOS.
 
 ## Build & Run
 
@@ -22,7 +22,6 @@ make benchmark WAV=file.wav RUNS=5
 ## Flags
 
 - `-stream` - enable streaming transcription (Deepgram only)
-- `-tui` - show terminal UI (default: false, tray-only by default)
 - `-debug` - enable diagnostic and transcription logging (default: false)
 - `-hybrid` - tap-to-toggle + hold-to-talk on the same hotkey
 - `-format <mp3@16|mp3@64|flac>` - audio format (default: mp3@16)
@@ -44,7 +43,6 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 
 **Files:**
 - `main.go` - hotkey handling, audio capture, recording logic, panic recovery
-- `tui.go` - optional terminal UI with HAL 9000 eye animation (Bubble Tea + lipgloss)
 - `tray/` - system tray icon, menus (devices, providers, languages, auto-paste), dynamic icons
 - `encoder/` - AudioEncoder interface, FLAC, MP3, and Adaptive implementations
 - `transcriber/` - Groq and DeepGram API clients with shared TracedClient for HTTP timing metrics
@@ -62,7 +60,7 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 ## Design Philosophy
 
 - **Unix philosophy packages** - Each subfolder is a self-contained utility that does one thing: `beep/` plays sounds, `clipboard/` copies and pastes, `audio/` captures mic input, `transcriber/` talks to STT APIs, `hotkey/` registers global keys. They expose a minimal interface and hide all platform/provider details behind build tags.
-- **Root files are pure business logic** - `main.go`, `tui.go`, and other root files orchestrate the workflow but never import OS-specific APIs or know implementation details of subpackages. When `main.go` calls `clipboard.Paste()`, it doesn't know whether that's pbcopy, xclip, or Win32 — and it shouldn't. Same for `beep.PlayEnd()`, `audio.Start()`, `transcriber.Transcribe()`, etc.
+- **Root files are pure business logic** - `main.go` and other root files orchestrate the workflow but never import OS-specific APIs or know implementation details of subpackages. When `main.go` calls `clipboard.Paste()`, it doesn't know whether that's pbcopy, xclip, or Win32 — and it shouldn't. Same for `beep.PlayEnd()`, `audio.Start()`, `transcriber.Transcribe()`, etc.
 - **No leaky abstractions** - Never add provider-specific, OS-specific, or library-specific logic to root files. If a new STT provider needs special handling, that belongs in `transcriber/`. If a new platform needs a different paste mechanism, that belongs in `clipboard/`.
 - **Shared constants in one place** - No duplicate magic numbers; extract to package-level constants.
 

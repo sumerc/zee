@@ -7,7 +7,6 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
@@ -232,7 +231,6 @@ func run() {
 		activeTranscriber.SetLanguage(*langFlag)
 	}
 
-	// Resolve -setup into -device early (before daemonization)
 	if *setupFlag && *deviceFlag == "" {
 		ctx, err := audio.NewContext()
 		if err != nil {
@@ -243,24 +241,6 @@ func run() {
 			*deviceFlag = dev.Name
 		}
 		ctx.Close()
-	}
-
-	// Daemonize: re-exec in background, return shell prompt
-	if !*testFlag && os.Getenv("_ZEE_BG") == "" {
-		args := os.Args[1:]
-		if *deviceFlag != "" {
-			args = append(args, "-device", *deviceFlag)
-		}
-		exe, _ := os.Executable()
-		cmd := exec.Command(exe, args...)
-		cmd.Env = append(os.Environ(), "_ZEE_BG=1")
-		devnull, _ := os.Open(os.DevNull)
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
-		if err := cmd.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
 	}
 
 	// Enable diagnostic and transcription logging only when -debug is set

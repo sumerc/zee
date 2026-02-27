@@ -49,8 +49,6 @@ func Enable() error {
 	<string>Aqua</string>
 	<key>EnvironmentVariables</key>
 	<dict>
-		<key>_ZEE_BG</key>
-		<string>1</string>
 %s	</dict>
 </dict>
 </plist>
