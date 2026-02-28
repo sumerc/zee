@@ -148,7 +148,7 @@ func run() {
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
-	debugFlag := flag.Bool("debug", false, "Enable diagnostic and transcription logging")
+	debugFlag := flag.Bool("debug", true, "Enable diagnostic and transcription logging")
 	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
 	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
@@ -330,6 +330,8 @@ func run() {
 	preferredDevice := ""
 	if selectedDevice != nil {
 		preferredDevice = selectedDevice.Name
+	} else {
+		preferredDevice = captureDevice.DeviceName()
 	}
 	tray.SetBTCheck(audio.IsBluetooth)
 	if devices, err := ctx.Devices(); err == nil && len(devices) > 0 {
@@ -345,19 +347,24 @@ func run() {
 	tray.SetAutoPaste(autoPaste)
 
 	groqKey := os.Getenv("GROQ_API_KEY")
+	openaiKey := os.Getenv("OPENAI_API_KEY")
 	dgKey := os.Getenv("DEEPGRAM_API_KEY")
 	tray.SetProviders([]tray.Provider{
 		{Name: "groq", Label: "Groq", HasKey: groqKey != "", Active: activeTranscriber.Name() == "groq"},
+		{Name: "openai", Label: "OpenAI", HasKey: openaiKey != "", Active: activeTranscriber.Name() == "openai"},
 		{Name: "deepgram", Label: "Deepgram (stream)", HasKey: dgKey != "", Active: activeTranscriber.Name() == "deepgram"},
 	}, func(name string) {
 		switch name {
 		case "groq":
 			activeTranscriber = transcriber.NewGroq(groqKey)
-			streamEnabled = false
-			activeFormat = *formatFlag
+		case "openai":
+			activeTranscriber = transcriber.NewOpenAI(openaiKey)
 		case "deepgram":
 			activeTranscriber = transcriber.NewDeepgram(dgKey)
-			streamEnabled = true
+		}
+		streamEnabled = name == "deepgram"
+		if !streamEnabled {
+			activeFormat = *formatFlag
 		}
 		if lang := *langFlag; lang != "" {
 			activeTranscriber.SetLanguage(lang)

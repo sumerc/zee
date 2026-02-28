@@ -27,7 +27,7 @@ func Enable() error {
 	}
 
 	var envEntries string
-	for _, key := range []string{"GROQ_API_KEY", "DEEPGRAM_API_KEY"} {
+	for _, key := range []string{"GROQ_API_KEY", "OPENAI_API_KEY", "DEEPGRAM_API_KEY"} {
 		if v := os.Getenv(key); v != "" {
 			envEntries += fmt.Sprintf("\t\t\t<key>%s</key>\n\t\t\t<string>%s</string>\n", key, v)
 		}

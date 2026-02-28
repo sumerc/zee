@@ -83,14 +83,18 @@ func New() (Transcriber, error) {
 	}
 
 	dgKey := os.Getenv("DEEPGRAM_API_KEY")
+	openaiKey := os.Getenv("OPENAI_API_KEY")
 	groqKey := os.Getenv("GROQ_API_KEY")
 
 	if dgKey != "" {
 		return NewDeepgram(dgKey), nil
 	}
+	if openaiKey != "" {
+		return NewOpenAI(openaiKey), nil
+	}
 	if groqKey != "" {
 		return NewGroq(groqKey), nil
 	}
 
-	return nil, fmt.Errorf("set DEEPGRAM_API_KEY or GROQ_API_KEY environment variable")
+	return nil, fmt.Errorf("set DEEPGRAM_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY environment variable")
 }
