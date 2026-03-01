@@ -154,7 +154,7 @@ func run() {
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
-	hybridFlag := flag.Bool("hybrid", false, "Enable hybrid tap+hold recording mode")
+	hybridFlag := flag.Bool("hybrid", true, "Enable hybrid tap+hold recording mode")
 	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
 	flag.Parse()
 
@@ -330,14 +330,15 @@ func run() {
 	preferredDevice := ""
 	if selectedDevice != nil {
 		preferredDevice = selectedDevice.Name
-	} else {
-		preferredDevice = captureDevice.DeviceName()
 	}
 	tray.SetBTCheck(audio.IsBluetooth)
 	if devices, err := ctx.Devices(); err == nil && len(devices) > 0 {
 		names := make([]string, len(devices))
 		for i := range devices {
 			names[i] = devices[i].Name
+		}
+		if preferredDevice == "" {
+			preferredDevice = names[0]
 		}
 		tray.SetDevices(names, preferredDevice, func(name string) {
 			preferredDevice = name
