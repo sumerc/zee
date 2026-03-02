@@ -610,14 +610,12 @@ func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggle
 		defer close(updatesDone)
 		var prev string
 		for text := range sess.Updates() {
-			if cfg.autoPaste {
+			if cfg.autoPaste && len(text) > len(prev) {
 				delta := text[len(prev):]
-				if delta != "" {
-					clipboardMu.Lock()
-					clipboard.Copy(delta)
-					clipboard.Paste()
-					clipboardMu.Unlock()
-				}
+				clipboardMu.Lock()
+				clipboard.Copy(delta)
+				clipboard.Paste()
+				clipboardMu.Unlock()
 			}
 			prev = text
 		}

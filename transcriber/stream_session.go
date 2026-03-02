@@ -195,10 +195,7 @@ func (s *streamSession) Close() (SessionResult, error) {
 	finalText := s.committed
 	s.mu.Unlock()
 	if finalText != "" {
-		select {
-		case s.updates <- finalText:
-		default:
-		}
+		s.updates <- finalText
 	}
 	close(s.updates)
 
