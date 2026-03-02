@@ -37,6 +37,19 @@ var transcriptionCount int
 var streamEnabled bool
 var activeFormat string
 var lastText string
+var clipboardMu sync.Mutex
+var clipRestoreCancel func()
+var clipRestoreMu sync.Mutex
+
+type recordingConfig struct {
+	tr        transcriber.Transcriber
+	stream    bool
+	format    string
+	lang      string
+	autoPaste bool
+}
+
+var configMu sync.Mutex
 
 var trayRecordChan = make(chan struct{}, 1)
 var trayStopMu sync.Mutex
@@ -357,30 +370,45 @@ func run() {
 		{Name: "openai", Label: "OpenAI", HasKey: openaiKey != "", Active: activeTranscriber.Name() == "openai"},
 		{Name: "deepgram", Label: "Deepgram (stream)", HasKey: dgKey != "", Active: activeTranscriber.Name() == "deepgram"},
 	}, func(name string) {
+		configMu.Lock()
+		defer configMu.Unlock()
+
+		currentLang := activeTranscriber.GetLanguage()
+
+		var newTr transcriber.Transcriber
 		switch name {
 		case "groq":
-			activeTranscriber = transcriber.NewGroq(groqKey)
+			newTr = transcriber.NewGroq(groqKey)
 		case "openai":
-			activeTranscriber = transcriber.NewOpenAI(openaiKey)
+			newTr = transcriber.NewOpenAI(openaiKey)
 		case "deepgram":
-			activeTranscriber = transcriber.NewDeepgram(dgKey)
+			newTr = transcriber.NewDeepgram(dgKey)
 		}
+		if newTr == nil {
+			return
+		}
+		newTr.SetLanguage(currentLang)
+
+		activeTranscriber = newTr
 		streamEnabled = name == "deepgram"
 		if !streamEnabled {
 			activeFormat = *formatFlag
 		}
-		if lang := *langFlag; lang != "" {
-			activeTranscriber.SetLanguage(lang)
-		}
 	})
 
 	tray.SetLanguage(*langFlag, func(code string) {
+		configMu.Lock()
 		activeTranscriber.SetLanguage(code)
+		configMu.Unlock()
 	})
 	tray.SetLogin(login.Enabled())
 
 	trayQuit := tray.Init()
-	tray.OnAutoPaste(func(on bool) { autoPaste = on })
+	tray.OnAutoPaste(func(on bool) {
+		configMu.Lock()
+		autoPaste = on
+		configMu.Unlock()
+	})
 	tray.OnLogin(func(on bool) error {
 		var err error
 		if on {
@@ -542,17 +570,35 @@ func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, cap
 }
 
 func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggleFn func() bool) (<-chan struct{}, error) {
-	sess, err := activeTranscriber.NewSession(context.Background(), transcriber.SessionConfig{
-		Stream:   streamEnabled,
-		Format:   activeFormat,
-		Language: activeTranscriber.GetLanguage(),
+	// Cancel any pending clipboard restore from a previous recording
+	clipRestoreMu.Lock()
+	if clipRestoreCancel != nil {
+		clipRestoreCancel()
+		clipRestoreCancel = nil
+	}
+	clipRestoreMu.Unlock()
+
+	configMu.Lock()
+	cfg := recordingConfig{
+		tr:        activeTranscriber,
+		stream:    streamEnabled,
+		format:    activeFormat,
+		lang:      activeTranscriber.GetLanguage(),
+		autoPaste: autoPaste,
+	}
+	configMu.Unlock()
+
+	sess, err := cfg.tr.NewSession(context.Background(), transcriber.SessionConfig{
+		Stream:   cfg.stream,
+		Format:   cfg.format,
+		Language: cfg.lang,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	clipCh := make(chan string, 1)
-	if autoPaste {
+	if cfg.autoPaste {
 		go func() {
 			prev, _ := clipboard.Read()
 			clipCh <- prev
@@ -564,18 +610,20 @@ func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggle
 		defer close(updatesDone)
 		var prev string
 		for text := range sess.Updates() {
-			if autoPaste {
+			if cfg.autoPaste {
 				delta := text[len(prev):]
 				if delta != "" {
+					clipboardMu.Lock()
 					clipboard.Copy(delta)
 					clipboard.Paste()
+					clipboardMu.Unlock()
 				}
 			}
 			prev = text
 		}
 	}()
 
-	totalFrames, silenceClose, err := record(capture, stop, sess, isToggleFn)
+	totalFrames, silenceClose, err := record(capture, stop, sess, isToggleFn, cfg.stream)
 
 	if err != nil {
 		sess.Close()
@@ -589,18 +637,18 @@ func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggle
 	recDur := time.Duration(float64(totalFrames) / float64(encoder.SampleRate) * float64(time.Second))
 	done := make(chan struct{})
 	go func() {
-		finishTranscription(sess, clipCh, updatesDone, silenceClose, recDur)
+		finishTranscription(sess, clipCh, updatesDone, silenceClose, recDur, cfg)
 		close(done)
 	}()
 	return done, nil
 }
 
-func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDone <-chan struct{}, skipPaste bool, recDur time.Duration) {
+func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDone <-chan struct{}, skipPaste bool, recDur time.Duration, cfg recordingConfig) {
 	result, closeErr := sess.Close()
 	<-updatesDone
 
 	var clipPrev string
-	if autoPaste {
+	if cfg.autoPaste {
 		clipPrev = <-clipCh
 	}
 
@@ -609,15 +657,27 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 		tray.SetError(closeErr.Error())
 	}
 
-	if closeErr == nil && !streamEnabled && result.HasText && autoPaste && !skipPaste {
+	if closeErr == nil && !cfg.stream && result.HasText && cfg.autoPaste && !skipPaste {
+		clipboardMu.Lock()
 		clipboard.Copy(result.Text)
 		clipboard.Paste()
+		clipboardMu.Unlock()
 	}
 
-	if autoPaste && !skipPaste && clipPrev != "" {
+	if cfg.autoPaste && !skipPaste && clipPrev != "" {
+		cancelled := make(chan struct{})
+		clipRestoreMu.Lock()
+		clipRestoreCancel = func() { close(cancelled) }
+		clipRestoreMu.Unlock()
+
 		go func() {
-			time.Sleep(600 * time.Millisecond)
-			clipboard.Copy(clipPrev)
+			select {
+			case <-time.After(600 * time.Millisecond):
+				clipboardMu.Lock()
+				clipboard.Copy(clipPrev)
+				clipboardMu.Unlock()
+			case <-cancelled:
+			}
 		}()
 	}
 
@@ -651,13 +711,14 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 		transcriptionsMu.Lock()
 		transcriptionCount++
 		transcriptionsMu.Unlock()
-		log.TranscriptionMetrics(m, activeFormat, activeFormat, activeTranscriber.Name(), bs.ConnReused, bs.TLSProtocol)
+		log.TranscriptionMetrics(m, cfg.format, cfg.format, cfg.tr.Name(), bs.ConnReused, bs.TLSProtocol)
 		log.Confidence(bs.Confidence)
 	}
 
 	if result.Stream != nil {
 		ss := result.Stream
 		log.StreamMetrics(log.StreamMetricsData{
+			Provider:     cfg.tr.Name(),
 			ConnectMs:    ss.ConnectMs,
 			FinalizeMs:   ss.FinalizeMs,
 			TotalMs:      ss.TotalMs,
@@ -685,7 +746,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	}
 }
 
-func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.Session, isToggleFn func() bool) (uint64, bool, error) {
+func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.Session, isToggleFn func() bool, stream bool) (uint64, bool, error) {
 	vp, err := newVADProcessor()
 	if err != nil {
 		return 0, false, fmt.Errorf("VAD init: %w", err)
@@ -709,9 +770,7 @@ func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.
 		bufMu.Unlock()
 
 		if len(data) > 0 {
-			pcm := make([]byte, len(data))
-			copy(pcm, data)
-			sess.Feed(pcm)
+			sess.Feed(data)
 		}
 
 		if len(data) > 1 {
@@ -769,7 +828,7 @@ func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.
 		log.Info("recording_stop")
 		tray.SetRecording(false)
 		go beep.PlayEnd()
-		if streamEnabled {
+		if stream {
 			time.Sleep(recordTail)
 		}
 		closeDone()

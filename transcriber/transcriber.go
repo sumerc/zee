@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -67,11 +68,20 @@ type baseTranscriber struct {
 	client *TracedClient
 	apiURL string
 	lang   string
+	langMu sync.RWMutex
 }
 
-func (b *baseTranscriber) SetLanguage(lang string) { b.lang = lang }
+func (b *baseTranscriber) SetLanguage(lang string) {
+	b.langMu.Lock()
+	b.lang = lang
+	b.langMu.Unlock()
+}
 
-func (b *baseTranscriber) GetLanguage() string { return b.lang }
+func (b *baseTranscriber) GetLanguage() string {
+	b.langMu.RLock()
+	defer b.langMu.RUnlock()
+	return b.lang
+}
 
 func New() (Transcriber, error) {
 	if fakeText, ok := os.LookupEnv("ZEE_FAKE_TEXT"); ok {

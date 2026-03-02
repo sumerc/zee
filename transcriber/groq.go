@@ -32,9 +32,6 @@ func (g *Groq) NewSession(_ context.Context, cfg SessionConfig) (Session, error)
 	if cfg.Stream {
 		return nil, fmt.Errorf("groq does not support streaming transcription")
 	}
-	if cfg.Language != "" {
-		g.SetLanguage(cfg.Language)
-	}
 	return newBatchSession(cfg, g.transcribe)
 }
 
@@ -52,7 +49,7 @@ type groqResponse struct {
 	} `json:"segments"`
 }
 
-func (g *Groq) transcribe(audioData []byte, format string) (*Result, error) {
+func (g *Groq) transcribe(audioData []byte, format, lang string) (*Result, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -66,8 +63,8 @@ func (g *Groq) transcribe(audioData []byte, format string) (*Result, error) {
 
 	writer.WriteField("model", "whisper-large-v3-turbo")
 	writer.WriteField("response_format", "verbose_json")
-	if g.lang != "" {
-		writer.WriteField("language", g.lang)
+	if lang != "" {
+		writer.WriteField("language", lang)
 	}
 	writer.Close()
 
