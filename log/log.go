@@ -11,13 +11,14 @@ import (
 )
 
 var (
-	diagLog        zerolog.Logger
-	diagFile       *os.File
-	transcribeFile *os.File
-	logMu          sync.Mutex
-	logReady       bool
-	pid            int
-	dir            string
+	diagLog          zerolog.Logger
+	diagFile         *os.File
+	transcribeFile   *os.File
+	logMu            sync.Mutex
+	logReady         bool
+	transcribeOn     bool
+	pid              int
+	dir              string
 )
 
 type Metrics struct {
@@ -79,6 +80,8 @@ func EnsureDir() error {
 	return nil
 }
 
+func SetTranscribeEnabled(on bool) { transcribeOn = on }
+
 func Init() error {
 	logMu.Lock()
 	defer logMu.Unlock()
@@ -97,11 +100,13 @@ func Init() error {
 		return err
 	}
 
-	transcribePath := filepath.Join(dir, "transcribe_log.txt")
-	transcribeFile, err = os.OpenFile(transcribePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		diagFile.Close()
-		return err
+	if transcribeOn {
+		transcribePath := filepath.Join(dir, "transcribe_log.txt")
+		transcribeFile, err = os.OpenFile(transcribePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			diagFile.Close()
+			return err
+		}
 	}
 
 	consoleWriter := zerolog.ConsoleWriter{
@@ -192,7 +197,7 @@ func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused b
 }
 
 func TranscriptionText(text string) {
-	if !logReady {
+	if !logReady || transcribeFile == nil {
 		return
 	}
 	logMu.Lock()

@@ -4,9 +4,11 @@ package login
 
 import (
 	"fmt"
+	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const plistName = "com.zee.app.plist"
@@ -26,10 +28,10 @@ func Enable() error {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
 
-	var envEntries string
+	var env strings.Builder
 	for _, key := range []string{"GROQ_API_KEY", "OPENAI_API_KEY", "DEEPGRAM_API_KEY"} {
 		if v := os.Getenv(key); v != "" {
-			envEntries += fmt.Sprintf("\t\t\t<key>%s</key>\n\t\t\t<string>%s</string>\n", key, v)
+			fmt.Fprintf(&env, "\t\t\t<key>%s</key>\n\t\t\t<string>%s</string>\n", key, html.EscapeString(v))
 		}
 	}
 
@@ -52,19 +54,22 @@ func Enable() error {
 %s	</dict>
 </dict>
 </plist>
-`, plistName, exe, envEntries)
+`, plistName, html.EscapeString(exe), env.String())
 
-	dir := filepath.Dir(plistPath())
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	path := plistPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create LaunchAgents dir: %w", err)
 	}
 
-	if err := os.WriteFile(plistPath(), []byte(plist), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(plist), 0600); err != nil {
 		return fmt.Errorf("write plist: %w", err)
 	}
 
-	if out, err := exec.Command("launchctl", "load", plistPath()).CombinedOutput(); err != nil {
-		return fmt.Errorf("launchctl load: %w (%s)", err, out)
+	domain := fmt.Sprintf("gui/%d", os.Getuid())
+	// Bootout first in case service is already loaded (re-enable scenario)
+	exec.Command("launchctl", "bootout", domain, path).Run()
+	if out, err := exec.Command("launchctl", "bootstrap", domain, path).CombinedOutput(); err != nil {
+		return fmt.Errorf("launchctl bootstrap: %w (%s)", err, out)
 	}
 	return nil
 }
@@ -74,7 +79,8 @@ func Disable() error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}
-	exec.Command("launchctl", "unload", path).Run()
+	domain := fmt.Sprintf("gui/%d", os.Getuid())
+	exec.Command("launchctl", "bootout", domain, path).Run()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove plist: %w", err)
 	}

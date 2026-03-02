@@ -192,13 +192,16 @@ func onReady() {
 
 	mLogin = mSettings.AddSubMenuItemCheckbox("Start on Login", "Launch zee when you log in", loginOn)
 	mLogin.Click(func() {
-		if mLogin.Checked() {
-			mLogin.Uncheck()
-		} else {
-			mLogin.Check()
-		}
+		want := !mLogin.Checked()
 		if loginCb != nil {
-			loginCb(mLogin.Checked())
+			if err := loginCb(want); err != nil {
+				return
+			}
+		}
+		if want {
+			mLogin.Check()
+		} else {
+			mLogin.Uncheck()
 		}
 	})
 

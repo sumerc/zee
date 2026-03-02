@@ -55,7 +55,9 @@ func (o *OpenAI) transcribe(audioData []byte, format string) (*Result, error) {
 	if o.lang != "" {
 		writer.WriteField("language", o.lang)
 	}
-	writer.Close()
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
 
 	req, err := http.NewRequest("POST", o.apiURL, &body)
 	if err != nil {

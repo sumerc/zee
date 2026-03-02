@@ -148,7 +148,8 @@ func run() {
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
-	debugFlag := flag.Bool("debug", true, "Enable diagnostic and transcription logging")
+	debugFlag := flag.Bool("debug", true, "Enable diagnostic logging (timing, errors, events)")
+	debugTranscribeFlag := flag.Bool("debug-transcribe", false, "Enable transcription text logging")
 	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
 	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
@@ -243,8 +244,8 @@ func run() {
 		ctx.Close()
 	}
 
-	// Enable diagnostic and transcription logging only when -debug is set
 	if *debugFlag {
+		log.SetTranscribeEnabled(*debugTranscribeFlag)
 		if err := log.Init(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not init logging: %v\n", err)
 		} else {
@@ -379,7 +380,7 @@ func run() {
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) { autoPaste = on })
-	tray.OnLogin(func(on bool) {
+	tray.OnLogin(func(on bool) error {
 		var err error
 		if on {
 			err = login.Enable()
@@ -390,6 +391,7 @@ func run() {
 			log.Errorf("login toggle: %v", err)
 			tray.SetError(err.Error())
 		}
+		return err
 	})
 
 	// Poll for device changes (hotplug)
