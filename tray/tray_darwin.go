@@ -12,9 +12,10 @@ import (
 var (
 	mRecord     *systray.MenuItem
 	mCopy       *systray.MenuItem
-	mDevices    *systray.MenuItem
-	deviceItems []*systray.MenuItem
-	deviceReady chan struct{}
+	mDevices       *systray.MenuItem
+	mDefaultDevice *systray.MenuItem
+	deviceItems    []*systray.MenuItem
+	deviceReady    chan struct{}
 
 	mSettings  *systray.MenuItem
 	mAutoPaste *systray.MenuItem
@@ -82,8 +83,6 @@ func addDeviceItem(parent *systray.MenuItem, idx int, name string, checked bool)
 	item := parent.AddSubMenuItemCheckbox(label, label, checked)
 	item.Click(func() {
 		deviceMu.Lock()
-		// Use current name from deviceNames, not the captured name
-		// (RefreshDevices may have changed the title)
 		currentName := ""
 		if idx < len(deviceNames) {
 			currentName = deviceNames[idx]
@@ -94,6 +93,9 @@ func addDeviceItem(parent *systray.MenuItem, idx int, name string, checked bool)
 			cb(currentName)
 		}
 		deviceMu.Lock()
+		if mDefaultDevice != nil {
+			mDefaultDevice.Uncheck()
+		}
 		for _, it := range deviceItems {
 			it.Uncheck()
 		}
@@ -116,6 +118,14 @@ func RefreshDevices(names []string, selected string) {
 
 	deviceNames = names
 	deviceSel = selected
+
+	if mDefaultDevice != nil {
+		if selected == "" {
+			mDefaultDevice.Check()
+		} else {
+			mDefaultDevice.Uncheck()
+		}
+	}
 
 	for i, item := range deviceItems {
 		if i < len(names) {
@@ -172,6 +182,21 @@ func onReady() {
 	mDevices = mSettings.AddSubMenuItem("Devices", "Select input device")
 
 	deviceMu.Lock()
+	mDefaultDevice = mDevices.AddSubMenuItemCheckbox("System Default", "Use system default device", deviceSel == "")
+	mDefaultDevice.Click(func() {
+		deviceMu.Lock()
+		cb := deviceCb
+		deviceMu.Unlock()
+		if cb != nil {
+			cb("")
+		}
+		deviceMu.Lock()
+		for _, it := range deviceItems {
+			it.Uncheck()
+		}
+		mDefaultDevice.Check()
+		deviceMu.Unlock()
+	})
 	deviceItems = make([]*systray.MenuItem, 0, len(deviceNames))
 	for i, name := range deviceNames {
 		item := addDeviceItem(mDevices, i, name, name == deviceSel)

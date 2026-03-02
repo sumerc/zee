@@ -338,12 +338,13 @@ func run() {
 		for i := range devices {
 			names[i] = devices[i].Name
 		}
-		if preferredDevice == "" {
-			preferredDevice = names[0]
-		}
-		tray.SetDevices(names, preferredDevice, func(name string) {
+			tray.SetDevices(names, preferredDevice, func(name string) {
 			preferredDevice = name
-			switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, name)
+			if name == "" {
+				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
+			} else {
+				switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, name)
+			}
 		})
 	}
 	tray.SetAutoPaste(autoPaste)

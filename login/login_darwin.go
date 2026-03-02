@@ -3,8 +3,8 @@
 package login
 
 import (
+	"encoding/xml"
 	"fmt"
-	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,12 +13,26 @@ import (
 
 const plistName = "com.zee.app.plist"
 
-func plistPath() string {
-	return filepath.Join(os.Getenv("HOME"), "Library", "LaunchAgents", plistName)
+func xmlEscape(s string) string {
+	var b strings.Builder
+	xml.EscapeText(&b, []byte(s))
+	return b.String()
+}
+
+func plistPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "Library", "LaunchAgents", plistName), nil
 }
 
 func Enabled() bool {
-	_, err := os.Stat(plistPath())
+	path, err := plistPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
 	return err == nil
 }
 
@@ -31,7 +45,7 @@ func Enable() error {
 	var env strings.Builder
 	for _, key := range []string{"GROQ_API_KEY", "OPENAI_API_KEY", "DEEPGRAM_API_KEY"} {
 		if v := os.Getenv(key); v != "" {
-			fmt.Fprintf(&env, "\t\t\t<key>%s</key>\n\t\t\t<string>%s</string>\n", key, html.EscapeString(v))
+			fmt.Fprintf(&env, "\t\t\t<key>%s</key>\n\t\t\t<string>%s</string>\n", key, xmlEscape(v))
 		}
 	}
 
@@ -54,9 +68,12 @@ func Enable() error {
 %s	</dict>
 </dict>
 </plist>
-`, plistName, html.EscapeString(exe), env.String())
+`, plistName, xmlEscape(exe), env.String())
 
-	path := plistPath()
+	path, err := plistPath()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create LaunchAgents dir: %w", err)
 	}
@@ -66,7 +83,6 @@ func Enable() error {
 	}
 
 	domain := fmt.Sprintf("gui/%d", os.Getuid())
-	// Bootout first in case service is already loaded (re-enable scenario)
 	exec.Command("launchctl", "bootout", domain, path).Run()
 	if out, err := exec.Command("launchctl", "bootstrap", domain, path).CombinedOutput(); err != nil {
 		return fmt.Errorf("launchctl bootstrap: %w (%s)", err, out)
@@ -75,7 +91,10 @@ func Enable() error {
 }
 
 func Disable() error {
-	path := plistPath()
+	path, err := plistPath()
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}

@@ -18,7 +18,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINARY" "$APP/Contents/MacOS/zee"
 chmod +x "$APP/Contents/MacOS/zee"
 
-sed "s/__VERSION__/$VERSION/g" "$SCRIPT_DIR/Info.plist" > "$APP/Contents/Info.plist"
+CLEAN_VERSION="${VERSION#v}"
+sed "s/__VERSION__/$CLEAN_VERSION/g" "$SCRIPT_DIR/Info.plist" > "$APP/Contents/Info.plist"
 
 if [ -f "$SCRIPT_DIR/Zee.icns" ]; then
 	cp "$SCRIPT_DIR/Zee.icns" "$APP/Contents/Resources/Zee.icns"

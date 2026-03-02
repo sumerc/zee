@@ -80,7 +80,11 @@ func EnsureDir() error {
 	return nil
 }
 
-func SetTranscribeEnabled(on bool) { transcribeOn = on }
+func SetTranscribeEnabled(on bool) {
+	logMu.Lock()
+	transcribeOn = on
+	logMu.Unlock()
+}
 
 func Init() error {
 	logMu.Lock()
