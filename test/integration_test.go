@@ -74,7 +74,7 @@ func runZee(t *testing.T, stdin string, args ...string) (logDir string) {
 func runZeeOpts(t *testing.T, stdin string, opts runOpts, args ...string) (logDir string) {
 	t.Helper()
 	logDir = t.TempDir()
-	cmdArgs := append([]string{"-logpath", logDir}, args...)
+	cmdArgs := append([]string{"-logpath", logDir, "-debug-transcribe"}, args...)
 
 	cmd := exec.Command(testBinary, cmdArgs...)
 	cmd.Stdin = strings.NewReader(stdin)
