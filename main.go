@@ -36,10 +36,6 @@ var transcriptionsMu sync.Mutex
 var transcriptionCount int
 var streamEnabled bool
 var activeFormat string
-var lastText string
-var clipboardMu sync.Mutex
-var clipRestoreCancel func()
-var clipRestoreMu sync.Mutex
 
 type recSession struct {
 	Stop         <-chan struct{}
@@ -75,8 +71,6 @@ func gracefulShutdown() {
 		os.Exit(0)
 	})
 }
-
-const recordTail = 500 * time.Millisecond
 
 func newTrayStop() <-chan struct{} {
 	trayStopMu.Lock()
@@ -324,14 +318,7 @@ func run() {
 	}
 	defer captureDevice.Close()
 
-	tray.OnCopyLast(func() {
-		transcriptionsMu.Lock()
-		text := lastText
-		transcriptionsMu.Unlock()
-		if text != "" {
-			clipboard.Copy(text)
-		}
-	})
+	tray.OnCopyLast(clip.CopyLast)
 	tray.OnRecord(
 		func() { select { case trayRecordChan <- struct{}{}: default: } },
 		func() { fireTrayStop() },
@@ -576,13 +563,7 @@ func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, cap
 }
 
 func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struct{}, error) {
-	// Cancel any pending clipboard restore from a previous recording
-	clipRestoreMu.Lock()
-	if clipRestoreCancel != nil {
-		clipRestoreCancel()
-		clipRestoreCancel = nil
-	}
-	clipRestoreMu.Unlock()
+	clip.CancelRestore()
 
 	configMu.Lock()
 	cfg := recordingConfig{
@@ -603,12 +584,10 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		return nil, err
 	}
 
+	// Save clipboard before recording overwrites it (async to not delay capture start)
 	clipCh := make(chan string, 1)
 	if cfg.autoPaste {
-		go func() {
-			prev, _ := clipboard.Read()
-			clipCh <- prev
-		}()
+		go func() { clipCh <- clip.SaveCurrent() }()
 	}
 
 	updatesDone := make(chan struct{})
@@ -617,31 +596,32 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		var prev string
 		for text := range tSess.Updates() {
 			if cfg.autoPaste && len(text) > len(prev) {
-				delta := text[len(prev):]
-				clipboardMu.Lock()
-				clipboard.Copy(delta)
-				clipboard.Paste()
-				clipboardMu.Unlock()
+				clip.PasteText(text[len(prev):])
 			}
 			prev = text
 		}
 	}()
 
-	totalFrames, silenceClosed, err := record(capture, sess.Stop, tSess, sess.SilenceClose, cfg.stream)
-
+	rec, err := newRecordingSession(capture, sess.Stop, tSess, sess.SilenceClose, cfg.stream)
 	if err != nil {
 		tSess.Close()
 		return nil, err
 	}
-	if totalFrames < uint64(encoder.SampleRate/10) {
+	if err := rec.Start(); err != nil {
+		tSess.Close()
+		return nil, err
+	}
+	rec.Wait()
+
+	if rec.totalFrames < uint64(encoder.SampleRate/10) {
 		tSess.Close()
 		return nil, nil
 	}
 
-	recDur := time.Duration(float64(totalFrames) / float64(encoder.SampleRate) * float64(time.Second))
+	recDur := time.Duration(float64(rec.totalFrames) / float64(encoder.SampleRate) * float64(time.Second))
 	done := make(chan struct{})
 	go func() {
-		finishTranscription(tSess, clipCh, updatesDone, silenceClosed, recDur, cfg)
+		finishTranscription(tSess, clipCh, updatesDone, rec.autoClosed.Load(), recDur, cfg)
 		close(done)
 	}()
 	return done, nil
@@ -662,27 +642,11 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	}
 
 	if closeErr == nil && !cfg.stream && result.HasText && cfg.autoPaste && !skipPaste {
-		clipboardMu.Lock()
-		clipboard.Copy(result.Text)
-		clipboard.Paste()
-		clipboardMu.Unlock()
+		clip.PasteText(result.Text)
 	}
 
-	if cfg.autoPaste && !skipPaste && clipPrev != "" {
-		cancelled := make(chan struct{})
-		clipRestoreMu.Lock()
-		clipRestoreCancel = func() { close(cancelled) }
-		clipRestoreMu.Unlock()
-
-		go func() {
-			select {
-			case <-time.After(600 * time.Millisecond):
-				clipboardMu.Lock()
-				clipboard.Copy(clipPrev)
-				clipboardMu.Unlock()
-			case <-cancelled:
-			}
-		}()
+	if cfg.autoPaste && !skipPaste {
+		clip.ScheduleRestore(clipPrev)
 	}
 
 	if closeErr != nil {
@@ -736,9 +700,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	}
 
 	if !result.NoSpeech {
-		transcriptionsMu.Lock()
-		lastText = result.Text
-		transcriptionsMu.Unlock()
+		clip.SetLastText(result.Text)
 		log.TranscriptionText(result.Text)
 		var totalMs float64
 		if result.Batch != nil {
@@ -748,102 +710,6 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 		}
 		tray.SetLastRecording(recDur, totalMs)
 	}
-}
-
-func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.Session, silenceClose *atomic.Bool, stream bool) (uint64, bool, error) {
-	vp, err := newVADProcessor()
-	if err != nil {
-		return 0, false, fmt.Errorf("VAD init: %w", err)
-	}
-
-	var bufMu sync.Mutex
-	var totalFrames uint64
-	var stopped bool
-	var autoClosed atomic.Bool
-	done := make(chan struct{})
-	var closeOnce sync.Once
-	closeDone := func() { closeOnce.Do(func() { close(done) }) }
-
-	capture.SetCallback(func(data []byte, frameCount uint32) {
-		bufMu.Lock()
-		if stopped {
-			bufMu.Unlock()
-			return
-		}
-		totalFrames += uint64(frameCount)
-		bufMu.Unlock()
-
-		if len(data) > 0 {
-			sess.Feed(data)
-		}
-
-		if len(data) > 1 {
-			vp.Process(data)
-		}
-	})
-
-	if err := capture.Start(); err != nil {
-		capture.ClearCallback()
-		return 0, false, err
-	}
-
-	mon := newSilenceMonitor(silenceClose)
-	go func() {
-		ticker := time.NewTicker(tickInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				switch mon.Tick(vp.HasSpeechTick()) {
-				case SilenceWarn:
-					log.Info("no_voice_warning")
-					tray.SetWarning(true)
-					beep.PlayError()
-				case SilenceWarnClear:
-					tray.SetWarning(false)
-				case SilenceRepeat:
-					log.Info("silence_during_warning")
-					beep.PlayError()
-				case SilenceAutoClose:
-					log.Info("silence_auto_close")
-					tray.SetRecording(false)
-					go beep.PlayEnd()
-					time.Sleep(recordTail)
-					autoClosed.Store(true)
-					closeDone()
-					return
-				}
-			}
-		}
-	}()
-
-	go func() {
-		select {
-		case <-stop:
-		case <-done:
-			return
-		}
-		log.Info("recording_stop")
-		tray.SetRecording(false)
-		go beep.PlayEnd()
-		if stream {
-			time.Sleep(recordTail)
-		}
-		closeDone()
-	}()
-	<-done
-
-	capture.Stop()
-	capture.ClearCallback()
-
-	bufMu.Lock()
-	stopped = true
-	frames := totalFrames
-	bufMu.Unlock()
-
-	return frames, autoClosed.Load(), nil
 }
 
 func runBenchmark(wavFile string, runs int) {
