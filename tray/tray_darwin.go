@@ -44,12 +44,12 @@ func updateRecordingIcon(rec bool) {
 	if rec {
 		systray.SetIcon(iconRecHi)
 		if mRecord != nil {
-			mRecord.SetTitle("Stop Recording")
+			mRecord.SetTitle("🔴 Stop Recording (Shift+Control+Space)")
 		}
 	} else {
 		systray.SetTemplateIcon(iconIdleHi, iconIdle)
 		if mRecord != nil {
-			mRecord.SetTitle("Start Recording")
+			mRecord.SetTitle("○ Start Recording (Shift+Control+Space)")
 		}
 	}
 }
@@ -154,17 +154,7 @@ func onReady() {
 	systray.SetTemplateIcon(iconIdleHi, iconIdle)
 	systray.SetTooltip("zee – push to talk")
 
-	mCopy = systray.AddMenuItem("Copy Last Recorded Text", "Copy last transcription to clipboard")
-	mCopy.Disable()
-	mCopy.Click(func() {
-		if copyLastFn != nil {
-			copyLastFn()
-		}
-	})
-
-	systray.AddSeparator()
-
-	mRecord = systray.AddMenuItem("Start Recording", "Start or stop recording")
+	mRecord = systray.AddMenuItem("○ Start Recording (Shift+Control+Space)", "Start or stop recording")
 	mRecord.Click(func() {
 		if recording {
 			if stopFn != nil {
@@ -176,6 +166,18 @@ func onReady() {
 			}
 		}
 	})
+
+	systray.AddSeparator()
+
+	mCopy = systray.AddMenuItem("Copy Last Recorded Text", "Copy last transcription to clipboard")
+	mCopy.Disable()
+	mCopy.Click(func() {
+		if copyLastFn != nil {
+			copyLastFn()
+		}
+	})
+
+	systray.AddSeparator()
 
 	mSettings = systray.AddMenuItem("Settings", "Settings")
 

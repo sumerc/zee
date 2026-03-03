@@ -41,6 +41,11 @@ var clipboardMu sync.Mutex
 var clipRestoreCancel func()
 var clipRestoreMu sync.Mutex
 
+type recSession struct {
+	Stop         <-chan struct{}
+	SilenceClose *atomic.Bool
+}
+
 type recordingConfig struct {
 	tr        transcriber.Transcriber
 	stream    bool
@@ -69,14 +74,6 @@ func gracefulShutdown() {
 		tray.Quit()
 		os.Exit(0)
 	})
-}
-
-func reportRecordingError(err error) {
-	if err == nil {
-		return
-	}
-	log.Errorf("recording error: %v", err)
-	tray.SetError(err.Error())
 }
 
 const recordTail = 500 * time.Millisecond
@@ -168,7 +165,6 @@ func run() {
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
-	hybridFlag := flag.Bool("hybrid", true, "Enable hybrid tap+hold recording mode")
 	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
 	flag.Parse()
 
@@ -487,53 +483,63 @@ func run() {
 		log.Info("recording_device: " + captureDevice.DeviceName())
 	}
 
-	startTrayRecording := func() {
-		log.Info("tray_record_start")
+	sessions := make(chan recSession, 1)
+	go listenHotkey(hk, *longPressFlag, sessions)
+
+	go func() {
+		for range trayRecordChan {
+			stop := mergeStop(newTrayStop())
+			sessions <- recSession{Stop: stop, SilenceClose: &atomic.Bool{}}
+		}
+	}()
+
+	for sess := range sessions {
+		log.Info("recording_start")
 		logRecordDevice()
 		tray.SetRecording(true)
 		go beep.PlayStart()
 
-		stop := mergeStop(newTrayStop())
-		_, err := handleRecording(captureDevice, stop, nil)
+		_, err := handleRecording(captureDevice, sess)
 		tray.SetRecording(false)
-		reportRecordingError(err)
-	}
-
-	if *hybridFlag {
-		hy := hotkey.NewHybrid(hk, *longPressFlag)
-		for {
-			select {
-			case ev := <-hy.Start():
-				log.Info("hotkey_start_" + string(ev.Mode))
-				logRecordDevice()
-				tray.SetRecording(true)
-				go beep.PlayStart()
-
-				stop := mergeStop(hy.StopChan(), newTrayStop())
-				_, err := handleRecording(captureDevice, stop, hy.IsToggle)
-				tray.SetRecording(false)
-				reportRecordingError(err)
-
-			case <-trayRecordChan:
-				startTrayRecording()
-			}
+		if err != nil {
+			log.Errorf("recording error: %v", err)
+			tray.SetError(err.Error())
 		}
-	} else {
-		for {
+	}
+}
+
+func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- recSession) {
+	type state int
+	const (
+		idle state = iota
+		toggleRecording
+	)
+
+	stopCh := make(chan struct{}, 1)
+	st := idle
+	for {
+		switch st {
+		case idle:
+			<-hk.Keydown()
+			sc := &atomic.Bool{}
+			stop := mergeStop(stopCh, newTrayStop())
+			sessions <- recSession{Stop: stop, SilenceClose: sc}
+			timer := time.NewTimer(longPress)
 			select {
-			case <-hk.Keydown():
-				log.Info("hotkey_down")
-				tray.SetRecording(true)
-				go beep.PlayStart()
-
-				stop := mergeStop(hk.Keyup(), newTrayStop())
-				_, err := handleRecording(captureDevice, stop, nil)
-				tray.SetRecording(false)
-				reportRecordingError(err)
-
-			case <-trayRecordChan:
-				startTrayRecording()
+			case <-timer.C:
+				<-hk.Keyup()
+				select { case stopCh <- struct{}{}: default: }
+				st = idle
+			case <-hk.Keyup():
+				if !timer.Stop() { select { case <-timer.C: default: } }
+				sc.Store(true)
+				st = toggleRecording
 			}
+		case toggleRecording:
+			<-hk.Keydown()
+			<-hk.Keyup()
+			select { case stopCh <- struct{}{}: default: }
+			st = idle
 		}
 	}
 }
@@ -569,7 +575,7 @@ func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, cap
 	*selectedDevice = newDevice
 }
 
-func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggleFn func() bool) (<-chan struct{}, error) {
+func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struct{}, error) {
 	// Cancel any pending clipboard restore from a previous recording
 	clipRestoreMu.Lock()
 	if clipRestoreCancel != nil {
@@ -588,7 +594,7 @@ func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggle
 	}
 	configMu.Unlock()
 
-	sess, err := cfg.tr.NewSession(context.Background(), transcriber.SessionConfig{
+	tSess, err := cfg.tr.NewSession(context.Background(), transcriber.SessionConfig{
 		Stream:   cfg.stream,
 		Format:   cfg.format,
 		Language: cfg.lang,
@@ -609,7 +615,7 @@ func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggle
 	go func() {
 		defer close(updatesDone)
 		var prev string
-		for text := range sess.Updates() {
+		for text := range tSess.Updates() {
 			if cfg.autoPaste && len(text) > len(prev) {
 				delta := text[len(prev):]
 				clipboardMu.Lock()
@@ -621,21 +627,21 @@ func handleRecording(capture audio.CaptureDevice, stop <-chan struct{}, isToggle
 		}
 	}()
 
-	totalFrames, silenceClose, err := record(capture, stop, sess, isToggleFn, cfg.stream)
+	totalFrames, silenceClosed, err := record(capture, sess.Stop, tSess, sess.SilenceClose, cfg.stream)
 
 	if err != nil {
-		sess.Close()
+		tSess.Close()
 		return nil, err
 	}
 	if totalFrames < uint64(encoder.SampleRate/10) {
-		sess.Close()
+		tSess.Close()
 		return nil, nil
 	}
 
 	recDur := time.Duration(float64(totalFrames) / float64(encoder.SampleRate) * float64(time.Second))
 	done := make(chan struct{})
 	go func() {
-		finishTranscription(sess, clipCh, updatesDone, silenceClose, recDur, cfg)
+		finishTranscription(tSess, clipCh, updatesDone, silenceClosed, recDur, cfg)
 		close(done)
 	}()
 	return done, nil
@@ -744,7 +750,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	}
 }
 
-func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.Session, isToggleFn func() bool, stream bool) (uint64, bool, error) {
+func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.Session, silenceClose *atomic.Bool, stream bool) (uint64, bool, error) {
 	vp, err := newVADProcessor()
 	if err != nil {
 		return 0, false, fmt.Errorf("VAD init: %w", err)
@@ -781,11 +787,7 @@ func record(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.
 		return 0, false, err
 	}
 
-	isToggle := func() bool {
-		return isToggleFn != nil && isToggleFn()
-	}
-
-	mon := newSilenceMonitor(isToggle)
+	mon := newSilenceMonitor(silenceClose)
 	go func() {
 		ticker := time.NewTicker(tickInterval)
 		defer ticker.Stop()
