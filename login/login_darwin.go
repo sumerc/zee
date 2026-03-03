@@ -11,7 +11,11 @@ import (
 	"strings"
 )
 
-const plistName = "com.zee.app.plist"
+const (
+	plistName  = "com.zee.app.plist"
+	appBundle  = "/Applications/Zee.app/Contents/MacOS/zee"
+	bundleSig  = ".app/Contents/MacOS/"
+)
 
 func xmlEscape(s string) string {
 	var b strings.Builder
@@ -36,10 +40,24 @@ func Enabled() bool {
 	return err == nil
 }
 
-func Enable() error {
+func bundleExe() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("resolve executable: %w", err)
+		return "", fmt.Errorf("resolve executable: %w", err)
+	}
+	if strings.Contains(exe, bundleSig) {
+		return exe, nil
+	}
+	if _, err := os.Stat(appBundle); err == nil {
+		return appBundle, nil
+	}
+	return "", fmt.Errorf("Zee.app not found in /Applications — install it first")
+}
+
+func Enable() error {
+	exe, err := bundleExe()
+	if err != nil {
+		return err
 	}
 
 	var env strings.Builder
