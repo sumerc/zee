@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"zee/alert"
 	"zee/audio"
 	"zee/beep"
 	"zee/clipboard"
@@ -29,6 +30,13 @@ import (
 )
 
 var version = "dev"
+
+func fatal(msg string, args ...any) {
+	s := fmt.Sprintf(msg, args...)
+	fmt.Fprintln(os.Stderr, s)
+	alert.Show(s)
+	os.Exit(1)
+}
 
 var activeTranscriber transcriber.Transcriber
 var autoPaste bool
@@ -225,8 +233,7 @@ func run() {
 	var initErr error
 	activeTranscriber, initErr = transcriber.New()
 	if initErr != nil {
-		fmt.Printf("Error: %v\n", initErr)
-		os.Exit(1)
+		fatal("No API key set.\n\nSet GROQ_API_KEY, OPENAI_API_KEY, or DEEPGRAM_API_KEY.")
 	}
 	if activeTranscriber.Name() == "deepgram" {
 		streamEnabled = true
@@ -281,8 +288,7 @@ func run() {
 	ctx, err := audio.NewContext()
 	if err != nil {
 		log.Errorf("audio context init error: %v", err)
-		fmt.Printf("Error initializing audio context: %v\n", err)
-		os.Exit(1)
+		fatal("Failed to initialize audio: %v", err)
 	}
 	defer ctx.Close()
 
@@ -313,8 +319,7 @@ func run() {
 	captureDevice, err := ctx.NewCapture(selectedDevice, captureConfig)
 	if err != nil {
 		log.Errorf("capture device init error: %v", err)
-		fmt.Printf("Error initializing capture device: %v\n", err)
-		os.Exit(1)
+		fatal("Failed to initialize microphone: %v", err)
 	}
 	defer captureDevice.Close()
 
@@ -461,8 +466,7 @@ func run() {
 	hk := hotkey.New()
 	if err := hk.Register(); err != nil {
 		log.Errorf("hotkey register error: %v", err)
-		fmt.Printf("Error registering hotkey: %v\n", err)
-		os.Exit(1)
+		fatal("Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security.", err)
 	}
 	defer hk.Unregister()
 
