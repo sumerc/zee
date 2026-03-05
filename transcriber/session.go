@@ -52,10 +52,12 @@ type SessionResult struct {
 	MemoryPeakMB  float64
 	Batch         *BatchStats  // non-nil for batch sessions
 	Stream        *StreamStats // non-nil for stream sessions
-	Metrics       []string     // pre-formatted lines for TUI
+	Metrics       []string     // pre-formatted metric lines
 }
 
 type Session interface {
+	// Feed delivers raw PCM audio. Implementations must copy pcm before returning;
+	// the caller's buffer may be reused after Feed returns.
 	Feed(pcm []byte)
 	Updates() <-chan string
 	Close() (SessionResult, error)

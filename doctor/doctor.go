@@ -137,7 +137,8 @@ func checkMicAndTranscription() bool {
 	fmt.Println("Select transcription provider:")
 	fmt.Println("  1. Groq")
 	fmt.Println("  2. DeepGram")
-	fmt.Print("Choice [1/2]: ")
+	fmt.Println("  3. OpenAI")
+	fmt.Print("Choice [1/2/3]: ")
 
 	choice, _ := reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
@@ -148,6 +149,8 @@ func checkMicAndTranscription() bool {
 		provider = "groq"
 	case "2":
 		provider = "deepgram"
+	case "3":
+		provider = "openai"
 	default:
 		fmt.Printf("  FAIL: invalid choice %q\n", choice)
 		return false
@@ -169,6 +172,8 @@ func checkMicAndTranscription() bool {
 		trans = transcriber.NewGroq(apiKey)
 	case "deepgram":
 		trans = transcriber.NewDeepgram(apiKey)
+	case "openai":
+		trans = transcriber.NewOpenAI(apiKey)
 	}
 
 	fmt.Println()

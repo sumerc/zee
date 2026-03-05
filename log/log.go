@@ -5,19 +5,21 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
 )
 
 var (
-	diagLog        zerolog.Logger
-	diagFile       *os.File
-	transcribeFile *os.File
-	logMu          sync.Mutex
-	logReady       bool
-	pid            int
-	dir            string
+	diagLog          zerolog.Logger
+	diagFile         *os.File
+	transcribeFile   *os.File
+	logMu            sync.Mutex
+	logReady         atomic.Bool
+	transcribeOn     bool
+	pid              int
+	dir              string
 )
 
 type Metrics struct {
@@ -79,6 +81,12 @@ func EnsureDir() error {
 	return nil
 }
 
+func SetTranscribeEnabled(on bool) {
+	logMu.Lock()
+	transcribeOn = on
+	logMu.Unlock()
+}
+
 func Init() error {
 	logMu.Lock()
 	defer logMu.Unlock()
@@ -97,11 +105,13 @@ func Init() error {
 		return err
 	}
 
-	transcribePath := filepath.Join(dir, "transcribe_log.txt")
-	transcribeFile, err = os.OpenFile(transcribePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		diagFile.Close()
-		return err
+	if transcribeOn {
+		transcribePath := filepath.Join(dir, "transcribe_log.txt")
+		transcribeFile, err = os.OpenFile(transcribePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			diagFile.Close()
+			return err
+		}
 	}
 
 	consoleWriter := zerolog.ConsoleWriter{
@@ -111,7 +121,7 @@ func Init() error {
 	}
 	diagLog = zerolog.New(consoleWriter).With().Timestamp().Int("pid", pid).Logger()
 
-	logReady = true
+	logReady.Store(true)
 	return nil
 }
 
@@ -126,41 +136,41 @@ func Close() {
 		transcribeFile.Close()
 		transcribeFile = nil
 	}
-	logReady = false
+	logReady.Store(false)
 }
 
 func Info(msg string) {
-	if logReady {
+	if logReady.Load() {
 		diagLog.Info().Msg(msg)
 	}
 }
 
 func Error(msg string) {
-	if logReady {
+	if logReady.Load() {
 		diagLog.Error().Msg(msg)
 	}
 }
 
 func Errorf(format string, args ...any) {
-	if logReady {
-		diagLog.Error().Msg(fmt.Sprintf(format, args...))
+	if logReady.Load() {
+		diagLog.Error().Msgf(format, args...)
 	}
 }
 
 func Warn(msg string) {
-	if logReady {
+	if logReady.Load() {
 		diagLog.Warn().Msg(msg)
 	}
 }
 
 func Warnf(format string, args ...any) {
-	if logReady {
-		diagLog.Warn().Msg(fmt.Sprintf(format, args...))
+	if logReady.Load() {
+		diagLog.Warn().Msgf(format, args...)
 	}
 }
 
 func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused bool, tlsProto string) {
-	if !logReady {
+	if !logReady.Load() {
 		return
 	}
 
@@ -192,7 +202,7 @@ func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused b
 }
 
 func TranscriptionText(text string) {
-	if !logReady {
+	if !logReady.Load() || transcribeFile == nil {
 		return
 	}
 	logMu.Lock()
@@ -202,7 +212,7 @@ func TranscriptionText(text string) {
 }
 
 func Confidence(confidence float64) {
-	if !logReady {
+	if !logReady.Load() {
 		return
 	}
 	if confidence > 0 {
@@ -211,6 +221,7 @@ func Confidence(confidence float64) {
 }
 
 type StreamMetricsData struct {
+	Provider     string
 	ConnectMs    float64
 	FinalizeMs   float64
 	TotalMs      float64
@@ -223,10 +234,11 @@ type StreamMetricsData struct {
 }
 
 func StreamMetrics(m StreamMetricsData) {
-	if !logReady {
+	if !logReady.Load() {
 		return
 	}
 	diagLog.Info().
+		Str("provider", m.Provider).
 		Float64("connect_ms", m.ConnectMs).
 		Float64("finalize_ms", m.FinalizeMs).
 		Float64("total_ms", m.TotalMs).
@@ -240,7 +252,7 @@ func StreamMetrics(m StreamMetricsData) {
 }
 
 func SessionStart(provider, mode, format string) {
-	if !logReady {
+	if !logReady.Load() {
 		return
 	}
 	diagLog.Info().
@@ -251,7 +263,7 @@ func SessionStart(provider, mode, format string) {
 }
 
 func SessionEnd(count int) {
-	if !logReady {
+	if !logReady.Load() {
 		return
 	}
 	diagLog.Info().

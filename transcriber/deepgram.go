@@ -20,30 +20,33 @@ func NewDeepgram(apiKey string) *Deepgram {
 		baseTranscriber: baseTranscriber{
 			client: NewTracedClient(apiURL),
 			apiURL: apiURL,
+			model:  "nova-3",
 		},
 		apiKey: apiKey,
 	}
 }
 
 func (d *Deepgram) Name() string { return "deepgram" }
+var DeepgramModels = []ModelInfo{
+	{ID: "nova-3", Label: "Nova-3 (stream)", Stream: true},
+}
+
+func (d *Deepgram) Models() []ModelInfo { return DeepgramModels }
 
 func (d *Deepgram) NewSession(ctx context.Context, cfg SessionConfig) (Session, error) {
 	go d.client.Warm()
-	if cfg.Language != "" {
-		d.SetLanguage(cfg.Language)
-	}
 	if cfg.Stream {
-		return d.newStreamSession(ctx)
+		return d.newStreamSession(ctx, cfg.Language)
 	}
 	return newBatchSession(cfg, d.transcribe)
 }
 
-func (d *Deepgram) newStreamSession(ctx context.Context) (Session, error) {
+func (d *Deepgram) newStreamSession(ctx context.Context, lang string) (Session, error) {
 	dial := func() (rawStreamSession, error) {
 		return d.startStream(ctx, streamSessionConfig{
 			SampleRate: encoder.SampleRate,
 			Channels:   encoder.Channels,
-			Language:   d.lang,
+			Language:   lang,
 			Model:      "nova-3",
 		})
 	}
@@ -65,7 +68,7 @@ type deepgramResponse struct {
 	} `json:"results"`
 }
 
-func (d *Deepgram) transcribe(audioData []byte, format string) (*Result, error) {
+func (d *Deepgram) transcribe(audioData []byte, format, lang string) (*Result, error) {
 	contentType := "audio/flac"
 	if format == "mp3" {
 		contentType = "audio/mpeg"

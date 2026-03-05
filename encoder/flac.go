@@ -17,6 +17,7 @@ type FlacEncoder struct {
 	totalFrames uint64
 	encodeTime  time.Duration
 	mu          sync.Mutex
+	convBuf     []int32
 }
 
 func NewFlac() (*FlacEncoder, error) {
@@ -42,16 +43,19 @@ func (e *FlacEncoder) EncodeBlock(block []int16) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	samples32 := make([]int32, len(block))
+	if cap(e.convBuf) < len(block) {
+		e.convBuf = make([]int32, len(block))
+	}
+	e.convBuf = e.convBuf[:len(block)]
 	for i, s := range block {
-		samples32[i] = int32(s)
+		e.convBuf[i] = int32(s)
 	}
 
 	subframe := &frame.Subframe{
 		SubHeader: frame.SubHeader{
 			Pred: frame.PredVerbatim,
 		},
-		Samples:  samples32,
+		Samples:  e.convBuf,
 		NSamples: len(block),
 	}
 

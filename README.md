@@ -76,14 +76,14 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 |------|---------|-------------|
 | `-stream` | false | Real-time streaming transcription (Deepgram) |
 | `-format` | mp3@16 | Audio format: `mp3@16`, `mp3@64`, or `flac` |
-| `-hybrid` | false | Tap-to-toggle + hold-to-talk on the same hotkey |
+| `-hybrid` | true | Tap-to-toggle + hold-to-talk on the same hotkey |
 | `-longpress` | 350ms | Threshold distinguishing tap vs hold |
 | `-autopaste` | true | Auto-paste into focused window |
 | `-setup` | false | Select microphone device |
 | `-device` | (default) | Use named microphone device |
 | `-lang` | en | Language code (e.g., `en`, `es`, `fr`) |
 | `-tui` | false | Show terminal UI (tray-only by default) |
-| `-debug` | false | Enable diagnostic and transcription logging |
+| `-debug` | true | Enable diagnostic and transcription logging |
 | `-doctor` | false | Run system diagnostics and exit |
 | `-logpath` | OS-specific | Log directory (use `./` for current dir) |
 | `-profile` | - | pprof server address (e.g., `:6060`) |

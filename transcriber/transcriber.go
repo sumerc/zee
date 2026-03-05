@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -56,10 +57,19 @@ type Result struct {
 	Segments     []Segment
 }
 
+type ModelInfo struct {
+	ID     string
+	Label  string
+	Stream bool
+}
+
 type Transcriber interface {
 	Name() string
 	SetLanguage(lang string)
 	GetLanguage() string
+	Models() []ModelInfo
+	SetModel(model string)
+	GetModel() string
 	NewSession(ctx context.Context, cfg SessionConfig) (Session, error)
 }
 
@@ -67,11 +77,25 @@ type baseTranscriber struct {
 	client *TracedClient
 	apiURL string
 	lang   string
+	model  string
+	langMu sync.RWMutex
 }
 
-func (b *baseTranscriber) SetLanguage(lang string) { b.lang = lang }
+func (b *baseTranscriber) SetLanguage(lang string) {
+	b.langMu.Lock()
+	b.lang = lang
+	b.langMu.Unlock()
+}
 
-func (b *baseTranscriber) GetLanguage() string { return b.lang }
+func (b *baseTranscriber) GetLanguage() string {
+	b.langMu.RLock()
+	defer b.langMu.RUnlock()
+	return b.lang
+}
+
+func (b *baseTranscriber) Models() []ModelInfo  { return nil }
+func (b *baseTranscriber) SetModel(m string)   { b.model = m }
+func (b *baseTranscriber) GetModel() string    { return b.model }
 
 func New() (Transcriber, error) {
 	if fakeText, ok := os.LookupEnv("ZEE_FAKE_TEXT"); ok {
@@ -83,14 +107,18 @@ func New() (Transcriber, error) {
 	}
 
 	dgKey := os.Getenv("DEEPGRAM_API_KEY")
+	openaiKey := os.Getenv("OPENAI_API_KEY")
 	groqKey := os.Getenv("GROQ_API_KEY")
 
 	if dgKey != "" {
 		return NewDeepgram(dgKey), nil
 	}
+	if openaiKey != "" {
+		return NewOpenAI(openaiKey), nil
+	}
 	if groqKey != "" {
 		return NewGroq(groqKey), nil
 	}
 
-	return nil, fmt.Errorf("set DEEPGRAM_API_KEY or GROQ_API_KEY environment variable")
+	return nil, fmt.Errorf("set DEEPGRAM_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY environment variable")
 }
