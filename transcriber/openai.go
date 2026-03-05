@@ -20,12 +20,18 @@ func NewOpenAI(apiKey string) *OpenAI {
 		baseTranscriber: baseTranscriber{
 			client: NewTracedClient(apiURL),
 			apiURL: apiURL,
+			model:  "gpt-4o-transcribe",
 		},
 		apiKey: apiKey,
 	}
 }
 
 func (o *OpenAI) Name() string { return "openai" }
+var OpenAIModels = []ModelInfo{
+	{ID: "gpt-4o-transcribe", Label: "GPT-4o Transcribe", Stream: false},
+}
+
+func (o *OpenAI) Models() []ModelInfo { return OpenAIModels }
 
 func (o *OpenAI) NewSession(_ context.Context, cfg SessionConfig) (Session, error) {
 	go o.client.Warm()
@@ -47,7 +53,7 @@ func (o *OpenAI) transcribe(audioData []byte, format, lang string) (*Result, err
 		return nil, err
 	}
 
-	writer.WriteField("model", "gpt-4o-transcribe")
+	writer.WriteField("model", o.GetModel())
 	writer.WriteField("response_format", "json")
 	if lang != "" {
 		writer.WriteField("language", lang)

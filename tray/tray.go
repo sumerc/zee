@@ -6,11 +6,13 @@ import (
 	"time"
 )
 
-type Provider struct {
-	Name   string
-	Label  string
-	HasKey bool
-	Active bool
+type Model struct {
+	Provider      string // e.g. "groq", "openai", "deepgram"
+	ProviderLabel string // e.g. "Groq"
+	ModelID       string // e.g. "whisper-large-v3-turbo"
+	Label         string // model display name
+	HasKey        bool
+	Active        bool
 }
 
 var (
@@ -35,9 +37,9 @@ var (
 	loginOn bool
 	loginCb func(bool) error
 
-	providerMu    sync.Mutex
-	providers     []Provider
-	providerCb    func(string)
+	modelMu  sync.Mutex
+	models   []Model
+	modelCb  func(provider, model string)
 
 	isBTFn func(string) bool
 
@@ -138,11 +140,11 @@ func SetDevices(names []string, selected string, onSwitch func(name string)) {
 	deviceMu.Unlock()
 }
 
-func SetProviders(p []Provider, onSwitch func(string)) {
-	providerMu.Lock()
-	providers = p
-	providerCb = onSwitch
-	providerMu.Unlock()
+func SetModels(m []Model, onSwitch func(provider, model string)) {
+	modelMu.Lock()
+	models = m
+	modelCb = onSwitch
+	modelMu.Unlock()
 }
 
 func SetLastRecording(dur time.Duration, totalMs float64) {

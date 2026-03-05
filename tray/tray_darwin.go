@@ -25,7 +25,7 @@ var (
 	langItems  []*systray.MenuItem
 	mUpdate    *systray.MenuItem
 
-	providerItems []*systray.MenuItem
+	modelItems []*systray.MenuItem
 )
 
 func Init() <-chan struct{} {
@@ -232,45 +232,51 @@ func onReady() {
 		}
 	})
 
-	providerMu.Lock()
-	if len(providers) > 0 {
-		mBackend = mSettings.AddSubMenuItem("Transcriber Backend", "Select transcription backend")
-		providerItems = make([]*systray.MenuItem, 0, len(providers))
-		for i, p := range providers {
+	modelMu.Lock()
+	if len(models) > 0 {
+		mBackend = mSettings.AddSubMenuItem("Model", "Select transcription model")
+		modelItems = make([]*systray.MenuItem, 0, len(models))
+		var curProvider string
+		var provMenu *systray.MenuItem
+		for i, m := range models {
+			if m.Provider != curProvider {
+				curProvider = m.Provider
+				label := m.ProviderLabel
+				if !m.HasKey {
+					label += " (no API key)"
+				}
+				provMenu = mBackend.AddSubMenuItem(label, label)
+				if !m.HasKey {
+					provMenu.Disable()
+				}
+			}
 			idx := i
-			title := p.Label
-			if !p.HasKey {
-				title += " (no API key)"
-			}
-			item := mBackend.AddSubMenuItemCheckbox(title, title, p.Active)
-			if !p.HasKey {
-				item.Disable()
-			}
+			item := provMenu.AddSubMenuItemCheckbox(m.Label, m.Label, m.Active)
 			item.Click(func() {
-				providerMu.Lock()
-				pr := providers[idx]
-				cb := providerCb
-				providerMu.Unlock()
-				if !pr.HasKey || cb == nil {
+				modelMu.Lock()
+				mm := models[idx]
+				cb := modelCb
+				modelMu.Unlock()
+				if !mm.HasKey || cb == nil {
 					return
 				}
-				cb(pr.Name)
-				providerMu.Lock()
-				for j, it := range providerItems {
+				cb(mm.Provider, mm.ModelID)
+				modelMu.Lock()
+				for j, it := range modelItems {
 					if j == idx {
 						it.Check()
-						providers[j].Active = true
+						models[j].Active = true
 					} else {
 						it.Uncheck()
-						providers[j].Active = false
+						models[j].Active = false
 					}
 				}
-				providerMu.Unlock()
+				modelMu.Unlock()
 			})
-			providerItems = append(providerItems, item)
+			modelItems = append(modelItems, item)
 		}
 	}
-	providerMu.Unlock()
+	modelMu.Unlock()
 
 	mLanguage = mSettings.AddSubMenuItem("Language", "Select transcription language")
 	langItems = make([]*systray.MenuItem, 0, len(Languages))

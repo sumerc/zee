@@ -20,12 +20,18 @@ func NewDeepgram(apiKey string) *Deepgram {
 		baseTranscriber: baseTranscriber{
 			client: NewTracedClient(apiURL),
 			apiURL: apiURL,
+			model:  "nova-3",
 		},
 		apiKey: apiKey,
 	}
 }
 
 func (d *Deepgram) Name() string { return "deepgram" }
+var DeepgramModels = []ModelInfo{
+	{ID: "nova-3", Label: "Nova-3 (stream)", Stream: true},
+}
+
+func (d *Deepgram) Models() []ModelInfo { return DeepgramModels }
 
 func (d *Deepgram) NewSession(ctx context.Context, cfg SessionConfig) (Session, error) {
 	go d.client.Warm()

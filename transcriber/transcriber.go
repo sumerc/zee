@@ -57,10 +57,19 @@ type Result struct {
 	Segments     []Segment
 }
 
+type ModelInfo struct {
+	ID     string
+	Label  string
+	Stream bool
+}
+
 type Transcriber interface {
 	Name() string
 	SetLanguage(lang string)
 	GetLanguage() string
+	Models() []ModelInfo
+	SetModel(model string)
+	GetModel() string
 	NewSession(ctx context.Context, cfg SessionConfig) (Session, error)
 }
 
@@ -68,6 +77,7 @@ type baseTranscriber struct {
 	client *TracedClient
 	apiURL string
 	lang   string
+	model  string
 	langMu sync.RWMutex
 }
 
@@ -82,6 +92,10 @@ func (b *baseTranscriber) GetLanguage() string {
 	defer b.langMu.RUnlock()
 	return b.lang
 }
+
+func (b *baseTranscriber) Models() []ModelInfo  { return nil }
+func (b *baseTranscriber) SetModel(m string)   { b.model = m }
+func (b *baseTranscriber) GetModel() string    { return b.model }
 
 func New() (Transcriber, error) {
 	if fakeText, ok := os.LookupEnv("ZEE_FAKE_TEXT"); ok {

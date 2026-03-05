@@ -9,6 +9,16 @@ import (
 	"net/http"
 )
 
+const (
+	ModelWhisperV3Turbo = "whisper-large-v3-turbo"
+	ModelWhisperV3      = "whisper-large-v3"
+)
+
+var GroqModels = []ModelInfo{
+	{ID: ModelWhisperV3Turbo, Label: "Whisper V3 Turbo", Stream: false},
+	{ID: ModelWhisperV3, Label: "Whisper V3", Stream: false},
+}
+
 type Groq struct {
 	baseTranscriber
 	apiKey string
@@ -20,10 +30,13 @@ func NewGroq(apiKey string) *Groq {
 		baseTranscriber: baseTranscriber{
 			client: NewTracedClient(apiURL),
 			apiURL: apiURL,
+			model:  ModelWhisperV3Turbo,
 		},
 		apiKey: apiKey,
 	}
 }
+
+func (g *Groq) Models() []ModelInfo { return GroqModels }
 
 func (g *Groq) Name() string { return "groq" }
 
@@ -61,7 +74,7 @@ func (g *Groq) transcribe(audioData []byte, format, lang string) (*Result, error
 		return nil, err
 	}
 
-	writer.WriteField("model", "whisper-large-v3-turbo")
+	writer.WriteField("model", g.GetModel())
 	writer.WriteField("response_format", "verbose_json")
 	if lang != "" {
 		writer.WriteField("language", lang)

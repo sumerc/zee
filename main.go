@@ -45,6 +45,16 @@ var transcriptionCount int
 var streamEnabled bool
 var activeFormat string
 
+func modelSupportsStream(tr transcriber.Transcriber) bool {
+	id := tr.GetModel()
+	for _, m := range tr.Models() {
+		if m.ID == id {
+			return m.Stream
+		}
+	}
+	return false
+}
+
 type recSession struct {
 	Stop         <-chan struct{}
 	SilenceClose *atomic.Bool
@@ -235,9 +245,7 @@ func run() {
 	if initErr != nil {
 		fatal("No API key set.\n\nSet GROQ_API_KEY, OPENAI_API_KEY, or DEEPGRAM_API_KEY.")
 	}
-	if activeTranscriber.Name() == "deepgram" {
-		streamEnabled = true
-	}
+	streamEnabled = modelSupportsStream(activeTranscriber)
 	if *langFlag != "" {
 		activeTranscriber.SetLanguage(*langFlag)
 	}
@@ -353,32 +361,55 @@ func run() {
 	groqKey := os.Getenv("GROQ_API_KEY")
 	openaiKey := os.Getenv("OPENAI_API_KEY")
 	dgKey := os.Getenv("DEEPGRAM_API_KEY")
-	tray.SetProviders([]tray.Provider{
-		{Name: "groq", Label: "Groq", HasKey: groqKey != "", Active: activeTranscriber.Name() == "groq"},
-		{Name: "openai", Label: "OpenAI", HasKey: openaiKey != "", Active: activeTranscriber.Name() == "openai"},
-		{Name: "deepgram", Label: "Deepgram (stream)", HasKey: dgKey != "", Active: activeTranscriber.Name() == "deepgram"},
-	}, func(name string) {
+
+	type providerDef struct {
+		name, label, key string
+		models           []transcriber.ModelInfo
+		newFn            func() transcriber.Transcriber
+	}
+	providers := []providerDef{
+		{"groq", "Groq", groqKey, transcriber.GroqModels, func() transcriber.Transcriber { return transcriber.NewGroq(groqKey) }},
+		{"openai", "OpenAI", openaiKey, transcriber.OpenAIModels, func() transcriber.Transcriber { return transcriber.NewOpenAI(openaiKey) }},
+		{"deepgram", "Deepgram", dgKey, transcriber.DeepgramModels, func() transcriber.Transcriber { return transcriber.NewDeepgram(dgKey) }},
+	}
+
+	var trayModels []tray.Model
+	modelIndex := map[string]transcriber.ModelInfo{}
+	for _, p := range providers {
+		for _, m := range p.models {
+			trayModels = append(trayModels, tray.Model{
+				Provider:      p.name,
+				ProviderLabel: p.label,
+				ModelID:       m.ID,
+				Label:         m.Label,
+				HasKey:        p.key != "",
+				Active:        activeTranscriber.Name() == p.name && activeTranscriber.GetModel() == m.ID,
+			})
+			modelIndex[p.name+":"+m.ID] = m
+		}
+	}
+
+	tray.SetModels(trayModels, func(provider, model string) {
 		configMu.Lock()
 		defer configMu.Unlock()
 
 		currentLang := activeTranscriber.GetLanguage()
 
 		var newTr transcriber.Transcriber
-		switch name {
-		case "groq":
-			newTr = transcriber.NewGroq(groqKey)
-		case "openai":
-			newTr = transcriber.NewOpenAI(openaiKey)
-		case "deepgram":
-			newTr = transcriber.NewDeepgram(dgKey)
+		for _, p := range providers {
+			if p.name == provider {
+				newTr = p.newFn()
+				break
+			}
 		}
 		if newTr == nil {
 			return
 		}
 		newTr.SetLanguage(currentLang)
+		newTr.SetModel(model)
 
 		activeTranscriber = newTr
-		streamEnabled = name == "deepgram"
+		streamEnabled = modelIndex[provider+":"+model].Stream
 		if !streamEnabled {
 			activeFormat = *formatFlag
 		}
@@ -512,6 +543,7 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 		switch st {
 		case idle:
 			<-hk.Keydown()
+			select { case <-stopCh: default: } // drain stale stop from tray-cancel
 			sc := &atomic.Bool{}
 			stop := mergeStop(stopCh, newTrayStop())
 			sessions <- recSession{Stop: stop, SilenceClose: sc}
