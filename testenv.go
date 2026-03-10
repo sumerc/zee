@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"zee/audio"
@@ -66,7 +67,7 @@ func runTestMode(wavPath string) {
 			case "WAIT_AUDIO_DONE":
 				<-fakeCapture.AudioDone()
 			case "QUIT":
-				log.SessionEnd(len(transcriptions))
+				log.SessionEnd(transcriptionCount)
 				os.Exit(0)
 			default:
 				if strings.HasPrefix(cmd, "SLEEP ") {
@@ -82,7 +83,7 @@ func runTestMode(wavPath string) {
 	// Event loop -- same pattern as run()
 	for {
 		<-hk.Keydown()
-		done, err := handleRecording(capture, hk.Keyup(), nil)
+		done, err := handleRecording(capture, recSession{Stop: hk.Keyup(), SilenceClose: &atomic.Bool{}})
 		if err != nil {
 			log.Errorf("recording error: %v", err)
 		}

@@ -37,14 +37,8 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Get version
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
       - name: Build
-        run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
-          go build -ldflags="-X main.version=$VERSION -s -w" -o "zee_${{ matrix.goos }}_${{ matrix.arch }}"
+        run: go build -ldflags="-X main.version=${{ github.ref_name }} -s -w" -o "zee_${{ matrix.goos }}_${{ matrix.arch }}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -53,19 +47,31 @@ jobs:
 
   release:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: macos-15
+    env:
+      VERSION: ${{ github.ref_name }}
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
 
+      - name: Create universal binary and DMG
+        run: |
+          chmod +x zee_darwin_arm64 zee_darwin_amd64
+          lipo -create zee_darwin_arm64 zee_darwin_amd64 -output zee_universal
+          packaging/mkicns.sh packaging/appicon.png
+          packaging/mkdmg.sh zee_universal $VERSION Zee-$VERSION.dmg
+
       - name: Create checksums
-        run: shasum -a 256 zee_* > checksums.txt
+        run: shasum -a 256 zee_darwin_* Zee-*.dmg > checksums.txt
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            zee_*
+            zee_darwin_*
+            Zee-*.dmg
             checksums.txt

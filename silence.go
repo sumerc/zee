@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"sync/atomic"
+	"time"
+)
 
 const (
 	tickInterval        = 100 * time.Millisecond
@@ -24,7 +27,7 @@ type silenceMonitor struct {
 	warnAt   int
 	windowSz int
 
-	isToggle func() bool
+	silenceClose *atomic.Bool
 
 	ticks       int
 	window      []bool
@@ -33,14 +36,14 @@ type silenceMonitor struct {
 	lastBeep    int
 }
 
-func newSilenceMonitor(isToggle func() bool) *silenceMonitor {
+func newSilenceMonitor(silenceClose *atomic.Bool) *silenceMonitor {
 	warnAt := int(silenceWarnEvery / tickInterval)
 	windowSz := int(silenceAutoCloseDur / tickInterval)
 	return &silenceMonitor{
-		warnAt:   warnAt,
-		windowSz: windowSz,
-		isToggle: isToggle,
-		window:   make([]bool, windowSz),
+		warnAt:       warnAt,
+		windowSz:     windowSz,
+		silenceClose: silenceClose,
+		window:       make([]bool, windowSz),
 	}
 }
 
@@ -85,7 +88,7 @@ func (m *silenceMonitor) Tick(hasSpeech bool) SilenceEvent {
 		return SilenceWarnClear
 	}
 
-	if !m.isToggle() {
+	if !m.silenceClose.Load() {
 		return SilenceNone
 	}
 

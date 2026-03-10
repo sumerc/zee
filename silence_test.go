@@ -1,13 +1,18 @@
 package main
 
-import "testing"
+import (
+	"sync/atomic"
+	"testing"
+)
 
 func pttMonitor() *silenceMonitor {
-	return newSilenceMonitor(func() bool { return false })
+	return newSilenceMonitor(&atomic.Bool{})
 }
 
 func toggleMonitor() *silenceMonitor {
-	return newSilenceMonitor(func() bool { return true })
+	sc := &atomic.Bool{}
+	sc.Store(true)
+	return newSilenceMonitor(sc)
 }
 
 func feedN(m *silenceMonitor, speech bool, n int) SilenceEvent {

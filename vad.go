@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	vadMode       = 3
+	vadMode       = 2
 	vadFrameMs    = 20
 	vadFrameBytes = encoder.SampleRate * vadFrameMs / 1000 * 2 // 640 bytes
 	vadDebounce   = 3                                          // consecutive speech frames to confirm voice

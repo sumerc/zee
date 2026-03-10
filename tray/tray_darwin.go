@@ -12,18 +12,20 @@ import (
 var (
 	mRecord     *systray.MenuItem
 	mCopy       *systray.MenuItem
-	mDevices    *systray.MenuItem
-	deviceItems []*systray.MenuItem
-	deviceReady chan struct{}
+	mDevices       *systray.MenuItem
+	mDefaultDevice *systray.MenuItem
+	deviceItems    []*systray.MenuItem
+	deviceReady    chan struct{}
 
 	mSettings  *systray.MenuItem
 	mAutoPaste *systray.MenuItem
+	mLogin     *systray.MenuItem
 	mBackend   *systray.MenuItem
 	mLanguage  *systray.MenuItem
 	langItems  []*systray.MenuItem
 	mUpdate    *systray.MenuItem
 
-	providerItems []*systray.MenuItem
+	modelItems []*systray.MenuItem
 )
 
 func Init() <-chan struct{} {
@@ -42,12 +44,12 @@ func updateRecordingIcon(rec bool) {
 	if rec {
 		systray.SetIcon(iconRecHi)
 		if mRecord != nil {
-			mRecord.SetTitle("Stop Recording")
+			mRecord.SetTitle("🔴 Stop Recording (Shift+Control+Space)")
 		}
 	} else {
 		systray.SetTemplateIcon(iconIdleHi, iconIdle)
 		if mRecord != nil {
-			mRecord.SetTitle("Start Recording")
+			mRecord.SetTitle("○ Start Recording (Shift+Control+Space)")
 		}
 	}
 }
@@ -81,8 +83,6 @@ func addDeviceItem(parent *systray.MenuItem, idx int, name string, checked bool)
 	item := parent.AddSubMenuItemCheckbox(label, label, checked)
 	item.Click(func() {
 		deviceMu.Lock()
-		// Use current name from deviceNames, not the captured name
-		// (RefreshDevices may have changed the title)
 		currentName := ""
 		if idx < len(deviceNames) {
 			currentName = deviceNames[idx]
@@ -93,6 +93,9 @@ func addDeviceItem(parent *systray.MenuItem, idx int, name string, checked bool)
 			cb(currentName)
 		}
 		deviceMu.Lock()
+		if mDefaultDevice != nil {
+			mDefaultDevice.Uncheck()
+		}
 		for _, it := range deviceItems {
 			it.Uncheck()
 		}
@@ -115,6 +118,14 @@ func RefreshDevices(names []string, selected string) {
 
 	deviceNames = names
 	deviceSel = selected
+
+	if mDefaultDevice != nil {
+		if selected == "" {
+			mDefaultDevice.Check()
+		} else {
+			mDefaultDevice.Uncheck()
+		}
+	}
 
 	for i, item := range deviceItems {
 		if i < len(names) {
@@ -143,17 +154,7 @@ func onReady() {
 	systray.SetTemplateIcon(iconIdleHi, iconIdle)
 	systray.SetTooltip("zee – push to talk")
 
-	mCopy = systray.AddMenuItem("Copy Last Recorded Text", "Copy last transcription to clipboard")
-	mCopy.Disable()
-	mCopy.Click(func() {
-		if copyLastFn != nil {
-			copyLastFn()
-		}
-	})
-
-	systray.AddSeparator()
-
-	mRecord = systray.AddMenuItem("Start Recording", "Start or stop recording")
+	mRecord = systray.AddMenuItem("○ Start Recording (Shift+Control+Space)", "Start or stop recording")
 	mRecord.Click(func() {
 		if recording {
 			if stopFn != nil {
@@ -166,11 +167,38 @@ func onReady() {
 		}
 	})
 
+	systray.AddSeparator()
+
+	mCopy = systray.AddMenuItem("Copy Last Recorded Text", "Copy last transcription to clipboard")
+	mCopy.Disable()
+	mCopy.Click(func() {
+		if copyLastFn != nil {
+			copyLastFn()
+		}
+	})
+
+	systray.AddSeparator()
+
 	mSettings = systray.AddMenuItem("Settings", "Settings")
 
 	mDevices = mSettings.AddSubMenuItem("Devices", "Select input device")
 
 	deviceMu.Lock()
+	mDefaultDevice = mDevices.AddSubMenuItemCheckbox("System Default", "Use system default device", deviceSel == "")
+	mDefaultDevice.Click(func() {
+		deviceMu.Lock()
+		cb := deviceCb
+		deviceMu.Unlock()
+		if cb != nil {
+			cb("")
+		}
+		deviceMu.Lock()
+		for _, it := range deviceItems {
+			it.Uncheck()
+		}
+		mDefaultDevice.Check()
+		deviceMu.Unlock()
+	})
 	deviceItems = make([]*systray.MenuItem, 0, len(deviceNames))
 	for i, name := range deviceNames {
 		item := addDeviceItem(mDevices, i, name, name == deviceSel)
@@ -189,45 +217,66 @@ func onReady() {
 		}
 	})
 
-	providerMu.Lock()
-	if len(providers) > 0 {
-		mBackend = mSettings.AddSubMenuItem("Transcriber Backend", "Select transcription backend")
-		providerItems = make([]*systray.MenuItem, 0, len(providers))
-		for i, p := range providers {
+	mLogin = mSettings.AddSubMenuItemCheckbox("Start on Login", "Launch zee when you log in", loginOn)
+	mLogin.Click(func() {
+		want := !mLogin.Checked()
+		if loginCb != nil {
+			if err := loginCb(want); err != nil {
+				return
+			}
+		}
+		if want {
+			mLogin.Check()
+		} else {
+			mLogin.Uncheck()
+		}
+	})
+
+	modelMu.Lock()
+	if len(models) > 0 {
+		mBackend = mSettings.AddSubMenuItem("Model", "Select transcription model")
+		modelItems = make([]*systray.MenuItem, 0, len(models))
+		var curProvider string
+		var provMenu *systray.MenuItem
+		for i, m := range models {
+			if m.Provider != curProvider {
+				curProvider = m.Provider
+				label := m.ProviderLabel
+				if !m.HasKey {
+					label += " (no API key)"
+				}
+				provMenu = mBackend.AddSubMenuItem(label, label)
+				if !m.HasKey {
+					provMenu.Disable()
+				}
+			}
 			idx := i
-			title := p.Label
-			if !p.HasKey {
-				title += " (no API key)"
-			}
-			item := mBackend.AddSubMenuItemCheckbox(title, title, p.Active)
-			if !p.HasKey {
-				item.Disable()
-			}
+			item := provMenu.AddSubMenuItemCheckbox(m.Label, m.Label, m.Active)
 			item.Click(func() {
-				providerMu.Lock()
-				pr := providers[idx]
-				cb := providerCb
-				providerMu.Unlock()
-				if !pr.HasKey || cb == nil {
+				modelMu.Lock()
+				mm := models[idx]
+				cb := modelCb
+				modelMu.Unlock()
+				if !mm.HasKey || cb == nil {
 					return
 				}
-				cb(pr.Name)
-				providerMu.Lock()
-				for j, it := range providerItems {
+				cb(mm.Provider, mm.ModelID)
+				modelMu.Lock()
+				for j, it := range modelItems {
 					if j == idx {
 						it.Check()
-						providers[j].Active = true
+						models[j].Active = true
 					} else {
 						it.Uncheck()
-						providers[j].Active = false
+						models[j].Active = false
 					}
 				}
-				providerMu.Unlock()
+				modelMu.Unlock()
 			})
-			providerItems = append(providerItems, item)
+			modelItems = append(modelItems, item)
 		}
 	}
-	providerMu.Unlock()
+	modelMu.Unlock()
 
 	mLanguage = mSettings.AddSubMenuItem("Language", "Select transcription language")
 	langItems = make([]*systray.MenuItem, 0, len(Languages))

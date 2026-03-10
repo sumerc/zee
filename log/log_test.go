@@ -64,6 +64,8 @@ func TestResolveDirDefault(t *testing.T) {
 
 func TestInitCreatesFiles(t *testing.T) {
 	tmp := setupLogDir(t)
+	SetTranscribeEnabled(true)
+	t.Cleanup(func() { SetTranscribeEnabled(false) })
 
 	if err := Init(); err != nil {
 		t.Fatal(err)
@@ -77,8 +79,25 @@ func TestInitCreatesFiles(t *testing.T) {
 	}
 }
 
+func TestInitWithoutTranscribe(t *testing.T) {
+	tmp := setupLogDir(t)
+
+	if err := Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(tmp, "diagnostics_log.txt")); err != nil {
+		t.Errorf("diagnostics_log.txt not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "transcribe_log.txt")); err == nil {
+		t.Error("transcribe_log.txt should not be created when transcribe is disabled")
+	}
+}
+
 func TestTranscriptionText(t *testing.T) {
 	tmp := setupLogDir(t)
+	SetTranscribeEnabled(true)
+	t.Cleanup(func() { SetTranscribeEnabled(false) })
 
 	if err := Init(); err != nil {
 		t.Fatal(err)
