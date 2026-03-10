@@ -16,7 +16,7 @@
 ## Highlights
 
 - **System tray app** — lives in the menu bar. Switch microphones, transcription providers, and languages from the tray menu. Dynamic icons show recording and warning states.
-- **Three recording modes** — push-to-talk (hold hotkey), tap-to-toggle (tap to start/stop), or hybrid (both on the same key via `-hybrid`).
+- **Two recording modes** — push-to-talk (hold hotkey) or tap-to-toggle (tap to start/stop).
 - **Real-time streaming** — with `-stream`, words appear as you speak and auto-paste into the focused window incrementally. Powered by Deepgram's WebSocket API.
 - **Fast batch mode** — HTTP keep-alive, TLS connection reuse, pre-warmed connections, streaming encoder runs during recording (not after). Typical key-release to clipboard: under 500ms.
 - **Auto-paste** — transcribed text goes straight to clipboard and pastes into the active window. In streaming mode, each new phrase pastes as it arrives.
@@ -38,6 +38,12 @@ brew install --cask sumerc/tap/zee
 ```
 
 Installs `Zee.app` to `/Applications`. Launch from Spotlight or the Applications folder.
+
+On first launch, macOS may warn that the app can't be verified. Run once to clear it:
+
+```bash
+xattr -cr /Applications/Zee.app
+```
 
 ### macOS (DMG)
 
@@ -79,18 +85,14 @@ make app          # macOS DMG
 ## Usage
 
 ```bash
-export GROQ_API_KEY=your_key    # batch mode (Groq Whisper)
-zee                              # starts in menu bar, hold Ctrl+Shift+Space to record
-```
-
-```bash
-export DEEPGRAM_API_KEY=your_key # streaming mode (Deepgram)
-zee -stream                      # words appear as you speak
+export GROQ_API_KEY=your_key       # batch mode (Groq Whisper)
+export OPENAI_API_KEY=your_key     # batch mode (OpenAI Whisper)
+export DEEPGRAM_API_KEY=your_key   # streaming mode (Deepgram)
+zee                                # starts in menu bar, hold Ctrl+Shift+Space to record
+zee -stream                        # words appear as you speak
 ```
 
 zee runs as a system tray app in the menu bar. Hold `Ctrl+Shift+Space` to record, release to transcribe. Result auto-pastes into the focused window.
-
-With `-hybrid`, a short tap toggles recording on/off (hands-free) while a long press works as push-to-talk.
 
 Use the tray menu to switch microphones, providers, and languages — or use `-setup` for initial device selection.
 
@@ -119,8 +121,6 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 |------|---------|-------------|
 | `-stream` | false | Real-time streaming transcription (Deepgram) |
 | `-format` | mp3@16 | Audio format: `mp3@16`, `mp3@64`, or `flac` |
-| `-hybrid` | true | Tap-to-toggle + hold-to-talk on the same hotkey |
-| `-longpress` | 350ms | Threshold distinguishing tap vs hold |
 | `-autopaste` | true | Auto-paste into focused window |
 | `-setup` | false | Select microphone device |
 | `-device` | (default) | Use named microphone device |

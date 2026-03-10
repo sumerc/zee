@@ -32,7 +32,6 @@ make benchmark WAV=file.wav RUNS=5
 - `-stream` - enable streaming transcription (Deepgram only)
 - `-debug` - enable diagnostic logging (default: false)
 - `-debug-transcribe` - enable transcription text logging (requires `-debug`)
-- `-hybrid` - tap-to-toggle + hold-to-talk on the same hotkey
 - `-format <mp3@16|mp3@64|flac>` - audio format (default: mp3@16)
 - `-lang <code>` - language code for transcription (default: en, also settable from tray menu)
 - `-device <name>` - use named microphone device (also switchable from tray menu)
