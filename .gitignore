@@ -2,6 +2,8 @@
 ses9000
 zee
 zee-gui
+Zee-*.dmg
+packaging/Zee.icns
 
 # Environment
 .env
