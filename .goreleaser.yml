@@ -1,0 +1,49 @@
+version: 2
+
+before:
+  hooks:
+    - packaging/mkicns.sh packaging/appicon.png
+
+builds:
+  - id: zee
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+universal_binaries:
+  - id: zee-universal
+    ids:
+      - zee
+    replace: false
+
+archives:
+  - builds:
+      - zee
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  github:
+    owner: sumerc
+    name: zee
+
+brews:
+  - name: zee
+    repository:
+      owner: sumerc
+      name: homebrew-tap
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    homepage: "https://github.com/sumerc/zee"
+    description: "Push-to-talk transcription for macOS"
+    install: |
+      bin.install "zee"
+    test: |
+      system "#{bin}/zee", "-version"
