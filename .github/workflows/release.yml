@@ -62,7 +62,8 @@ jobs:
           VERSION: ${{ github.ref_name }}
           GITHUB_TOKEN: ${{ secrets.ZEE_RELEASE_TOKEN }}
         run: |
-          universal=$(find dist -name "zee_all" -type d)/zee
+          universal=$(find dist -path "*universal*" -name "zee" -type f | head -1)
+          test -n "$universal" || { echo "universal binary not found"; find dist -type f; exit 1; }
           chmod +x "$universal"
           packaging/mkdmg.sh "$universal" "$VERSION" "Zee-${VERSION}.dmg"
           shasum -a 256 "Zee-${VERSION}.dmg" >> dist/checksums.txt
