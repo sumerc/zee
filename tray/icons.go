@@ -20,7 +20,7 @@ var (
 func init() {
 	transparent := color.RGBA{A: 0}
 	red := color.RGBA{R: 255, G: 59, B: 48, A: 255}
-	amber := color.RGBA{R: 255, G: 149, B: 0, A: 255}
+	amber := color.RGBA{R: 255, G: 230, B: 0, A: 255}
 	dotR := 44.0 / 6.5
 	iconIdle = renderIcon(22, &transparent, 22.0/8, nil, 0)
 	iconIdleHi = renderIcon(44, &transparent, 44.0/8, nil, 0)
