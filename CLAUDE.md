@@ -7,9 +7,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run
 
 ```bash
-make build                            # build
-GROQ_API_KEY=xxx ./zee            # run (hold Ctrl+Shift+Space to record)
+make build                            # build binary
+make app                              # build macOS DMG (binary + icns + .app bundle)
+GROQ_API_KEY=xxx ./zee                # run (hold Ctrl+Shift+Space to record)
 ```
+
+## Install (macOS DMG)
+
+1. `make app` produces `Zee-<version>.dmg`
+2. Open the DMG and drag `Zee.app` to `/Applications`
+3. On first launch, grant **Microphone** and **Accessibility** permissions to the terminal or Zee.app via System Settings > Privacy & Security
+4. Set `GROQ_API_KEY` in your shell profile or launch via: `GROQ_API_KEY=xxx open /Applications/Zee.app`
 
 ## Testing
 
@@ -22,7 +30,8 @@ make benchmark WAV=file.wav RUNS=5
 ## Flags
 
 - `-stream` - enable streaming transcription (Deepgram only)
-- `-debug` - enable diagnostic and transcription logging (default: false)
+- `-debug` - enable diagnostic logging (default: false)
+- `-debug-transcribe` - enable transcription text logging (requires `-debug`)
 - `-hybrid` - tap-to-toggle + hold-to-talk on the same hotkey
 - `-format <mp3@16|mp3@64|flac>` - audio format (default: mp3@16)
 - `-lang <code>` - language code for transcription (default: en, also settable from tray menu)
@@ -76,4 +85,12 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - Override with `ZEE_LOG_PATH` env var or `-logpath <path>` flag (supports relative paths, use `./` for current directory)
 - `crash_log.txt` - panic recovery (always enabled)
 - `diagnostics_log.txt` - timing metrics, errors, warnings (requires `-debug`)
-- `transcribe_log.txt` - transcription text history (requires `-debug`)
+- `transcribe_log.txt` - transcription text history (requires `-debug -debug-transcribe`)
+
+## Packaging
+
+- `packaging/appicon.png` - source icon (1024px black circle, transparent background)
+- `packaging/mkicns.sh` - generates `Zee.icns` from `appicon.png` (via `make icns`)
+- `packaging/mkdmg.sh` - creates DMG with Zee.app + Applications symlink (via `make app`)
+- `packaging/Info.plist` - app bundle metadata (version templated from git tag)
+- `Zee.icns` and `Zee-*.dmg` are gitignored (derived artifacts)
