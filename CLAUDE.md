@@ -87,10 +87,29 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - `diagnostics_log.txt` - timing metrics, errors, warnings (requires `-debug`)
 - `transcribe_log.txt` - transcription text history (requires `-debug -debug-transcribe`)
 
+## Releasing
+
+GoReleaser handles the full release pipeline via `.goreleaser.yml`:
+
+```bash
+git tag v0.3.0 && git push origin v0.3.0   # triggers CI release
+```
+
+CI (`.github/workflows/release.yml`) does:
+1. Verify tag is on `main`
+2. GoReleaser builds arm64 + amd64 binaries, universal binary, tar.gz archives, checksums, GitHub release
+3. GoReleaser pushes Homebrew formula to `sumerc/homebrew-tap`
+4. Post-step creates DMG from universal binary and uploads to release
+
+Requires `ZEE_RELEASE_TOKEN` repo secret (fine-grained PAT with Contents read/write on `zee` + `homebrew-tap`).
+
+Users install via: `brew install sumerc/tap/zee`
+
 ## Packaging
 
 - `packaging/appicon.png` - source icon (1024px black circle, transparent background)
 - `packaging/mkicns.sh` - generates `Zee.icns` from `appicon.png` (via `make icns`)
 - `packaging/mkdmg.sh` - creates DMG with Zee.app + Applications symlink (via `make app`)
 - `packaging/Info.plist` - app bundle metadata (version templated from git tag)
+- `.goreleaser.yml` - GoReleaser config (builds, archives, checksums, Homebrew formula)
 - `Zee.icns` and `Zee-*.dmg` are gitignored (derived artifacts)
