@@ -9,6 +9,10 @@
   <a href="https://freepalestine.dev"><img src="https://freepalestine.dev/badge?t=d&u=0&r=1" alt="From the river to the sea, Palestine will be free"></a>
 </p>
 
+<p align="center">
+  <img src="zee-on-action.gif" alt="zee in action" width="600">
+</p>
+
 ## Highlights
 
 - **System tray app** — lives in the menu bar. Switch microphones, transcription providers, and languages from the tray menu. Dynamic icons show recording and warning states.
@@ -125,4 +129,4 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 
 ## About
 
-Vibe-coded in ~30 hours with AI, but built with love and care. The kind of polish you get when you actually use the thing you're building.
+Started as a vibe-coding project but turned into a standalone app I use daily for all my speech-to-text. Built with AI, love, and care — the kind of polish you get when you actually use the thing you're building.
