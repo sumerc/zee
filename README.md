@@ -31,30 +31,45 @@
 
 ## Install
 
-### Homebrew
-
-```bash
-brew install sumerc/tap/zee
-```
-
-### macOS (DMG)
+### macOS App (recommended)
 
 1. Download `Zee-<version>.dmg` from the [latest release](https://github.com/sumerc/zee/releases/latest)
 2. Open the DMG and drag **Zee.app** to **Applications**
 3. Launch from Applications or Spotlight
 4. Grant **Microphone** and **Accessibility** permissions when prompted
 
-### Download binary
-
-Grab the binary for your architecture from the [latest release](https://github.com/sumerc/zee/releases/latest):
+Set your API key in the environment before launching, or export it in your shell profile:
 
 ```bash
-# Apple Silicon
+GROQ_API_KEY=xxx open /Applications/Zee.app
+```
+
+### CLI
+
+Install via Homebrew or download the binary directly:
+
+```bash
+brew install sumerc/tap/zee
+```
+
+```bash
+# or download manually — Apple Silicon
 curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_arm64.tar.gz | tar xz
 
 # Intel
 curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_amd64.tar.gz | tar xz
 ```
+
+Run from the terminal:
+
+```bash
+GROQ_API_KEY=xxx zee                # Groq Whisper
+OPENAI_API_KEY=xxx zee              # OpenAI Whisper
+DEEPGRAM_API_KEY=xxx zee -stream    # Deepgram streaming
+zee -debug                          # with diagnostic logging
+```
+
+> **Note:** When running from a terminal, macOS permissions (Microphone, Accessibility) are granted to the **terminal app** (e.g. Ghostty, iTerm2, Terminal), not to zee itself.
 
 ### Build from source
 
@@ -62,11 +77,6 @@ curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_amd64.
 git clone https://github.com/sumerc/zee && cd zee
 make build        # CLI binary
 make app          # macOS DMG
-
-GROQ_API_KEY=xxx ./zee              # Groq Whisper
-OPENAI_API_KEY=xxx ./zee            # OpenAI Whisper
-DEEPGRAM_API_KEY=xxx ./zee -stream  # Deepgram streaming
-./zee -debug                        # with diagnostic logging
 ```
 
 ## Usage
