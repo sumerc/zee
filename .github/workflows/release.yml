@@ -68,3 +68,33 @@ jobs:
           packaging/mkdmg.sh "$universal" "$VERSION" "Zee-${VERSION}.dmg"
           shasum -a 256 "Zee-${VERSION}.dmg" >> dist/checksums.txt
           gh release upload "$VERSION" "Zee-${VERSION}.dmg" --clobber
+
+      - name: Update Homebrew cask
+        env:
+          VERSION: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ secrets.ZEE_RELEASE_TOKEN }}
+        run: |
+          CLEAN_VERSION="${VERSION#v}"
+          SHA256=$(shasum -a 256 "Zee-${VERSION}.dmg" | awk '{print $1}')
+          cat > zee.rb <<CASK
+          cask "zee" do
+            version "${CLEAN_VERSION}"
+            sha256 "${SHA256}"
+            url "https://github.com/sumerc/zee/releases/download/v#{version}/Zee-v#{version}.dmg"
+            name "Zee"
+            desc "Push-to-talk transcription for macOS"
+            homepage "https://github.com/sumerc/zee"
+            app "Zee.app"
+          end
+          CASK
+          # remove leading whitespace from heredoc
+          sed -i '' 's/^          //' zee.rb
+          cd "$(mktemp -d)"
+          git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/sumerc/homebrew-tap.git" .
+          mkdir -p Casks
+          cp "$OLDPWD/zee.rb" Casks/zee.rb
+          git add Casks/zee.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update zee cask to ${VERSION}"
+          git push

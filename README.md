@@ -31,25 +31,25 @@
 
 ## Install
 
-### macOS App (recommended)
+### Homebrew (recommended)
+
+```bash
+brew install --cask sumerc/tap/zee
+```
+
+Installs `Zee.app` to `/Applications`. Launch from Spotlight or the Applications folder.
+
+### macOS (DMG)
 
 1. Download `Zee-<version>.dmg` from the [latest release](https://github.com/sumerc/zee/releases/latest)
 2. Open the DMG and drag **Zee.app** to **Applications**
-3. Launch from Applications or Spotlight
-4. Grant **Microphone** and **Accessibility** permissions when prompted
 
-Set your API key in the environment before launching, or export it in your shell profile:
+### CLI binary
 
-```bash
-GROQ_API_KEY=xxx open /Applications/Zee.app
-```
-
-### CLI
-
-Install via Homebrew or download the binary directly:
+For terminal usage, install the formula or download directly:
 
 ```bash
-brew install sumerc/tap/zee
+brew install sumerc/tap/zee         # installs to /opt/homebrew/bin/zee
 ```
 
 ```bash
@@ -60,12 +60,9 @@ curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_arm64.
 curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_amd64.tar.gz | tar xz
 ```
 
-Run from the terminal:
-
 ```bash
 GROQ_API_KEY=xxx zee                # Groq Whisper
-OPENAI_API_KEY=xxx zee              # OpenAI Whisper
-DEEPGRAM_API_KEY=xxx zee -stream    # Deepgram streaming
+OPENAI_API_KEY=xxx zee -stream      # Deepgram streaming
 zee -debug                          # with diagnostic logging
 ```
 
