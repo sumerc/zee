@@ -2,6 +2,7 @@
   <img src="eye.gif" alt="zee" width="264"><br>
   <strong>zee</strong><br><br>
   Voice transcription that stays out of your way.<br>
+  Supports Groq, OpenAI, and Deepgram models.<br>
   Push-to-talk, tap-to-toggle, or real-time streaming. Pure Go. Sub-second fast.<br><br>
   <img src="https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white" alt="Go 1.24">
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple" alt="macOS">
@@ -17,7 +18,7 @@
 - **Auto-paste** — transcribed text goes straight to clipboard and pastes into the active window. In streaming mode, each new phrase pastes as it arrives.
 - **Silence detection** — VAD-based voice activity detection warns when no speech is heard. In streaming mode, auto-closes recording after 30 seconds of silence.
 - **Pure Go encoding** — MP3 and FLAC encoders, no CGO. Three formats: `mp3@16` (smallest), `mp3@64` (balanced), `flac` (lossless).
-- **Multiple providers** — Groq Whisper and Deepgram, switchable from the tray menu at runtime.
+- **Multiple providers** — Groq, OpenAI, and Deepgram, switchable from the tray menu at runtime.
 - **36 languages** — select transcription language from the tray menu or via `-lang` flag.
 - **Cross-platform** — minimal dependencies, pure Go where possible.
   - [x] macOS
@@ -26,12 +27,31 @@
 
 ## Install
 
-### macOS
+### macOS (DMG)
+
+1. Download `Zee-<version>.dmg` from the [latest release](https://github.com/sumerc/zee/releases/latest)
+2. Open the DMG and drag **Zee.app** to **Applications**
+3. Launch from Applications or Spotlight
+4. Grant **Microphone** and **Accessibility** permissions when prompted
+
+### macOS (from source)
 
 ```bash
-curl -L -o zee "https://github.com/sumerc/zee/releases/latest/download/zee_darwin_$(uname -m)"
-chmod +x zee
-sudo mv zee /usr/local/bin/
+git clone https://github.com/sumerc/zee && cd zee
+make app          # builds Zee-<version>.dmg
+open Zee-*.dmg    # install from DMG
+```
+
+### macOS (CLI)
+
+You can also run zee directly from the terminal without installing the DMG:
+
+```bash
+make build
+GROQ_API_KEY=xxx ./zee              # Groq Whisper
+OPENAI_API_KEY=xxx ./zee            # OpenAI Whisper
+DEEPGRAM_API_KEY=xxx ./zee -stream  # Deepgram streaming
+./zee -debug                        # with diagnostic logging
 ```
 
 ## Usage
@@ -66,7 +86,8 @@ If permissions aren't granted, zee will fail silently or the hotkey won't regist
 
 ```bash
 make test                                      # unit tests
-make integration-test WAV=test/data/short.wav  # requires GROQ_API_KEY
+make test-integration                          # integration tests (builds binary, requires GROQ_API_KEY)
+make integration-test WAV=test/data/short.wav  # single-file integration test (requires GROQ_API_KEY)
 make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 ```
 
@@ -82,8 +103,8 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 | `-setup` | false | Select microphone device |
 | `-device` | (default) | Use named microphone device |
 | `-lang` | en | Language code (e.g., `en`, `es`, `fr`) |
-| `-tui` | false | Show terminal UI (tray-only by default) |
-| `-debug` | true | Enable diagnostic and transcription logging |
+| `-debug` | false | Enable diagnostic logging |
+| `-debug-transcribe` | false | Enable transcription text logging (requires `-debug`) |
 | `-doctor` | false | Run system diagnostics and exit |
 | `-logpath` | OS-specific | Log directory (use `./` for current dir) |
 | `-profile` | - | pprof server address (e.g., `:6060`) |
