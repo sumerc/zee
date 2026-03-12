@@ -27,6 +27,8 @@ else
 	echo "warning: $SCRIPT_DIR/Zee.icns not found, DMG will have no app icon" >&2
 fi
 
+codesign --force --sign - --identifier com.zee.app "$APP"
+
 ln -s /Applications "$STAGING/Applications"
 
 hdiutil create -volname "Zee $VERSION" \
