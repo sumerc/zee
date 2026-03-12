@@ -4,6 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Note:** zee - push-to-talk transcription app. Runs as a system tray icon on macOS.
 
+## Rules
+- **CHANGELOG.md** — only log code/behavior changes. No docs, README, or comment-only updates. Be concise.
+
 ## Build & Run
 
 ```bash

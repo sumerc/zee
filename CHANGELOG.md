@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.1
+
+### Fixed
+- Code-sign app bundle with stable identifier (`com.zee.app`) to prevent repeated permission prompts
+
 ## v0.3.0
 
 ### Added
