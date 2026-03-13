@@ -36,9 +36,18 @@ func NewGroq(apiKey string) *Groq {
 	}
 }
 
-func (g *Groq) Models() []ModelInfo { return GroqModels }
+var groqLangs = langsFromCodes([]string{
+	"af", "ar", "hy", "az", "be", "bs", "bg", "ca", "zh", "hr",
+	"cs", "da", "nl", "en", "et", "fi", "fr", "gl", "de", "el",
+	"he", "hi", "hu", "is", "id", "it", "ja", "kn", "kk", "ko",
+	"lv", "lt", "mk", "ms", "mr", "mi", "ne", "no", "fa", "pl",
+	"pt", "ro", "ru", "sr", "sk", "sl", "es", "sw", "sv", "tl",
+	"ta", "th", "tr", "uk", "ur", "vi", "cy",
+})
 
-func (g *Groq) Name() string { return "groq" }
+func (g *Groq) SupportedLanguages() []Language { return groqLangs }
+func (g *Groq) Models() []ModelInfo            { return GroqModels }
+func (g *Groq) Name() string                   { return "groq" }
 
 func (g *Groq) NewSession(_ context.Context, cfg SessionConfig) (Session, error) {
 	go g.client.Warm()

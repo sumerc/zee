@@ -16,7 +16,8 @@ func NewFake(text string, err error) *FakeTranscriber {
 	return &FakeTranscriber{text: text, err: err}
 }
 
-func (f *FakeTranscriber) Name() string            { return "fake" }
+func (f *FakeTranscriber) Name() string                   { return "fake" }
+func (f *FakeTranscriber) SupportedLanguages() []Language { return nil }
 func (f *FakeTranscriber) SetLanguage(lang string)  { f.lang = lang }
 func (f *FakeTranscriber) GetLanguage() string      { return f.lang }
 func (f *FakeTranscriber) Models() []ModelInfo       { return nil }

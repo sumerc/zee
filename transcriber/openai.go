@@ -26,7 +26,18 @@ func NewOpenAI(apiKey string) *OpenAI {
 	}
 }
 
-func (o *OpenAI) Name() string { return "openai" }
+var openaiLangs = langsFromCodes([]string{
+	"af", "ar", "hy", "az", "be", "bs", "bg", "ca", "zh", "hr",
+	"cs", "da", "nl", "en", "et", "fi", "fr", "gl", "de", "el",
+	"he", "hi", "hu", "is", "id", "it", "ja", "kn", "kk", "ko",
+	"lv", "lt", "mk", "ms", "mr", "mi", "ne", "no", "fa", "pl",
+	"pt", "ro", "ru", "sr", "sk", "sl", "es", "sw", "sv", "tl",
+	"ta", "th", "tr", "uk", "ur", "vi", "cy",
+})
+
+func (o *OpenAI) SupportedLanguages() []Language { return openaiLangs }
+func (o *OpenAI) Name() string                   { return "openai" }
+
 var OpenAIModels = []ModelInfo{
 	{ID: "gpt-4o-transcribe", Label: "GPT-4o Transcribe", Stream: false},
 }

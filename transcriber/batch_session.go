@@ -127,6 +127,7 @@ func (bs *batchSession) Close() (SessionResult, error) {
 			ConnReused:       netMetrics.ConnReused,
 			TLSProtocol:      netMetrics.TLSProtocol,
 			Confidence:       result.Confidence,
+			InferenceMs:      result.InferenceMs,
 		},
 		Metrics: bs.formatMetrics(rawSize, encodedSize, compressionPct, audioDuration, result),
 	}
