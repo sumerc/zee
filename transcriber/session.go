@@ -28,6 +28,7 @@ type BatchStats struct {
 	ConnReused       bool
 	TLSProtocol      string
 	Confidence       float64
+	InferenceMs      float64
 }
 
 type StreamStats struct {

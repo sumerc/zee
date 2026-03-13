@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
 	"time"
 )
@@ -54,6 +55,7 @@ type Result struct {
 	NoSpeechProb float64
 	AvgLogProb   float64
 	Duration     float64
+	InferenceMs  float64
 	Segments     []Segment
 }
 
@@ -63,14 +65,52 @@ type ModelInfo struct {
 	Stream bool
 }
 
+type Language struct {
+	Code  string // ISO-639-1 ("" = auto-detect)
+	Label string
+}
+
 type Transcriber interface {
 	Name() string
+	SupportedLanguages() []Language
 	SetLanguage(lang string)
 	GetLanguage() string
 	Models() []ModelInfo
 	SetModel(model string)
 	GetModel() string
 	NewSession(ctx context.Context, cfg SessionConfig) (Session, error)
+}
+
+// langLabels maps ISO-639-1 codes to display names.
+var langLabels = map[string]string{
+	"af": "Afrikaans", "ar": "Arabic", "hy": "Armenian", "az": "Azerbaijani",
+	"be": "Belarusian", "bs": "Bosnian", "bg": "Bulgarian", "ca": "Catalan",
+	"zh": "Chinese", "hr": "Croatian", "cs": "Czech", "da": "Danish",
+	"nl": "Dutch", "en": "English", "et": "Estonian", "fi": "Finnish",
+	"fr": "French", "gl": "Galician", "de": "German", "el": "Greek",
+	"he": "Hebrew", "hi": "Hindi", "hu": "Hungarian", "is": "Icelandic",
+	"id": "Indonesian", "it": "Italian", "ja": "Japanese", "kn": "Kannada",
+	"kk": "Kazakh", "ko": "Korean", "lv": "Latvian", "lt": "Lithuanian",
+	"mk": "Macedonian", "ms": "Malay", "mr": "Marathi", "mi": "Maori",
+	"ne": "Nepali", "no": "Norwegian", "fa": "Persian", "pl": "Polish",
+	"pt": "Portuguese", "ro": "Romanian", "ru": "Russian", "sr": "Serbian",
+	"sk": "Slovak", "sl": "Slovenian", "es": "Spanish", "sw": "Swahili",
+	"sv": "Swedish", "tl": "Tagalog", "ta": "Tamil", "th": "Thai",
+	"tr": "Turkish", "uk": "Ukrainian", "ur": "Urdu", "vi": "Vietnamese",
+	"cy": "Welsh",
+}
+
+func langsFromCodes(codes []string) []Language {
+	langs := make([]Language, 0, len(codes)+1)
+	langs = append(langs, Language{"", "Auto-detect"})
+	for _, c := range codes {
+		label := langLabels[c]
+		if label == "" {
+			label = c
+		}
+		langs = append(langs, Language{c, label})
+	}
+	return langs
 }
 
 type baseTranscriber struct {
@@ -93,6 +133,16 @@ func (b *baseTranscriber) GetLanguage() string {
 	return b.lang
 }
 
+// AllLanguages returns every known language, sorted alphabetically.
+func AllLanguages() []Language {
+	codes := make([]string, 0, len(langLabels))
+	for c := range langLabels {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	return langsFromCodes(codes)
+}
+
 func (b *baseTranscriber) Models() []ModelInfo  { return nil }
 func (b *baseTranscriber) SetModel(m string)   { b.model = m }
 func (b *baseTranscriber) GetModel() string    { return b.model }
@@ -109,6 +159,7 @@ func New() (Transcriber, error) {
 	dgKey := os.Getenv("DEEPGRAM_API_KEY")
 	openaiKey := os.Getenv("OPENAI_API_KEY")
 	groqKey := os.Getenv("GROQ_API_KEY")
+	mistralKey := os.Getenv("MISTRAL_API_KEY")
 
 	if dgKey != "" {
 		return NewDeepgram(dgKey), nil
@@ -119,6 +170,9 @@ func New() (Transcriber, error) {
 	if groqKey != "" {
 		return NewGroq(groqKey), nil
 	}
+	if mistralKey != "" {
+		return NewMistral(mistralKey), nil
+	}
 
-	return nil, fmt.Errorf("set DEEPGRAM_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY environment variable")
+	return nil, fmt.Errorf("set DEEPGRAM_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, or MISTRAL_API_KEY environment variable")
 }

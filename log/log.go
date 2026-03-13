@@ -34,6 +34,7 @@ type Metrics struct {
 	TotalTimeMs      float64
 	MemoryAllocMB    float64
 	MemoryPeakMB     float64
+	InferenceMs      float64
 }
 
 func ResolveDir(flagPath string) (string, error) {
@@ -197,8 +198,11 @@ func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused b
 		Float64("ttfb_ms", m.TTFBMs).
 		Float64("total_ms", m.TotalTimeMs).
 		Float64("mem_mb", m.MemoryAllocMB).
-		Float64("peak_mb", m.MemoryPeakMB).
-		Msg("transcription")
+		Float64("peak_mb", m.MemoryPeakMB)
+	if m.InferenceMs > 0 {
+		ev = ev.Float64("inference_ms", m.InferenceMs)
+	}
+	ev.Msg("transcription")
 }
 
 func TranscriptionText(text string) {
