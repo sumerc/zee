@@ -159,3 +159,5 @@ func Paste() error {
 	}
 	return syn()
 }
+
+func CheckAccessibility() bool { return true }

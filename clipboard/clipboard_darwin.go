@@ -1,5 +1,15 @@
 package clipboard
 
+/*
+#cgo LDFLAGS: -framework ApplicationServices -framework CoreFoundation
+#include <ApplicationServices/ApplicationServices.h>
+
+static int testAccessibility() {
+	return AXIsProcessTrusted();
+}
+*/
+import "C"
+
 import (
 	"sync"
 
@@ -26,4 +36,8 @@ func Paste() error {
 	kb.SetKeys(keybd_event.VK_V)
 	kb.HasSuper(true) // Cmd+V on macOS
 	return kb.Launching()
+}
+
+func CheckAccessibility() bool {
+	return C.testAccessibility() == 1
 }
