@@ -84,13 +84,22 @@ make app          # macOS DMG
 
 ## Usage
 
+Set at least one API key, then run zee:
+
 ```bash
 export GROQ_API_KEY=your_key       # batch mode (Groq Whisper)
 export OPENAI_API_KEY=your_key     # batch mode (OpenAI Whisper)
 export DEEPGRAM_API_KEY=your_key   # streaming mode (Deepgram)
+export MISTRAL_API_KEY=your_key    # batch mode (Mistral Voxtral)
 zee                                # starts in menu bar, hold Ctrl+Shift+Space to record
 zee -stream                        # words appear as you speak
 ```
+
+> **Note:** `export` only works in the current terminal session. To make API keys available to `Zee.app` when launched from Spotlight or Applications, use `launchctl`:
+> ```bash
+> launchctl setenv GROQ_API_KEY your_key
+> ```
+> Add this to your `~/.zshrc` so it runs on every login.
 
 zee runs as a system tray app in the menu bar. Hold `Ctrl+Shift+Space` to record, release to transcribe. Result auto-pastes into the focused window.
 
