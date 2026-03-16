@@ -2,4 +2,5 @@
 
 package alert
 
-func Show(_ string) {}
+func Error(_ string) {}
+func Warn(_ string)  {}

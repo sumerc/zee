@@ -34,7 +34,7 @@ var version = "dev"
 func fatal(msg string, args ...any) {
 	s := fmt.Sprintf(msg, args...)
 	fmt.Fprintln(os.Stderr, s)
-	alert.Show(s)
+	alert.Error(s)
 	os.Exit(1)
 }
 
@@ -183,13 +183,12 @@ func run() {
 	// Resolve log directory early
 	logPath, err := log.ResolveDir(*logPathFlag)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to resolve log directory: %v\n", err)
-		os.Exit(1)
+		fatal("Failed to resolve log directory: %v", err)
 	}
 	log.SetDir(logPath)
 
 	if err := log.EnsureDir(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not create log directory: %v\n", err)
+		log.Warnf("could not create log directory: %v", err)
 	}
 
 	crashPath := filepath.Join(log.Dir(), "crash_log.txt")
@@ -232,8 +231,7 @@ func run() {
 	case "mp3@16", "mp3@64", "flac":
 		activeFormat = *formatFlag
 	default:
-		fmt.Printf("Error: unknown format %q (use mp3@16, mp3@64, or flac)\n", *formatFlag)
-		os.Exit(1)
+		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
 	}
 
 	if streamEnabled && *formatFlag != "mp3@16" {
@@ -253,8 +251,7 @@ func run() {
 	if *setupFlag && *deviceFlag == "" {
 		ctx, err := audio.NewContext()
 		if err != nil {
-			fmt.Printf("Error initializing audio: %v\n", err)
-			os.Exit(1)
+			fatal("Error initializing audio: %v", err)
 		}
 		if dev, _ := selectDevice(ctx); dev != nil {
 			*deviceFlag = dev.Name
@@ -265,7 +262,7 @@ func run() {
 	if *debugFlag {
 		log.SetTranscribeEnabled(*debugTranscribeFlag)
 		if err := log.Init(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not init logging: %v\n", err)
+			alert.Warn("Debug logging will not work.\n\n" + err.Error())
 		} else {
 			log.SessionStart(activeTranscriber.Name(), activeFormat, activeFormat)
 		}
@@ -288,8 +285,12 @@ func run() {
 
 	if autoPaste {
 		if err := clipboard.Init(); err != nil {
-			fmt.Printf("Warning: paste init failed: %v\n", err)
-			fmt.Println("Fix with: sudo chmod 660 /dev/uinput && sudo chgrp input /dev/uinput")
+			log.Warnf("paste init failed: %v", err)
+			alert.Warn("Auto-paste will not work.\n\n" + err.Error())
+		}
+		if !clipboard.CheckAccessibility() {
+			log.Warnf("accessibility permission missing or stale")
+			alert.Warn("Auto-paste requires Accessibility permission.\n\nGrant access to Zee.app (or your terminal app if running from CLI) in:\nSystem Settings → Privacy & Security → Accessibility")
 		}
 	}
 
@@ -313,9 +314,7 @@ func run() {
 	} else if *setupFlag {
 		selectedDevice, err = selectDevice(ctx)
 		if err != nil {
-			log.Warnf("device selection failed: %v", err)
-			fmt.Printf("Warning: device selection failed: %v\n", err)
-			fmt.Println("Falling back to default device")
+			log.Warnf("device selection failed: %v — falling back to default", err)
 			selectedDevice = nil
 		}
 	}
