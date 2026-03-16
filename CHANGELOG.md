@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.5
+
+### Added
+- **Mistral Voxtral provider** — batch transcription via Voxtral Mini
+- **Per-model language filtering** — tray language menu shows only languages supported by the active model
+- **Accessibility check at startup** — warns if auto-paste permission is missing or stale
+
+### Changed
+- Alert dialogs for all user-visible errors/warnings (no more invisible stdout messages in .app mode)
+- `alert.Error()` for fatal errors, `alert.Warn()` for non-fatal warnings with caution icon
+- GitHub Actions updated to checkout@v5 and setup-go@v6
+
 ## v0.3.1
 
 ### Fixed
