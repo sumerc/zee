@@ -21,8 +21,11 @@ var (
 	mAutoPaste *systray.MenuItem
 	mLogin     *systray.MenuItem
 	mBackend   *systray.MenuItem
-	mLanguage  *systray.MenuItem
-	langItems  []*systray.MenuItem
+	mLanguage *systray.MenuItem
+	langEntries []struct {
+		item *systray.MenuItem
+		code string
+	}
 	mUpdate    *systray.MenuItem
 
 	modelItems []*systray.MenuItem
@@ -279,23 +282,8 @@ func onReady() {
 	modelMu.Unlock()
 
 	mLanguage = mSettings.AddSubMenuItem("Language", "Select transcription language")
-	langItems = make([]*systray.MenuItem, 0, len(Languages))
-	for i, lang := range Languages {
-		idx := i
-		item := mLanguage.AddSubMenuItemCheckbox(lang.Label, lang.Label, lang.Code == langCode)
-		item.Click(func() {
-			for j, it := range langItems {
-				if j == idx {
-					it.Check()
-				} else {
-					it.Uncheck()
-				}
-			}
-			if langCb != nil {
-				langCb(Languages[idx].Code)
-			}
-		})
-		langItems = append(langItems, item)
+	for _, lang := range languages {
+		addLangEntry(lang.Code, lang.Label)
 	}
 
 	systray.AddSeparator()
@@ -327,6 +315,56 @@ func addUpdateMenuItem(version string) {
 		url := "https://github.com/sumerc/zee/releases/tag/" + version
 		exec.Command("open", url).Start()
 	})
+}
+
+func addLangEntry(code, label string) {
+	idx := len(langEntries)
+	item := mLanguage.AddSubMenuItemCheckbox(label, label, code == langCode)
+	item.Click(func() {
+		for _, e := range langEntries {
+			e.item.Uncheck()
+		}
+		langEntries[idx].item.Check()
+		if langCb != nil {
+			langCb(langEntries[idx].code)
+		}
+	})
+	langEntries = append(langEntries, struct {
+		item *systray.MenuItem
+		code string
+	}{item, code})
+}
+
+func refreshLanguageMenu() {
+	if mLanguage == nil {
+		return
+	}
+	want := make(map[string]bool, len(languages))
+	for _, l := range languages {
+		want[l.Code] = true
+	}
+	langValid := false
+	for _, e := range langEntries {
+		if e.code == "" || want[e.code] {
+			e.item.Show()
+			if e.code == langCode {
+				langValid = true
+				e.item.Check()
+			}
+		} else {
+			e.item.Hide()
+			e.item.Uncheck()
+		}
+	}
+	if !langValid {
+		langCode = ""
+		if len(langEntries) > 0 {
+			langEntries[0].item.Check()
+		}
+		if langCb != nil {
+			langCb("")
+		}
+	}
 }
 
 func disableBackend() {

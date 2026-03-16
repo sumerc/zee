@@ -361,6 +361,7 @@ func run() {
 	groqKey := os.Getenv("GROQ_API_KEY")
 	openaiKey := os.Getenv("OPENAI_API_KEY")
 	dgKey := os.Getenv("DEEPGRAM_API_KEY")
+	mistralKey := os.Getenv("MISTRAL_API_KEY")
 
 	type providerDef struct {
 		name, label, key string
@@ -371,6 +372,7 @@ func run() {
 		{"groq", "Groq", groqKey, transcriber.GroqModels, func() transcriber.Transcriber { return transcriber.NewGroq(groqKey) }},
 		{"openai", "OpenAI", openaiKey, transcriber.OpenAIModels, func() transcriber.Transcriber { return transcriber.NewOpenAI(openaiKey) }},
 		{"deepgram", "Deepgram", dgKey, transcriber.DeepgramModels, func() transcriber.Transcriber { return transcriber.NewDeepgram(dgKey) }},
+		{"mistral", "Mistral", mistralKey, transcriber.MistralModels, func() transcriber.Transcriber { return transcriber.NewMistral(mistralKey) }},
 	}
 
 	var trayModels []tray.Model
@@ -388,6 +390,8 @@ func run() {
 			modelIndex[p.name+":"+m.ID] = m
 		}
 	}
+
+	tray.SetLanguages(transcriber.AllLanguages())
 
 	tray.SetModels(trayModels, func(provider, model string) {
 		configMu.Lock()
@@ -413,6 +417,8 @@ func run() {
 		if !streamEnabled {
 			activeFormat = *formatFlag
 		}
+
+		tray.SetLanguages(newTr.SupportedLanguages())
 	})
 
 	tray.SetLanguage(*langFlag, func(code string) {
@@ -711,6 +717,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 			TotalTimeMs:      bs.TotalTimeMs,
 			MemoryAllocMB:    result.MemoryAllocMB,
 			MemoryPeakMB:     result.MemoryPeakMB,
+			InferenceMs:      bs.InferenceMs,
 		}
 		transcriptionsMu.Lock()
 		transcriptionCount++
