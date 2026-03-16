@@ -14,9 +14,18 @@ const (
 	ModelWhisperV3      = "whisper-large-v3"
 )
 
+var whisperLangs = langsFromCodes([]string{
+	"af", "ar", "hy", "az", "be", "bs", "bg", "ca", "zh", "hr",
+	"cs", "da", "nl", "en", "et", "fi", "fr", "gl", "de", "el",
+	"he", "hi", "hu", "is", "id", "it", "ja", "kn", "kk", "ko",
+	"lv", "lt", "mk", "ms", "mr", "mi", "ne", "no", "fa", "pl",
+	"pt", "ro", "ru", "sr", "sk", "sl", "es", "sw", "sv", "tl",
+	"ta", "th", "tr", "uk", "ur", "vi", "cy",
+})
+
 var GroqModels = []ModelInfo{
-	{ID: ModelWhisperV3Turbo, Label: "Whisper V3 Turbo", Stream: false},
-	{ID: ModelWhisperV3, Label: "Whisper V3", Stream: false},
+	{ID: ModelWhisperV3Turbo, Label: "Whisper V3 Turbo", Stream: false, Languages: whisperLangs},
+	{ID: ModelWhisperV3, Label: "Whisper V3", Stream: false, Languages: whisperLangs},
 }
 
 type Groq struct {
@@ -36,16 +45,7 @@ func NewGroq(apiKey string) *Groq {
 	}
 }
 
-var groqLangs = langsFromCodes([]string{
-	"af", "ar", "hy", "az", "be", "bs", "bg", "ca", "zh", "hr",
-	"cs", "da", "nl", "en", "et", "fi", "fr", "gl", "de", "el",
-	"he", "hi", "hu", "is", "id", "it", "ja", "kn", "kk", "ko",
-	"lv", "lt", "mk", "ms", "mr", "mi", "ne", "no", "fa", "pl",
-	"pt", "ro", "ru", "sr", "sk", "sl", "es", "sw", "sv", "tl",
-	"ta", "th", "tr", "uk", "ur", "vi", "cy",
-})
-
-func (g *Groq) SupportedLanguages() []Language { return groqLangs }
+func (g *Groq) SupportedLanguages() []Language { return modelLanguages(GroqModels, g.GetModel()) }
 func (g *Groq) Models() []ModelInfo            { return GroqModels }
 func (g *Groq) Name() string                   { return "groq" }
 

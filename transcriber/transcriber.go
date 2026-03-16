@@ -60,9 +60,10 @@ type Result struct {
 }
 
 type ModelInfo struct {
-	ID     string
-	Label  string
-	Stream bool
+	ID        string
+	Label     string
+	Stream    bool
+	Languages []Language
 }
 
 type Language struct {
@@ -143,9 +144,18 @@ func AllLanguages() []Language {
 	return langsFromCodes(codes)
 }
 
-func (b *baseTranscriber) Models() []ModelInfo  { return nil }
+func (b *baseTranscriber) Models() []ModelInfo { return nil }
 func (b *baseTranscriber) SetModel(m string)   { b.model = m }
 func (b *baseTranscriber) GetModel() string    { return b.model }
+
+func modelLanguages(models []ModelInfo, current string) []Language {
+	for _, m := range models {
+		if m.ID == current {
+			return m.Languages
+		}
+	}
+	return nil
+}
 
 func New() (Transcriber, error) {
 	if fakeText, ok := os.LookupEnv("ZEE_FAKE_TEXT"); ok {

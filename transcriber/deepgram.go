@@ -26,19 +26,19 @@ func NewDeepgram(apiKey string) *Deepgram {
 	}
 }
 
-var deepgramLangs = langsFromCodes([]string{
+var nova3Langs = langsFromCodes([]string{
 	"bg", "ca", "zh", "cs", "da", "nl", "en", "et", "fi", "fr",
 	"de", "el", "hi", "hu", "id", "it", "ja", "ko", "lv", "lt",
 	"ms", "no", "pl", "pt", "ro", "ru", "sk", "es", "sv", "th",
 	"tr", "uk", "vi",
 })
 
-func (d *Deepgram) SupportedLanguages() []Language { return deepgramLangs }
-func (d *Deepgram) Name() string                   { return "deepgram" }
-
 var DeepgramModels = []ModelInfo{
-	{ID: "nova-3", Label: "Nova-3 (stream)", Stream: true},
+	{ID: "nova-3", Label: "Nova-3 (stream)", Stream: true, Languages: nova3Langs},
 }
+
+func (d *Deepgram) SupportedLanguages() []Language { return modelLanguages(DeepgramModels, d.GetModel()) }
+func (d *Deepgram) Name() string                   { return "deepgram" }
 
 func (d *Deepgram) Models() []ModelInfo { return DeepgramModels }
 

@@ -10,8 +10,13 @@ import (
 	"strconv"
 )
 
+var voxtralLangs = langsFromCodes([]string{
+	"ar", "zh", "nl", "en", "fr", "de", "hi", "it", "ja", "ko",
+	"pt", "ru", "es",
+})
+
 var MistralModels = []ModelInfo{
-	{ID: "voxtral-mini-latest", Label: "Voxtral Mini", Stream: false},
+	{ID: "voxtral-mini-latest", Label: "Voxtral Mini", Stream: false, Languages: voxtralLangs},
 }
 
 type Mistral struct {
@@ -31,12 +36,7 @@ func NewMistral(apiKey string) *Mistral {
 	}
 }
 
-var mistralLangs = langsFromCodes([]string{
-	"ar", "zh", "nl", "en", "fr", "de", "hi", "it", "ja", "ko",
-	"pt", "ru", "es",
-})
-
-func (m *Mistral) SupportedLanguages() []Language { return mistralLangs }
+func (m *Mistral) SupportedLanguages() []Language { return modelLanguages(MistralModels, m.GetModel()) }
 func (m *Mistral) Name() string                   { return "mistral" }
 func (m *Mistral) Models() []ModelInfo             { return MistralModels }
 

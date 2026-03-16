@@ -26,7 +26,10 @@ func NewOpenAI(apiKey string) *OpenAI {
 	}
 }
 
-var openaiLangs = langsFromCodes([]string{
+func (o *OpenAI) SupportedLanguages() []Language { return modelLanguages(OpenAIModels, o.GetModel()) }
+func (o *OpenAI) Name() string                   { return "openai" }
+
+var gpt4oTranscribeLangs = langsFromCodes([]string{
 	"af", "ar", "hy", "az", "be", "bs", "bg", "ca", "zh", "hr",
 	"cs", "da", "nl", "en", "et", "fi", "fr", "gl", "de", "el",
 	"he", "hi", "hu", "is", "id", "it", "ja", "kn", "kk", "ko",
@@ -35,11 +38,8 @@ var openaiLangs = langsFromCodes([]string{
 	"ta", "th", "tr", "uk", "ur", "vi", "cy",
 })
 
-func (o *OpenAI) SupportedLanguages() []Language { return openaiLangs }
-func (o *OpenAI) Name() string                   { return "openai" }
-
 var OpenAIModels = []ModelInfo{
-	{ID: "gpt-4o-transcribe", Label: "GPT-4o Transcribe", Stream: false},
+	{ID: "gpt-4o-transcribe", Label: "GPT-4o Transcribe", Stream: false, Languages: gpt4oTranscribeLangs},
 }
 
 func (o *OpenAI) Models() []ModelInfo { return OpenAIModels }
