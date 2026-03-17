@@ -288,10 +288,6 @@ func run() {
 			log.Warnf("paste init failed: %v", err)
 			alert.Warn("Auto-paste will not work.\n\n" + err.Error())
 		}
-		if !clipboard.CheckAccessibility() {
-			log.Warnf("accessibility permission missing or stale")
-			alert.Warn("Auto-paste requires Accessibility permission.\n\nGrant access to Zee.app (or your terminal app if running from CLI) in:\nSystem Settings → Privacy & Security → Accessibility")
-		}
 	}
 
 	ctx, err := audio.NewContext()
@@ -502,7 +498,7 @@ func run() {
 	hk := hotkey.New()
 	if err := hk.Register(); err != nil {
 		log.Errorf("hotkey register error: %v", err)
-		fatal("Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security.", err)
+		fatal("Accessibility permission required.\n\nGrant access to Zee.app (or your terminal if running from CLI) in:\nSystem Settings → Privacy & Security → Accessibility")
 	}
 	defer hk.Unregister()
 
