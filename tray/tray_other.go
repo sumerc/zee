@@ -14,3 +14,4 @@ func disableDevices()                                    {}
 func enableDevices()                                     {}
 func disableBackend()                                    {}
 func enableBackend()                                     {}
+func updateStatusItem(string)                            {}

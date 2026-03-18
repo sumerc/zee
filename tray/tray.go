@@ -129,6 +129,31 @@ func SetBTCheck(fn func(string) bool) {
 	isBTFn = fn
 }
 
+func statusText() string {
+	modelMu.Lock()
+	var provider, model string
+	for _, m := range models {
+		if m.Active {
+			provider = m.ProviderLabel
+			model = m.Label
+			break
+		}
+	}
+	modelMu.Unlock()
+	lang := "Auto"
+	if langCode != "" {
+		lang = langCode
+	}
+	if provider == "" {
+		return "n/a"
+	}
+	return provider + " · " + model + " · " + lang
+}
+
+func updateStatus() {
+	updateStatusItem(statusText())
+}
+
 func deviceDisplayName(name string) string {
 	if isBTFn != nil && isBTFn(name) {
 		return name + " [⚠ Lower audio quality]"

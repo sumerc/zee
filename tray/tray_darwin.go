@@ -10,6 +10,7 @@ import (
 )
 
 var (
+	mStatus     *systray.MenuItem
 	mRecord     *systray.MenuItem
 	mCopy       *systray.MenuItem
 	mDevices       *systray.MenuItem
@@ -157,7 +158,12 @@ func onReady() {
 	systray.SetTemplateIcon(iconIdleHi, iconIdle)
 	systray.SetTooltip("zee – push to talk")
 
-	mRecord = systray.AddMenuItem("○ Start Recording (Shift+Control+Space)", "Start or stop recording")
+	mStatus = systray.AddMenuItem(statusText(), "")
+	mStatus.Disable()
+
+	systray.AddSeparator()
+
+	mRecord = systray.AddMenuItem("○ Start Recording (Fn)", "Start or stop recording")
 	mRecord.Click(func() {
 		if recording {
 			if stopFn != nil {
@@ -275,6 +281,7 @@ func onReady() {
 					}
 				}
 				modelMu.Unlock()
+				updateStatus()
 			})
 			modelItems = append(modelItems, item)
 		}
@@ -325,9 +332,11 @@ func addLangEntry(code, label string) {
 			e.item.Uncheck()
 		}
 		langEntries[idx].item.Check()
+		langCode = langEntries[idx].code
 		if langCb != nil {
-			langCb(langEntries[idx].code)
+			langCb(langCode)
 		}
+		updateStatus()
 	})
 	langEntries = append(langEntries, struct {
 		item *systray.MenuItem
@@ -364,6 +373,13 @@ func refreshLanguageMenu() {
 		if langCb != nil {
 			langCb("")
 		}
+	}
+	updateStatus()
+}
+
+func updateStatusItem(text string) {
+	if mStatus != nil {
+		mStatus.SetTitle(text)
 	}
 }
 
