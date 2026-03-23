@@ -2,7 +2,7 @@
   <img src="eye.gif" alt="zee" width="264"><br>
   <strong>zee</strong><br><br>
   Voice transcription that stays out of your way.<br>
-  Supports Groq, OpenAI, and Deepgram models.<br>
+  Supports Groq, OpenAI, Mistral and Deepgram models.<br>
   Push-to-talk, tap-to-toggle, or real-time streaming. Pure Go. Sub-second fast.<br><br>
   <img src="https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white" alt="Go 1.24">
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple" alt="macOS">
