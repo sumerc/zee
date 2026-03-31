@@ -361,6 +361,7 @@ func run() {
 	openaiKey := os.Getenv("OPENAI_API_KEY")
 	dgKey := os.Getenv("DEEPGRAM_API_KEY")
 	mistralKey := os.Getenv("MISTRAL_API_KEY")
+	elevenLabsKey := os.Getenv("ELEVENLABS_API_KEY")
 
 	type providerDef struct {
 		name, label, key string
@@ -372,6 +373,7 @@ func run() {
 		{"openai", "OpenAI", openaiKey, transcriber.OpenAIModels, func() transcriber.Transcriber { return transcriber.NewOpenAI(openaiKey) }},
 		{"deepgram", "Deepgram", dgKey, transcriber.DeepgramModels, func() transcriber.Transcriber { return transcriber.NewDeepgram(dgKey) }},
 		{"mistral", "Mistral", mistralKey, transcriber.MistralModels, func() transcriber.Transcriber { return transcriber.NewMistral(mistralKey) }},
+		{"elevenlabs", "ElevenLabs", elevenLabsKey, transcriber.ElevenLabsModels, func() transcriber.Transcriber { return transcriber.NewElevenLabs(elevenLabsKey) }},
 	}
 
 	var trayModels []tray.Model

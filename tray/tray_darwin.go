@@ -48,7 +48,7 @@ func updateRecordingIcon(rec bool) {
 	if rec {
 		systray.SetIcon(iconRecHi)
 		if mRecord != nil {
-			mRecord.SetTitle("🔴 Stop Recording (Shift+Control+Space)")
+			mRecord.SetTitle("● Stop Recording (Shift+Control+Space)")
 		}
 	} else {
 		systray.SetTemplateIcon(iconIdleHi, iconIdle)
@@ -176,8 +176,6 @@ func onReady() {
 		}
 	})
 
-	systray.AddSeparator()
-
 	mCopy = systray.AddMenuItem("Copy Last Recorded Text", "Copy last transcription to clipboard")
 	mCopy.Disable()
 	mCopy.Click(func() {
@@ -185,8 +183,6 @@ func onReady() {
 			copyLastFn()
 		}
 	})
-
-	systray.AddSeparator()
 
 	mSettings = systray.AddMenuItem("Settings", "Settings")
 

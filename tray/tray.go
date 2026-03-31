@@ -145,9 +145,9 @@ func statusText() string {
 		lang = langCode
 	}
 	if provider == "" {
-		return "n/a"
+		return "𝘻𝘦𝘦"
 	}
-	return provider + " · " + model + " · " + lang
+	return "𝘻𝘦𝘦 — " + provider + " · " + model + " · " + lang
 }
 
 func updateStatus() {
