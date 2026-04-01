@@ -46,6 +46,10 @@ var (
 
 	langCode string // current language code ("" = auto-detect)
 	langCb   func(string)
+
+	appVersion    string
+	latestVersion string
+	checkUpdateCb func()
 )
 
 var languages []transcriber.Language // set via SetLanguages
@@ -111,8 +115,13 @@ func SetLastRecording(dur time.Duration, totalMs float64) {
 	updateCopyLastTitle(fmt.Sprintf("Copy Last Recorded Text (%.1fs | %dms)", dur.Seconds(), int(totalMs)))
 }
 
+func SetVersion(v string)        { appVersion = v }
+func OnCheckUpdate(fn func())    { checkUpdateCb = fn }
+
 func SetUpdateAvailable(version string) {
-	addUpdateMenuItem(version)
+	latestVersion = version
+	updateStatus()
+	setCheckUpdateTitle("Update available: " + version)
 }
 
 func SetLanguage(code string, onSwitch func(string)) {
@@ -140,14 +149,23 @@ func statusText() string {
 		}
 	}
 	modelMu.Unlock()
+
+	ver := "𝘻𝘦𝘦"
+	if appVersion != "" && appVersion != "dev" {
+		ver = "𝘻𝘦𝘦 " + appVersion
+	}
+	if latestVersion != "" {
+		ver += " (update: " + latestVersion + ")"
+	}
+
 	lang := "Auto"
 	if langCode != "" {
 		lang = langCode
 	}
 	if provider == "" {
-		return "𝘻𝘦𝘦"
+		return ver
 	}
-	return "𝘻𝘦𝘦 — " + provider + " · " + model + " · " + lang
+	return ver + " — " + provider + " · " + model + " · " + lang
 }
 
 func updateStatus() {

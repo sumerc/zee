@@ -60,11 +60,9 @@ func TestReleaseNewerThan(t *testing.T) {
 func TestCacheWriteRead(t *testing.T) {
 	dir := t.TempDir()
 
-	// Write a release to cache
-	rel := &Release{Version: "v0.2.0", AssetURL: "https://example.com/zee", ChecksumURL: "https://example.com/checksums.txt"}
+	rel := &Release{Version: "v0.2.0", URL: ReleaseURL("v0.2.0")}
 	writeCache(dir, rel)
 
-	// Read it back
 	got, ok := readCache(dir)
 	if !ok {
 		t.Fatal("readCache returned not ok")
@@ -72,11 +70,10 @@ func TestCacheWriteRead(t *testing.T) {
 	if got == nil {
 		t.Fatal("readCache returned nil release")
 	}
-	if got.Version != rel.Version || got.AssetURL != rel.AssetURL || got.ChecksumURL != rel.ChecksumURL {
-		t.Errorf("readCache = %+v, want %+v", got, rel)
+	if got.Version != rel.Version {
+		t.Errorf("readCache version = %q, want %q", got.Version, rel.Version)
 	}
 
-	// Write nil (no update available)
 	writeCache(dir, nil)
 	got, ok = readCache(dir)
 	if !ok {
@@ -86,7 +83,6 @@ func TestCacheWriteRead(t *testing.T) {
 		t.Errorf("readCache = %+v, want nil", got)
 	}
 
-	// Corrupt cache file
 	_ = os.WriteFile(filepath.Join(dir, cacheFile), []byte("not json"), 0644)
 	_, ok = readCache(dir)
 	if ok {

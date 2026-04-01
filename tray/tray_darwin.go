@@ -27,7 +27,7 @@ var (
 		item *systray.MenuItem
 		code string
 	}
-	mUpdate    *systray.MenuItem
+	mCheckUpdate *systray.MenuItem
 
 	modelItems []*systray.MenuItem
 )
@@ -163,7 +163,7 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	mRecord = systray.AddMenuItem("○ Start Recording (Fn)", "Start or stop recording")
+	mRecord = systray.AddMenuItem("○ Start Recording (Shift+Control+Space)", "Start or stop recording")
 	mRecord.Click(func() {
 		if recording {
 			if stopFn != nil {
@@ -293,6 +293,19 @@ func onReady() {
 		addLangEntry(lang.Code, lang.Label)
 	}
 
+	sep2 := mSettings.AddSubMenuItem("─────────", "")
+	sep2.Disable()
+
+	mCheckUpdate = mSettings.AddSubMenuItem("Check for Updates…", "Check for updates")
+	mCheckUpdate.Click(func() {
+		if latestVersion != "" {
+			exec.Command("open", "https://github.com/sumerc/zee/releases/tag/"+latestVersion).Start()
+		} else if checkUpdateCb != nil {
+			mCheckUpdate.SetTitle("Checking…")
+			checkUpdateCb()
+		}
+	})
+
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit zee")
 	mQuit.Click(func() { Quit() })
@@ -308,20 +321,10 @@ func updateCopyLastTitle(title string) {
 	}
 }
 
-func addUpdateMenuItem(version string) {
-	if mUpdate != nil {
-		mUpdate.SetTitle("⚠ Update available: " + version)
-		mUpdate.Show()
-		return
+func setCheckUpdateTitle(title string) {
+	if mCheckUpdate != nil {
+		mCheckUpdate.SetTitle(title)
 	}
-	if mSettings == nil {
-		return
-	}
-	mUpdate = mSettings.AddSubMenuItem("Update available: "+version, "Open release page")
-	mUpdate.Click(func() {
-		url := "https://github.com/sumerc/zee/releases/tag/" + version
-		exec.Command("open", url).Start()
-	})
 }
 
 func addLangEntry(code, label string) {

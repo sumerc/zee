@@ -6,35 +6,22 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 )
 
 const (
-	cacheFile    = "update_check.json"
-	cacheTTL     = 24 * time.Hour
+	cacheFile     = "update_check.json"
+	cacheTTL      = 24 * time.Hour
 	checkInterval = 5 * time.Minute
 )
 
 type ghRelease struct {
-	TagName string    `json:"tag_name"`
-	Assets  []ghAsset `json:"assets"`
-}
-
-type ghAsset struct {
-	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
+	TagName string `json:"tag_name"`
 }
 
 type cachedCheck struct {
-	Version     string `json:"version"`
-	AssetURL    string `json:"asset_url"`
-	ChecksumURL string `json:"checksum_url"`
-	CheckedAt   int64  `json:"checked_at"`
-}
-
-func assetName() string {
-	return fmt.Sprintf("%s_%s_%s", BinaryName, runtime.GOOS, runtime.GOARCH)
+	Version   string `json:"version"`
+	CheckedAt int64  `json:"checked_at"`
 }
 
 func CheckLatest(currentVersion string) (*Release, error) {
@@ -64,21 +51,7 @@ func CheckLatest(currentVersion string) (*Release, error) {
 		return nil, err
 	}
 
-	want := assetName()
-	var assetURL, checksumURL string
-	for _, a := range rel.Assets {
-		switch a.Name {
-		case want:
-			assetURL = a.BrowserDownloadURL
-		case "checksums.txt":
-			checksumURL = a.BrowserDownloadURL
-		}
-	}
-	if assetURL == "" {
-		return nil, fmt.Errorf("no asset %q in release %s", want, rel.TagName)
-	}
-
-	r := &Release{Version: rel.TagName, AssetURL: assetURL, ChecksumURL: checksumURL}
+	r := &Release{Version: rel.TagName, URL: ReleaseURL(rel.TagName)}
 	if !r.NewerThan(currentVersion) {
 		return nil, nil
 	}
@@ -102,17 +75,15 @@ func readCache(cacheDir string) (*Release, bool) {
 		return nil, false
 	}
 	if c.Version == "" {
-		return nil, true // cached "no update"
+		return nil, true
 	}
-	return &Release{Version: c.Version, AssetURL: c.AssetURL, ChecksumURL: c.ChecksumURL}, true
+	return &Release{Version: c.Version, URL: ReleaseURL(c.Version)}, true
 }
 
 func writeCache(cacheDir string, rel *Release) {
 	c := cachedCheck{CheckedAt: time.Now().Unix()}
 	if rel != nil {
 		c.Version = rel.Version
-		c.AssetURL = rel.AssetURL
-		c.ChecksumURL = rel.ChecksumURL
 	}
 	data, err := json.Marshal(c)
 	if err != nil {
@@ -129,6 +100,16 @@ func CheckLatestCached(currentVersion, cacheDir string) (*Release, error) {
 	if rel, ok := readCache(cacheDir); ok {
 		return rel, nil
 	}
+	rel, err := CheckLatest(currentVersion)
+	if err != nil {
+		return nil, err
+	}
+	writeCache(cacheDir, rel)
+	return rel, nil
+}
+
+// CheckNow forces a fresh check, bypassing cache. Writes result to cache.
+func CheckNow(currentVersion, cacheDir string) (*Release, error) {
 	rel, err := CheckLatest(currentVersion)
 	if err != nil {
 		return nil, err
