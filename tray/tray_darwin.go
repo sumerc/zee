@@ -3,8 +3,6 @@
 package tray
 
 import (
-	"os/exec"
-
 	"github.com/energye/systray"
 	"golang.design/x/hotkey/mainthread"
 )
@@ -293,20 +291,15 @@ func onReady() {
 		addLangEntry(lang.Code, lang.Label)
 	}
 
-	sep2 := mSettings.AddSubMenuItem("─────────", "")
-	sep2.Disable()
+	systray.AddSeparator()
 
-	mCheckUpdate = mSettings.AddSubMenuItem("Check for Updates…", "Check for updates")
+	mCheckUpdate = systray.AddMenuItem("Check for Updates…", "Check for updates")
 	mCheckUpdate.Click(func() {
-		if latestVersion != "" {
-			exec.Command("open", "https://github.com/sumerc/zee/releases/tag/"+latestVersion).Start()
-		} else if checkUpdateCb != nil {
-			mCheckUpdate.SetTitle("Checking…")
+		if checkUpdateCb != nil {
 			checkUpdateCb()
 		}
 	})
 
-	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit zee")
 	mQuit.Click(func() { Quit() })
 	systray.CreateMenu()
@@ -321,11 +314,6 @@ func updateCopyLastTitle(title string) {
 	}
 }
 
-func setCheckUpdateTitle(title string) {
-	if mCheckUpdate != nil {
-		mCheckUpdate.SetTitle(title)
-	}
-}
 
 func addLangEntry(code, label string) {
 	idx := len(langEntries)

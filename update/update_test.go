@@ -1,10 +1,6 @@
 package update
 
-import (
-	"os"
-	"path/filepath"
-	"testing"
-)
+import "testing"
 
 func TestParseSemver(t *testing.T) {
 	tests := []struct {
@@ -54,38 +50,5 @@ func TestReleaseNewerThan(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("Release{%q}.NewerThan(%q) = %v, want %v", tt.release, tt.current, got, tt.want)
 		}
-	}
-}
-
-func TestCacheWriteRead(t *testing.T) {
-	dir := t.TempDir()
-
-	rel := &Release{Version: "v0.2.0", URL: ReleaseURL("v0.2.0")}
-	writeCache(dir, rel)
-
-	got, ok := readCache(dir)
-	if !ok {
-		t.Fatal("readCache returned not ok")
-	}
-	if got == nil {
-		t.Fatal("readCache returned nil release")
-	}
-	if got.Version != rel.Version {
-		t.Errorf("readCache version = %q, want %q", got.Version, rel.Version)
-	}
-
-	writeCache(dir, nil)
-	got, ok = readCache(dir)
-	if !ok {
-		t.Fatal("readCache returned not ok for nil cache")
-	}
-	if got != nil {
-		t.Errorf("readCache = %+v, want nil", got)
-	}
-
-	_ = os.WriteFile(filepath.Join(dir, cacheFile), []byte("not json"), 0644)
-	_, ok = readCache(dir)
-	if ok {
-		t.Error("readCache should return not ok for corrupt cache")
 	}
 }

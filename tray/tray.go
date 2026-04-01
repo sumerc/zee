@@ -48,7 +48,6 @@ var (
 	langCb   func(string)
 
 	appVersion    string
-	latestVersion string
 	checkUpdateCb func()
 )
 
@@ -115,14 +114,8 @@ func SetLastRecording(dur time.Duration, totalMs float64) {
 	updateCopyLastTitle(fmt.Sprintf("Copy Last Recorded Text (%.1fs | %dms)", dur.Seconds(), int(totalMs)))
 }
 
-func SetVersion(v string)        { appVersion = v }
-func OnCheckUpdate(fn func())    { checkUpdateCb = fn }
-
-func SetUpdateAvailable(version string) {
-	latestVersion = version
-	updateStatus()
-	setCheckUpdateTitle("Update available: " + version)
-}
+func SetVersion(v string)     { appVersion = v }
+func OnCheckUpdate(fn func()) { checkUpdateCb = fn }
 
 func SetLanguage(code string, onSwitch func(string)) {
 	langCode = code
@@ -149,23 +142,18 @@ func statusText() string {
 		}
 	}
 	modelMu.Unlock()
-
-	ver := "𝘻𝘦𝘦"
-	if appVersion != "" && appVersion != "dev" {
-		ver = "𝘻𝘦𝘦 " + appVersion
-	}
-	if latestVersion != "" {
-		ver += " (update: " + latestVersion + ")"
-	}
-
 	lang := "Auto"
 	if langCode != "" {
 		lang = langCode
 	}
-	if provider == "" {
-		return ver
+	ver := ""
+	if appVersion != "" && appVersion != "dev" {
+		ver = " · " + appVersion
 	}
-	return ver + " — " + provider + " · " + model + " · " + lang
+	if provider == "" {
+		return "𝘻𝘦𝘦"
+	}
+	return "𝘻𝘦𝘦 — " + provider + " · " + model + " · " + lang + ver
 }
 
 func updateStatus() {

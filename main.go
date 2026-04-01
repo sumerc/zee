@@ -7,6 +7,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
@@ -437,6 +438,7 @@ func run() {
 		updateSettings(func(s *Settings) { s.Language = code })
 	})
 	tray.SetLogin(login.Enabled())
+	tray.SetVersion(version)
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
@@ -496,23 +498,21 @@ func run() {
 		}
 	}()
 
-	tray.SetVersion(version)
 	tray.OnCheckUpdate(func() {
 		go func() {
-			rel, err := update.CheckNow(version, settingsDir())
+			rel, err := update.CheckLatest(version)
 			if err != nil {
-				tray.SetError("Update check failed")
+				alert.Warn("Could not check for updates:\n" + err.Error())
 				return
 			}
-			if rel != nil {
-				tray.SetUpdateAvailable(rel.Version)
+			if rel == nil {
+				alert.Info("You're on the latest version (" + version + ")")
+				return
+			}
+			if alert.Confirm("Update available: "+version+" → "+rel.Version+"\n\nHomebrew:\nbrew upgrade sumerc/tap/zee", "Open Release Page") {
+				exec.Command("open", rel.URL).Start()
 			}
 		}()
-	})
-
-	update.StartBackgroundCheck(version, settingsDir(), func(rel update.Release) {
-		log.Info("update_available: " + rel.Version)
-		tray.SetUpdateAvailable(rel.Version)
 	})
 
 	sigChan := make(chan os.Signal, 1)
