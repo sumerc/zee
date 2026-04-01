@@ -66,6 +66,7 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - `device.go` - microphone picker with arrow-key navigation
 - `vad.go` - voice activity detection using WebRTC VAD with debounced speech confirmation
 - `silence.go` - silence monitoring with warnings, repeat beeps, and auto-close (toggle mode)
+- `settings.go` - persistent settings (language, device, provider/model, auto-paste, auto-start) with JSON config file
 - `log.go` - diagnostic logging and panic capture to `diagnostics_log.txt`
 
 ## Design Philosophy

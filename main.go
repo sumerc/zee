@@ -7,6 +7,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
@@ -144,20 +145,9 @@ func run() {
 			fmt.Println("Already up to date.")
 			os.Exit(0)
 		}
-		fmt.Printf("Update available: %s -> %s\n", version, rel.Version)
-		fmt.Print("Continue? [y/N] ")
-		var answer string
-		fmt.Scanln(&answer)
-		if answer != "y" && answer != "Y" {
-			fmt.Println("Aborted.")
-			os.Exit(0)
-		}
-		fmt.Printf("Downloading %s...\n", rel.Version)
-		if err := update.Apply(rel); err != nil {
-			fmt.Printf("Error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Updated to %s\n", rel.Version)
+		fmt.Printf("\nUpdate available: %s → %s\n\n", version, rel.Version)
+		fmt.Println("Homebrew:  brew upgrade sumerc/tap/zee")
+		fmt.Printf("Download:  %s\n", rel.URL)
 		os.Exit(0)
 	}
 
@@ -223,7 +213,24 @@ func run() {
 		}
 		os.Exit(doctor.Run(wavFile))
 	}
-	autoPaste = *autoPasteFlag
+	// Load persistent settings, merge with CLI flags
+	if err := loadSettings(); err != nil {
+		log.Warnf("settings: %v", err)
+	}
+	cfg := getSettings()
+	flagSet := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
+	if !flagSet["lang"] && cfg.Language != "" {
+		*langFlag = cfg.Language
+	}
+	if !flagSet["device"] && cfg.Device != "" {
+		*deviceFlag = cfg.Device
+	}
+	if !flagSet["autopaste"] {
+		autoPaste = cfg.AutoPaste
+	} else {
+		autoPaste = *autoPasteFlag
+	}
 	streamEnabled = *streamFlag
 
 	// Validate format
@@ -238,10 +245,26 @@ func run() {
 		log.Warn("format ignored in streaming mode")
 	}
 
-	var initErr error
-	activeTranscriber, initErr = transcriber.New()
-	if initErr != nil {
-		fatal("No API key set.\n\nSet GROQ_API_KEY, OPENAI_API_KEY, or DEEPGRAM_API_KEY.")
+	// Restore saved provider/model or fall back to auto-detection
+	if cfg.Provider != "" {
+		for _, p := range transcriber.Providers() {
+			if p.Name == cfg.Provider {
+				if key := os.Getenv(p.EnvKey); key != "" {
+					activeTranscriber = p.NewFn(key)
+					if cfg.Model != "" {
+						activeTranscriber.SetModel(cfg.Model)
+					}
+				}
+				break
+			}
+		}
+	}
+	if activeTranscriber == nil {
+		var initErr error
+		activeTranscriber, initErr = transcriber.New()
+		if initErr != nil {
+			fatal("No API key set.\n\nSet GROQ_API_KEY, OPENAI_API_KEY, or DEEPGRAM_API_KEY.")
+		}
 	}
 	streamEnabled = modelSupportsStream(activeTranscriber)
 	if *langFlag != "" {
@@ -348,6 +371,7 @@ func run() {
 		}
 			tray.SetDevices(names, preferredDevice, func(name string) {
 			preferredDevice = name
+			updateSettings(func(s *Settings) { s.Device = name })
 			if name == "" {
 				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
 			} else {
@@ -357,38 +381,20 @@ func run() {
 	}
 	tray.SetAutoPaste(autoPaste)
 
-	groqKey := os.Getenv("GROQ_API_KEY")
-	openaiKey := os.Getenv("OPENAI_API_KEY")
-	dgKey := os.Getenv("DEEPGRAM_API_KEY")
-	mistralKey := os.Getenv("MISTRAL_API_KEY")
-	elevenLabsKey := os.Getenv("ELEVENLABS_API_KEY")
-
-	type providerDef struct {
-		name, label, key string
-		models           []transcriber.ModelInfo
-		newFn            func() transcriber.Transcriber
-	}
-	providers := []providerDef{
-		{"groq", "Groq", groqKey, transcriber.GroqModels, func() transcriber.Transcriber { return transcriber.NewGroq(groqKey) }},
-		{"openai", "OpenAI", openaiKey, transcriber.OpenAIModels, func() transcriber.Transcriber { return transcriber.NewOpenAI(openaiKey) }},
-		{"deepgram", "Deepgram", dgKey, transcriber.DeepgramModels, func() transcriber.Transcriber { return transcriber.NewDeepgram(dgKey) }},
-		{"mistral", "Mistral", mistralKey, transcriber.MistralModels, func() transcriber.Transcriber { return transcriber.NewMistral(mistralKey) }},
-		{"elevenlabs", "ElevenLabs", elevenLabsKey, transcriber.ElevenLabsModels, func() transcriber.Transcriber { return transcriber.NewElevenLabs(elevenLabsKey) }},
-	}
-
 	var trayModels []tray.Model
 	modelIndex := map[string]transcriber.ModelInfo{}
-	for _, p := range providers {
-		for _, m := range p.models {
+	for _, p := range transcriber.Providers() {
+		key := os.Getenv(p.EnvKey)
+		for _, m := range p.Models {
 			trayModels = append(trayModels, tray.Model{
-				Provider:      p.name,
-				ProviderLabel: p.label,
+				Provider:      p.Name,
+				ProviderLabel: p.Label,
 				ModelID:       m.ID,
 				Label:         m.Label,
-				HasKey:        p.key != "",
-				Active:        activeTranscriber.Name() == p.name && activeTranscriber.GetModel() == m.ID,
+				HasKey:        key != "",
+				Active:        activeTranscriber.Name() == p.Name && activeTranscriber.GetModel() == m.ID,
 			})
-			modelIndex[p.name+":"+m.ID] = m
+			modelIndex[p.Name+":"+m.ID] = m
 		}
 	}
 
@@ -401,9 +407,11 @@ func run() {
 		currentLang := activeTranscriber.GetLanguage()
 
 		var newTr transcriber.Transcriber
-		for _, p := range providers {
-			if p.name == provider {
-				newTr = p.newFn()
+		for _, p := range transcriber.Providers() {
+			if p.Name == provider {
+				if key := os.Getenv(p.EnvKey); key != "" {
+					newTr = p.NewFn(key)
+				}
 				break
 			}
 		}
@@ -419,6 +427,7 @@ func run() {
 			activeFormat = *formatFlag
 		}
 
+		updateSettings(func(s *Settings) { s.Provider = provider; s.Model = model })
 		tray.SetLanguages(newTr.SupportedLanguages())
 	})
 
@@ -426,14 +435,17 @@ func run() {
 		configMu.Lock()
 		activeTranscriber.SetLanguage(code)
 		configMu.Unlock()
+		updateSettings(func(s *Settings) { s.Language = code })
 	})
 	tray.SetLogin(login.Enabled())
+	tray.SetVersion(version)
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
 		configMu.Lock()
 		autoPaste = on
 		configMu.Unlock()
+		updateSettings(func(s *Settings) { s.AutoPaste = on })
 	})
 	tray.OnLogin(func(on bool) error {
 		var err error
@@ -445,6 +457,8 @@ func run() {
 		if err != nil {
 			log.Errorf("login toggle: %v", err)
 			tray.SetError(err.Error())
+		} else {
+			updateSettings(func(s *Settings) { s.AutoStart = on })
 		}
 		return err
 	})
@@ -484,9 +498,21 @@ func run() {
 		}
 	}()
 
-	update.StartBackgroundCheck(version, log.Dir(), func(rel update.Release) {
-		log.Info("update_available: " + rel.Version)
-		tray.SetUpdateAvailable(rel.Version)
+	tray.OnCheckUpdate(func() {
+		go func() {
+			rel, err := update.CheckLatest(version)
+			if err != nil {
+				alert.Warn("Could not check for updates:\n" + err.Error())
+				return
+			}
+			if rel == nil {
+				alert.Info("You're on the latest version (" + version + ")")
+				return
+			}
+			if alert.Confirm("Update available: "+version+" → "+rel.Version+"\n\nHomebrew:\nbrew upgrade sumerc/tap/zee", "Open Release Page") {
+				exec.Command("open", rel.URL).Start()
+			}
+		}()
 	})
 
 	sigChan := make(chan os.Signal, 1)
