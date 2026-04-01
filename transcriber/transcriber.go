@@ -84,21 +84,29 @@ type Transcriber interface {
 
 // langLabels maps ISO-639-1 codes to display names.
 var langLabels = map[string]string{
-	"af": "Afrikaans", "ar": "Arabic", "hy": "Armenian", "az": "Azerbaijani",
-	"be": "Belarusian", "bs": "Bosnian", "bg": "Bulgarian", "ca": "Catalan",
-	"zh": "Chinese", "hr": "Croatian", "cs": "Czech", "da": "Danish",
-	"nl": "Dutch", "en": "English", "et": "Estonian", "fi": "Finnish",
-	"fr": "French", "gl": "Galician", "de": "German", "el": "Greek",
+	"af": "Afrikaans", "am": "Amharic", "ar": "Arabic", "hy": "Armenian",
+	"as": "Assamese", "az": "Azerbaijani", "be": "Belarusian", "bn": "Bengali",
+	"bs": "Bosnian", "bg": "Bulgarian", "my": "Burmese", "ca": "Catalan",
+	"ny": "Chichewa", "zh": "Chinese", "hr": "Croatian", "cs": "Czech",
+	"da": "Danish", "nl": "Dutch", "en": "English", "et": "Estonian",
+	"fi": "Finnish", "fr": "French", "gl": "Galician", "ka": "Georgian",
+	"de": "German", "el": "Greek", "gu": "Gujarati", "ha": "Hausa",
 	"he": "Hebrew", "hi": "Hindi", "hu": "Hungarian", "is": "Icelandic",
-	"id": "Indonesian", "it": "Italian", "ja": "Japanese", "kn": "Kannada",
-	"kk": "Kazakh", "ko": "Korean", "lv": "Latvian", "lt": "Lithuanian",
-	"mk": "Macedonian", "ms": "Malay", "mr": "Marathi", "mi": "Maori",
-	"ne": "Nepali", "no": "Norwegian", "fa": "Persian", "pl": "Polish",
-	"pt": "Portuguese", "ro": "Romanian", "ru": "Russian", "sr": "Serbian",
-	"sk": "Slovak", "sl": "Slovenian", "es": "Spanish", "sw": "Swahili",
-	"sv": "Swedish", "tl": "Tagalog", "ta": "Tamil", "th": "Thai",
-	"tr": "Turkish", "uk": "Ukrainian", "ur": "Urdu", "vi": "Vietnamese",
-	"cy": "Welsh",
+	"ig": "Igbo", "id": "Indonesian", "ga": "Irish", "it": "Italian",
+	"ja": "Japanese", "jv": "Javanese", "kn": "Kannada", "kk": "Kazakh",
+	"km": "Khmer", "ko": "Korean", "ku": "Kurdish", "ky": "Kyrgyz",
+	"lo": "Lao", "lv": "Latvian", "ln": "Lingala", "lt": "Lithuanian",
+	"lb": "Luxembourgish", "mk": "Macedonian", "ms": "Malay", "ml": "Malayalam",
+	"mt": "Maltese", "mi": "Maori", "mr": "Marathi", "mn": "Mongolian",
+	"ne": "Nepali", "no": "Norwegian", "oc": "Occitan", "or": "Odia",
+	"ps": "Pashto", "fa": "Persian", "pl": "Polish", "pt": "Portuguese",
+	"pa": "Punjabi", "ro": "Romanian", "ru": "Russian", "sr": "Serbian",
+	"sn": "Shona", "sd": "Sindhi", "sk": "Slovak", "sl": "Slovenian",
+	"so": "Somali", "es": "Spanish", "sw": "Swahili", "sv": "Swedish",
+	"ta": "Tamil", "tg": "Tajik", "te": "Telugu", "th": "Thai",
+	"tl": "Tagalog", "tr": "Turkish", "uk": "Ukrainian", "ur": "Urdu",
+	"uz": "Uzbek", "vi": "Vietnamese", "cy": "Welsh", "wo": "Wolof",
+	"xh": "Xhosa", "zu": "Zulu",
 }
 
 func langsFromCodes(codes []string) []Language {
@@ -170,6 +178,7 @@ func New() (Transcriber, error) {
 	openaiKey := os.Getenv("OPENAI_API_KEY")
 	groqKey := os.Getenv("GROQ_API_KEY")
 	mistralKey := os.Getenv("MISTRAL_API_KEY")
+	elevenLabsKey := os.Getenv("ELEVENLABS_API_KEY")
 
 	if dgKey != "" {
 		return NewDeepgram(dgKey), nil
@@ -183,6 +192,9 @@ func New() (Transcriber, error) {
 	if mistralKey != "" {
 		return NewMistral(mistralKey), nil
 	}
+	if elevenLabsKey != "" {
+		return NewElevenLabs(elevenLabsKey), nil
+	}
 
-	return nil, fmt.Errorf("set DEEPGRAM_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, or MISTRAL_API_KEY environment variable")
+	return nil, fmt.Errorf("set DEEPGRAM_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, or ELEVENLABS_API_KEY environment variable")
 }

@@ -48,7 +48,7 @@ func updateRecordingIcon(rec bool) {
 	if rec {
 		systray.SetIcon(iconRecHi)
 		if mRecord != nil {
-			mRecord.SetTitle("🔴 Stop Recording (Shift+Control+Space)")
+			mRecord.SetTitle("● Stop Recording (Shift+Control+Space)")
 		}
 	} else {
 		systray.SetTemplateIcon(iconIdleHi, iconIdle)
@@ -176,8 +176,6 @@ func onReady() {
 		}
 	})
 
-	systray.AddSeparator()
-
 	mCopy = systray.AddMenuItem("Copy Last Recorded Text", "Copy last transcription to clipboard")
 	mCopy.Disable()
 	mCopy.Click(func() {
@@ -186,34 +184,8 @@ func onReady() {
 		}
 	})
 
-	systray.AddSeparator()
-
 	mSettings = systray.AddMenuItem("Settings", "Settings")
 
-	mDevices = mSettings.AddSubMenuItem("Devices", "Select input device")
-
-	deviceMu.Lock()
-	mDefaultDevice = mDevices.AddSubMenuItemCheckbox("System Default", "Use system default device", deviceSel == "")
-	mDefaultDevice.Click(func() {
-		deviceMu.Lock()
-		cb := deviceCb
-		deviceMu.Unlock()
-		if cb != nil {
-			cb("")
-		}
-		deviceMu.Lock()
-		for _, it := range deviceItems {
-			it.Uncheck()
-		}
-		mDefaultDevice.Check()
-		deviceMu.Unlock()
-	})
-	deviceItems = make([]*systray.MenuItem, 0, len(deviceNames))
-	for i, name := range deviceNames {
-		item := addDeviceItem(mDevices, i, name, name == deviceSel)
-		deviceItems = append(deviceItems, item)
-	}
-	deviceMu.Unlock()
 	mAutoPaste = mSettings.AddSubMenuItemCheckbox("Auto-paste", "Auto-paste transcribed text", autoPasteOn)
 	mAutoPaste.Click(func() {
 		if mAutoPaste.Checked() {
@@ -240,6 +212,34 @@ func onReady() {
 			mLogin.Uncheck()
 		}
 	})
+
+	sep := mSettings.AddSubMenuItem("─────────", "")
+	sep.Disable()
+
+	mDevices = mSettings.AddSubMenuItem("Microphone", "Select input device")
+
+	deviceMu.Lock()
+	mDefaultDevice = mDevices.AddSubMenuItemCheckbox("System Default", "Use system default device", deviceSel == "")
+	mDefaultDevice.Click(func() {
+		deviceMu.Lock()
+		cb := deviceCb
+		deviceMu.Unlock()
+		if cb != nil {
+			cb("")
+		}
+		deviceMu.Lock()
+		for _, it := range deviceItems {
+			it.Uncheck()
+		}
+		mDefaultDevice.Check()
+		deviceMu.Unlock()
+	})
+	deviceItems = make([]*systray.MenuItem, 0, len(deviceNames))
+	for i, name := range deviceNames {
+		item := addDeviceItem(mDevices, i, name, name == deviceSel)
+		deviceItems = append(deviceItems, item)
+	}
+	deviceMu.Unlock()
 
 	modelMu.Lock()
 	if len(models) > 0 {
