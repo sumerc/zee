@@ -72,8 +72,34 @@ type recordingConfig struct {
 var configMu sync.Mutex
 
 var trayRecordChan = make(chan struct{}, 1)
-var trayStopMu sync.Mutex
-var trayStopChan chan struct{}
+var isRecording atomic.Bool
+
+var (
+	stopMu   sync.Mutex
+	stopCh   chan struct{} // closed to stop the active recording
+	stopOnce sync.Once
+)
+
+// resetStop prepares a fresh stop channel for a new recording.
+func resetStop() <-chan struct{} {
+	stopMu.Lock()
+	stopCh = make(chan struct{})
+	stopOnce = sync.Once{}
+	ch := stopCh
+	stopMu.Unlock()
+	return ch
+}
+
+// requestStop stops the active recording (safe to call from any goroutine, multiple times).
+func requestStop() {
+	stopMu.Lock()
+	once := &stopOnce
+	ch := stopCh
+	stopMu.Unlock()
+	if ch != nil {
+		once.Do(func() { close(ch) })
+	}
+}
 
 var shutdownOnce sync.Once
 
@@ -89,44 +115,6 @@ func gracefulShutdown() {
 		tray.Quit()
 		os.Exit(0)
 	})
-}
-
-func newTrayStop() <-chan struct{} {
-	trayStopMu.Lock()
-	trayStopChan = make(chan struct{})
-	ch := trayStopChan
-	trayStopMu.Unlock()
-	return ch
-}
-
-func fireTrayStop() {
-	trayStopMu.Lock()
-	if trayStopChan != nil {
-		select {
-		case trayStopChan <- struct{}{}:
-		default:
-		}
-	}
-	trayStopMu.Unlock()
-}
-
-// mergeStop returns a channel that closes when any source fires.
-func mergeStop(sources ...<-chan struct{}) chan struct{} {
-	out := make(chan struct{})
-	var once sync.Once
-	for _, s := range sources {
-		if s == nil {
-			continue
-		}
-		go func(ch <-chan struct{}) {
-			select {
-			case <-ch:
-				once.Do(func() { close(out) })
-			case <-out:
-			}
-		}(s)
-	}
-	return out
 }
 
 func run() {
@@ -356,7 +344,7 @@ func run() {
 	tray.OnCopyLast(clip.CopyLast)
 	tray.OnRecord(
 		func() { select { case trayRecordChan <- struct{}{}: default: } },
-		func() { fireTrayStop() },
+		func() { requestStop() },
 	)
 	// preferredDevice remembers the user's choice so we can auto-reconnect
 	preferredDevice := ""
@@ -543,18 +531,19 @@ func run() {
 
 	go func() {
 		for range trayRecordChan {
-			stop := mergeStop(newTrayStop())
-			sessions <- recSession{Stop: stop, SilenceClose: &atomic.Bool{}}
+			sessions <- recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}}
 		}
 	}()
 
 	for sess := range sessions {
 		log.Info("recording_start")
 		logRecordDevice()
+		isRecording.Store(true)
 		tray.SetRecording(true)
 		go beep.PlayStart()
 
 		_, err := handleRecording(captureDevice, sess)
+		isRecording.Store(false)
 		tray.SetRecording(false)
 		if err != nil {
 			log.Errorf("recording error: %v", err)
@@ -570,21 +559,23 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 		toggleRecording
 	)
 
-	stopCh := make(chan struct{}, 1)
 	st := idle
 	for {
 		switch st {
 		case idle:
 			<-hk.Keydown()
-			select { case <-stopCh: default: } // drain stale stop from tray-cancel
+			if isRecording.Load() {
+				<-hk.Keyup()
+				requestStop()
+				continue
+			}
 			sc := &atomic.Bool{}
-			stop := mergeStop(stopCh, newTrayStop())
-			sessions <- recSession{Stop: stop, SilenceClose: sc}
+			sessions <- recSession{Stop: resetStop(), SilenceClose: sc}
 			timer := time.NewTimer(longPress)
 			select {
 			case <-timer.C:
 				<-hk.Keyup()
-				select { case stopCh <- struct{}{}: default: }
+				requestStop()
 				st = idle
 			case <-hk.Keyup():
 				if !timer.Stop() { select { case <-timer.C: default: } }
@@ -594,7 +585,7 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 		case toggleRecording:
 			<-hk.Keydown()
 			<-hk.Keyup()
-			select { case stopCh <- struct{}{}: default: }
+			requestStop()
 			st = idle
 		}
 	}
