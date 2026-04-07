@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.6
+
+### Added
+- **Persistent settings** — language, device, provider/model, auto-paste, auto-start saved to `config.json` and restored on launch
+- **ElevenLabs provider** — speech-to-text via ElevenLabs Scribe
+
+### Changed
+- Update flow simplified: removed self-update binary patching, now directs to Homebrew or release page
+- CLI flags override persisted settings when explicitly passed
+
+### Fixed
+- Fix hotkey unable to stop tray-initiated recordings (global stop channel replaces per-session channels)
+
 ## v0.3.5
 
 ### Added
