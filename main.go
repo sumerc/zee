@@ -300,8 +300,8 @@ func run() {
 			alert.Warn("Auto-paste will not work.\n\n" + err.Error())
 		}
 		if !clipboard.CheckAccessibility() {
-			log.Warnf("accessibility permission missing or stale")
 			alert.Warn("Auto-paste requires Accessibility permission.\n\nGrant access to Zee.app (or your terminal app if running from CLI) in:\nSystem Settings → Privacy & Security → Accessibility")
+			exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").Start()
 		}
 	}
 

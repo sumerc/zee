@@ -1,7 +1,7 @@
 package clipboard
 
 /*
-#cgo LDFLAGS: -framework ApplicationServices -framework CoreFoundation
+#cgo LDFLAGS: -framework ApplicationServices
 #include <ApplicationServices/ApplicationServices.h>
 
 static int testAccessibility() {
