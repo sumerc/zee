@@ -3,8 +3,6 @@
 package tray
 
 import (
-	"os/exec"
-
 	"github.com/energye/systray"
 	"golang.design/x/hotkey/mainthread"
 )
@@ -27,7 +25,7 @@ var (
 		item *systray.MenuItem
 		code string
 	}
-	mUpdate    *systray.MenuItem
+	mCheckUpdate *systray.MenuItem
 
 	modelItems []*systray.MenuItem
 )
@@ -163,7 +161,7 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	mRecord = systray.AddMenuItem("○ Start Recording (Fn)", "Start or stop recording")
+	mRecord = systray.AddMenuItem("○ Start Recording (Shift+Control+Space)", "Start or stop recording")
 	mRecord.Click(func() {
 		if recording {
 			if stopFn != nil {
@@ -294,6 +292,14 @@ func onReady() {
 	}
 
 	systray.AddSeparator()
+
+	mCheckUpdate = systray.AddMenuItem("Check for Updates…", "Check for updates")
+	mCheckUpdate.Click(func() {
+		if checkUpdateCb != nil {
+			checkUpdateCb()
+		}
+	})
+
 	mQuit := systray.AddMenuItem("Quit", "Quit zee")
 	mQuit.Click(func() { Quit() })
 	systray.CreateMenu()
@@ -308,21 +314,6 @@ func updateCopyLastTitle(title string) {
 	}
 }
 
-func addUpdateMenuItem(version string) {
-	if mUpdate != nil {
-		mUpdate.SetTitle("⚠ Update available: " + version)
-		mUpdate.Show()
-		return
-	}
-	if mSettings == nil {
-		return
-	}
-	mUpdate = mSettings.AddSubMenuItem("Update available: "+version, "Open release page")
-	mUpdate.Click(func() {
-		url := "https://github.com/sumerc/zee/releases/tag/" + version
-		exec.Command("open", url).Start()
-	})
-}
 
 func addLangEntry(code, label string) {
 	idx := len(langEntries)

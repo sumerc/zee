@@ -165,6 +165,24 @@ func modelLanguages(models []ModelInfo, current string) []Language {
 	return nil
 }
 
+type ProviderInfo struct {
+	Name   string
+	Label  string
+	EnvKey string
+	Models []ModelInfo
+	NewFn  func(string) Transcriber
+}
+
+func Providers() []ProviderInfo {
+	return []ProviderInfo{
+		{"deepgram", "Deepgram", "DEEPGRAM_API_KEY", DeepgramModels, func(k string) Transcriber { return NewDeepgram(k) }},
+		{"openai", "OpenAI", "OPENAI_API_KEY", OpenAIModels, func(k string) Transcriber { return NewOpenAI(k) }},
+		{"groq", "Groq", "GROQ_API_KEY", GroqModels, func(k string) Transcriber { return NewGroq(k) }},
+		{"mistral", "Mistral", "MISTRAL_API_KEY", MistralModels, func(k string) Transcriber { return NewMistral(k) }},
+		{"elevenlabs", "ElevenLabs", "ELEVENLABS_API_KEY", ElevenLabsModels, func(k string) Transcriber { return NewElevenLabs(k) }},
+	}
+}
+
 func New() (Transcriber, error) {
 	if fakeText, ok := os.LookupEnv("ZEE_FAKE_TEXT"); ok {
 		var fakeErr error
@@ -174,26 +192,10 @@ func New() (Transcriber, error) {
 		return NewFake(fakeText, fakeErr), nil
 	}
 
-	dgKey := os.Getenv("DEEPGRAM_API_KEY")
-	openaiKey := os.Getenv("OPENAI_API_KEY")
-	groqKey := os.Getenv("GROQ_API_KEY")
-	mistralKey := os.Getenv("MISTRAL_API_KEY")
-	elevenLabsKey := os.Getenv("ELEVENLABS_API_KEY")
-
-	if dgKey != "" {
-		return NewDeepgram(dgKey), nil
-	}
-	if openaiKey != "" {
-		return NewOpenAI(openaiKey), nil
-	}
-	if groqKey != "" {
-		return NewGroq(groqKey), nil
-	}
-	if mistralKey != "" {
-		return NewMistral(mistralKey), nil
-	}
-	if elevenLabsKey != "" {
-		return NewElevenLabs(elevenLabsKey), nil
+	for _, p := range Providers() {
+		if key := os.Getenv(p.EnvKey); key != "" {
+			return p.NewFn(key), nil
+		}
 	}
 
 	return nil, fmt.Errorf("set DEEPGRAM_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, or ELEVENLABS_API_KEY environment variable")

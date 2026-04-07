@@ -6,15 +6,15 @@ import (
 	"strings"
 )
 
-const (
-	Repo       = "sumerc/zee"
-	BinaryName = "zee"
-)
+const Repo = "sumerc/zee"
 
 type Release struct {
-	Version     string
-	AssetURL    string
-	ChecksumURL string
+	Version string
+	URL     string // GitHub release page URL
+}
+
+func ReleaseURL(version string) string {
+	return fmt.Sprintf("https://github.com/%s/releases/tag/%s", Repo, version)
 }
 
 type semver struct {
