@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -45,6 +46,20 @@ var transcriptionsMu sync.Mutex
 var transcriptionCount int
 var streamEnabled bool
 var activeFormat string
+
+type savedRecording struct {
+	AudioData   []byte
+	AudioFormat string
+	Text        string
+	Provider    string
+	Model       string
+	Timestamp   time.Time
+}
+
+var (
+	lastRecMu sync.Mutex
+	lastRec   *savedRecording
+)
 
 func modelSupportsStream(tr transcriber.Transcriber) bool {
 	id := tr.GetModel()
@@ -427,6 +442,7 @@ func run() {
 	})
 	tray.SetLogin(login.Enabled())
 	tray.SetVersion(version)
+	tray.OnSaveAudio(saveLastRecording)
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
@@ -771,6 +787,54 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 		}
 		tray.SetLastRecording(recDur, totalMs)
 	}
+
+	if len(result.AudioData) > 0 {
+		lastRecMu.Lock()
+		lastRec = &savedRecording{
+			AudioData:   result.AudioData,
+			AudioFormat: result.AudioFormat,
+			Text:        result.Text,
+			Provider:    cfg.tr.Name(),
+			Model:       cfg.tr.GetModel(),
+			Timestamp:   time.Now(),
+		}
+		lastRecMu.Unlock()
+	}
+}
+
+func saveLastRecording() {
+	lastRecMu.Lock()
+	rec := lastRec
+	lastRecMu.Unlock()
+
+	if rec == nil {
+		alert.Warn("No recording to save")
+		return
+	}
+
+	ts := rec.Timestamp.Format("2006-01-02T15-04-05")
+	dir := filepath.Join(settingsDir(), "samples", ts)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		alert.Error("Save failed: " + err.Error())
+		return
+	}
+
+	ext := rec.AudioFormat
+	if err := os.WriteFile(filepath.Join(dir, "audio."+ext), rec.AudioData, 0644); err != nil {
+		alert.Error("Save failed: " + err.Error())
+		return
+	}
+
+	info, _ := json.Marshal(map[string]string{
+		"provider":  rec.Provider,
+		"model":     rec.Model,
+		"format":    rec.AudioFormat,
+		"text":      rec.Text,
+		"timestamp": rec.Timestamp.Format(time.RFC3339),
+	})
+	os.WriteFile(filepath.Join(dir, "info.json"), info, 0644)
+
+	alert.Info("Saved to " + dir)
 }
 
 func runBenchmark(wavFile string, runs int) {

@@ -3,6 +3,8 @@
 package tray
 
 import (
+	"os"
+
 	"github.com/energye/systray"
 	"golang.design/x/hotkey/mainthread"
 )
@@ -181,6 +183,15 @@ func onReady() {
 			copyLastFn()
 		}
 	})
+
+	if os.Getenv("ZEE_SAVE_LAST_AUDIO") != "" {
+		mSave := systray.AddMenuItem("Save Last Recording", "Save last audio + metadata to disk")
+		mSave.Click(func() {
+			if saveAudioCb != nil {
+				go saveAudioCb()
+			}
+		})
+	}
 
 	mSettings = systray.AddMenuItem("Settings", "Settings")
 

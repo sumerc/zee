@@ -110,10 +110,12 @@ func (bs *batchSession) Close() (SessionResult, error) {
 	netMetrics := result.Metrics
 
 	sr := SessionResult{
-		Text:      text,
-		HasText:   !noSpeech,
-		NoSpeech:  noSpeech,
-		RateLimit: result.RateLimit,
+		Text:        text,
+		HasText:     !noSpeech,
+		NoSpeech:    noSpeech,
+		RateLimit:   result.RateLimit,
+		AudioData:   audioData,
+		AudioFormat: apiFormatFromConfig(bs.cfg.Format),
 		Batch: &BatchStats{
 			AudioLengthS:     audioDuration,
 			RawSizeKB:        float64(rawSize) / 1024,

@@ -48,7 +48,8 @@ var (
 	langCb   func(string)
 
 	appVersion    string
-	checkUpdateCb func()
+	checkUpdateCb  func()
+	saveAudioCb    func()
 )
 
 var languages []transcriber.Language // set via SetLanguages
@@ -116,6 +117,7 @@ func SetLastRecording(dur time.Duration, totalMs float64) {
 
 func SetVersion(v string)     { appVersion = v }
 func OnCheckUpdate(fn func()) { checkUpdateCb = fn }
+func OnSaveAudio(fn func())  { saveAudioCb = fn }
 
 func SetLanguage(code string, onSwitch func(string)) {
 	langCode = code
