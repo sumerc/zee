@@ -52,7 +52,7 @@ func (o *OpenAI) NewSession(_ context.Context, cfg SessionConfig) (Session, erro
 	return newBatchSession(cfg, o.Transcribe)
 }
 
-func (o *OpenAI) Transcribe(audioData []byte, format, lang, hint string) (*Result, error) {
+func (o *OpenAI) Transcribe(audioData []byte, format, lang, hints string) (*Result, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -69,8 +69,8 @@ func (o *OpenAI) Transcribe(audioData []byte, format, lang, hint string) (*Resul
 	if lang != "" {
 		writer.WriteField("language", lang)
 	}
-	if hint != "" {
-		writer.WriteField("prompt", hint)
+	if hints != "" {
+		writer.WriteField("prompt", hints)
 	}
 	if err := writer.Close(); err != nil {
 		return nil, err

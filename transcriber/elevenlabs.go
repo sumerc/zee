@@ -72,7 +72,7 @@ type elevenLabsResponse struct {
 	} `json:"words"`
 }
 
-func (e *ElevenLabs) Transcribe(audioData []byte, format, lang, hint string) (*Result, error) {
+func (e *ElevenLabs) Transcribe(audioData []byte, format, lang, hints string) (*Result, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -89,8 +89,8 @@ func (e *ElevenLabs) Transcribe(audioData []byte, format, lang, hint string) (*R
 		writer.WriteField("language_code", lang)
 	}
 	writer.WriteField("tag_audio_events", "false")
-	if hint != "" {
-		for _, word := range strings.Split(hint, ",") {
+	if hints != "" {
+		for _, word := range strings.Split(hints, ",") {
 			writer.WriteField("keyterms[]", strings.TrimSpace(word))
 		}
 	}

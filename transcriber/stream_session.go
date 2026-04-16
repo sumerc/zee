@@ -37,7 +37,7 @@ type streamSession struct {
 	updates   chan string
 	startedAt time.Time
 	connected chan struct{} // closed when WebSocket is ready (or failed)
-	// hint string // TODO: Deepgram streaming supports keywords param
+	// hints string // TODO: Deepgram streaming supports keywords param
 
 	sendDone      chan struct{}
 	recvDone      chan struct{}

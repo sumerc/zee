@@ -71,7 +71,7 @@ type groqResponse struct {
 	} `json:"segments"`
 }
 
-func (g *Groq) Transcribe(audioData []byte, format, lang, hint string) (*Result, error) {
+func (g *Groq) Transcribe(audioData []byte, format, lang, hints string) (*Result, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -88,8 +88,8 @@ func (g *Groq) Transcribe(audioData []byte, format, lang, hint string) (*Result,
 	if lang != "" {
 		writer.WriteField("language", lang)
 	}
-	if hint != "" {
-		writer.WriteField("prompt", hint)
+	if hints != "" {
+		writer.WriteField("prompt", hints)
 	}
 	writer.Close()
 

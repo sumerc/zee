@@ -46,7 +46,6 @@ var transcriptionsMu sync.Mutex
 var transcriptionCount int
 var streamEnabled bool
 var activeFormat string
-var activeHint string
 
 type savedRecording struct {
 	AudioData   []byte
@@ -82,7 +81,7 @@ type recordingConfig struct {
 	stream    bool
 	format    string
 	lang      string
-	hint      string
+	hints     string
 	autoPaste bool
 }
 
@@ -173,7 +172,7 @@ func run() {
 	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
-	hintFlag := flag.String("hint", "", "Vocabulary hints for transcription")
+	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe an audio file and exit")
 	flag.Parse()
 
@@ -244,7 +243,9 @@ func run() {
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
 		activeFormat = *formatFlag
-		activeHint = *hintFlag
+		if *hintsFlag != "" {
+			hintsOnce.Do(func() { hintsVal = *hintsFlag })
+		}
 	default:
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
 	}
@@ -315,7 +316,7 @@ func run() {
 	}
 
 	if *transcribeFlag != "" {
-		runTranscribeFile(*transcribeFlag, *hintFlag)
+		runTranscribeFile(*transcribeFlag)
 		return
 	}
 
@@ -453,6 +454,9 @@ func run() {
 	tray.SetLogin(login.Enabled())
 	tray.SetVersion(version)
 	tray.OnSaveAudio(saveLastRecording)
+	tray.OnEditHints(func() {
+		exec.Command("open", hintsPath()).Run()
+	})
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
@@ -657,7 +661,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		stream:    streamEnabled,
 		format:    activeFormat,
 		lang:      activeTranscriber.GetLanguage(),
-		hint:      activeHint,
+		hints:     getHints(),
 		autoPaste: autoPaste,
 	}
 	configMu.Unlock()
@@ -666,7 +670,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		Stream:   cfg.stream,
 		Format:   cfg.format,
 		Language: cfg.lang,
-		Hint:     cfg.hint,
+		Hints:    cfg.hints,
 	})
 	if err != nil {
 		return nil, err
@@ -849,7 +853,7 @@ func saveLastRecording() {
 	alert.Info("Saved to " + dir)
 }
 
-func runTranscribeFile(audioFile, hint string) {
+func runTranscribeFile(audioFile string) {
 	data, err := os.ReadFile(audioFile)
 	if err != nil {
 		fatal("Error reading file: %v", err)
@@ -869,7 +873,7 @@ func runTranscribeFile(audioFile, hint string) {
 	}
 
 	type directTranscriber interface {
-		Transcribe(audio []byte, format, lang, hint string) (*transcriber.Result, error)
+		Transcribe(audio []byte, format, lang, hints string) (*transcriber.Result, error)
 	}
 
 	dt, ok := activeTranscriber.(directTranscriber)
@@ -877,7 +881,7 @@ func runTranscribeFile(audioFile, hint string) {
 		fatal("Provider %q does not support direct file transcription", activeTranscriber.Name())
 	}
 
-	result, err := dt.Transcribe(data, format, activeTranscriber.GetLanguage(), hint)
+	result, err := dt.Transcribe(data, format, activeTranscriber.GetLanguage(), getHints())
 	if err != nil {
 		fatal("Transcription error: %v", err)
 	}

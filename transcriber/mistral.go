@@ -49,7 +49,7 @@ func (m *Mistral) NewSession(_ context.Context, cfg SessionConfig) (Session, err
 	return newBatchSession(cfg, m.Transcribe)
 }
 
-func (m *Mistral) Transcribe(audioData []byte, format, lang, hint string) (*Result, error) {
+func (m *Mistral) Transcribe(audioData []byte, format, lang, hints string) (*Result, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -65,8 +65,8 @@ func (m *Mistral) Transcribe(audioData []byte, format, lang, hint string) (*Resu
 	if lang != "" {
 		writer.WriteField("language", lang)
 	}
-	if hint != "" {
-		for _, word := range strings.Split(hint, ",") {
+	if hints != "" {
+		for _, word := range strings.Split(hints, ",") {
 			writer.WriteField("context_bias[]", strings.TrimSpace(word))
 		}
 	}
