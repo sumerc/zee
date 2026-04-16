@@ -13,6 +13,7 @@ type SessionConfig struct {
 	Stream   bool
 	Format   string // "mp3@16"|"mp3@64"|"flac" (batch only; ignored for streaming)
 	Language string
+	Hint     string // optional vocabulary hints for the model
 }
 
 type BatchStats struct {

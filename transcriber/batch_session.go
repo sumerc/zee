@@ -9,7 +9,7 @@ import (
 	"zee/encoder"
 )
 
-type transcribeFunc func(audio []byte, format, lang string) (*Result, error)
+type transcribeFunc func(audio []byte, format, lang, prompt string) (*Result, error)
 
 type batchSession struct {
 	cfg        SessionConfig
@@ -94,7 +94,7 @@ func (bs *batchSession) Close() (SessionResult, error) {
 	audioData := bs.encoder.Bytes()
 	apiFormat := apiFormatFromConfig(bs.cfg.Format)
 
-	result, err := bs.transcribe(audioData, apiFormat, bs.cfg.Language)
+	result, err := bs.transcribe(audioData, apiFormat, bs.cfg.Language, bs.cfg.Hint)
 	if err != nil {
 		return SessionResult{}, err
 	}

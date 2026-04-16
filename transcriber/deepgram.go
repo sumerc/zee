@@ -47,7 +47,7 @@ func (d *Deepgram) NewSession(ctx context.Context, cfg SessionConfig) (Session, 
 	if cfg.Stream {
 		return d.newStreamSession(ctx, cfg.Language)
 	}
-	return newBatchSession(cfg, d.transcribe)
+	return newBatchSession(cfg, d.Transcribe)
 }
 
 func (d *Deepgram) newStreamSession(ctx context.Context, lang string) (Session, error) {
@@ -77,7 +77,7 @@ type deepgramResponse struct {
 	} `json:"results"`
 }
 
-func (d *Deepgram) transcribe(audioData []byte, format, lang string) (*Result, error) {
+func (d *Deepgram) Transcribe(audioData []byte, format, lang, _ string) (*Result, error) {
 	contentType := "audio/flac"
 	if format == "mp3" {
 		contentType = "audio/mpeg"

@@ -46,6 +46,7 @@ var transcriptionsMu sync.Mutex
 var transcriptionCount int
 var streamEnabled bool
 var activeFormat string
+var activeHint string
 
 type savedRecording struct {
 	AudioData   []byte
@@ -81,6 +82,7 @@ type recordingConfig struct {
 	stream    bool
 	format    string
 	lang      string
+	hint      string
 	autoPaste bool
 }
 
@@ -171,6 +173,8 @@ func run() {
 	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
+	hintFlag := flag.String("hint", "", "Vocabulary hints for transcription")
+	transcribeFlag := flag.String("transcribe", "", "Transcribe an audio file and exit")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -240,6 +244,7 @@ func run() {
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
 		activeFormat = *formatFlag
+		activeHint = *hintFlag
 	default:
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
 	}
@@ -306,6 +311,11 @@ func run() {
 
 	if *benchmarkFile != "" {
 		runBenchmark(*benchmarkFile, *benchmarkRuns)
+		return
+	}
+
+	if *transcribeFlag != "" {
+		runTranscribeFile(*transcribeFlag, *hintFlag)
 		return
 	}
 
@@ -647,6 +657,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		stream:    streamEnabled,
 		format:    activeFormat,
 		lang:      activeTranscriber.GetLanguage(),
+		hint:      activeHint,
 		autoPaste: autoPaste,
 	}
 	configMu.Unlock()
@@ -655,6 +666,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		Stream:   cfg.stream,
 		Format:   cfg.format,
 		Language: cfg.lang,
+		Hint:     cfg.hint,
 	})
 	if err != nil {
 		return nil, err
@@ -835,6 +847,42 @@ func saveLastRecording() {
 	os.WriteFile(filepath.Join(dir, "info.json"), info, 0644)
 
 	alert.Info("Saved to " + dir)
+}
+
+func runTranscribeFile(audioFile, hint string) {
+	data, err := os.ReadFile(audioFile)
+	if err != nil {
+		fatal("Error reading file: %v", err)
+	}
+
+	ext := filepath.Ext(audioFile)
+	format := "mp3"
+	switch ext {
+	case ".flac":
+		format = "flac"
+	case ".wav":
+		format = "wav"
+	case ".mp3":
+		format = "mp3"
+	default:
+		fatal("Unsupported audio format: %s", ext)
+	}
+
+	type directTranscriber interface {
+		Transcribe(audio []byte, format, lang, hint string) (*transcriber.Result, error)
+	}
+
+	dt, ok := activeTranscriber.(directTranscriber)
+	if !ok {
+		fatal("Provider %q does not support direct file transcription", activeTranscriber.Name())
+	}
+
+	result, err := dt.Transcribe(data, format, activeTranscriber.GetLanguage(), hint)
+	if err != nil {
+		fatal("Transcription error: %v", err)
+	}
+
+	fmt.Println(result.Text)
 }
 
 func runBenchmark(wavFile string, runs int) {

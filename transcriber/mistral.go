@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 var voxtralLangs = langsFromCodes([]string{
@@ -45,10 +46,10 @@ func (m *Mistral) NewSession(_ context.Context, cfg SessionConfig) (Session, err
 	if cfg.Stream {
 		return nil, fmt.Errorf("mistral does not support streaming transcription")
 	}
-	return newBatchSession(cfg, m.transcribe)
+	return newBatchSession(cfg, m.Transcribe)
 }
 
-func (m *Mistral) transcribe(audioData []byte, format, lang string) (*Result, error) {
+func (m *Mistral) Transcribe(audioData []byte, format, lang, hint string) (*Result, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -63,6 +64,11 @@ func (m *Mistral) transcribe(audioData []byte, format, lang string) (*Result, er
 	writer.WriteField("model", m.GetModel())
 	if lang != "" {
 		writer.WriteField("language", lang)
+	}
+	if hint != "" {
+		for _, word := range strings.Split(hint, ",") {
+			writer.WriteField("context_bias[]", strings.TrimSpace(word))
+		}
 	}
 	writer.Close()
 

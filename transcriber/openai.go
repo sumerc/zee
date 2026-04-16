@@ -49,10 +49,10 @@ func (o *OpenAI) NewSession(_ context.Context, cfg SessionConfig) (Session, erro
 	if cfg.Stream {
 		return nil, fmt.Errorf("openai does not support streaming transcription")
 	}
-	return newBatchSession(cfg, o.transcribe)
+	return newBatchSession(cfg, o.Transcribe)
 }
 
-func (o *OpenAI) transcribe(audioData []byte, format, lang string) (*Result, error) {
+func (o *OpenAI) Transcribe(audioData []byte, format, lang, hint string) (*Result, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -68,6 +68,9 @@ func (o *OpenAI) transcribe(audioData []byte, format, lang string) (*Result, err
 	writer.WriteField("response_format", "json")
 	if lang != "" {
 		writer.WriteField("language", lang)
+	}
+	if hint != "" {
+		writer.WriteField("prompt", hint)
 	}
 	if err := writer.Close(); err != nil {
 		return nil, err

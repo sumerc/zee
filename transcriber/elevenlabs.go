@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"strings"
 )
 
 const ModelScribeV2 = "scribe_v2"
@@ -55,7 +56,7 @@ func (e *ElevenLabs) NewSession(_ context.Context, cfg SessionConfig) (Session, 
 	if cfg.Stream {
 		return nil, fmt.Errorf("elevenlabs does not support streaming transcription")
 	}
-	return newBatchSession(cfg, e.transcribe)
+	return newBatchSession(cfg, e.Transcribe)
 }
 
 type elevenLabsResponse struct {
@@ -71,7 +72,7 @@ type elevenLabsResponse struct {
 	} `json:"words"`
 }
 
-func (e *ElevenLabs) transcribe(audioData []byte, format, lang string) (*Result, error) {
+func (e *ElevenLabs) Transcribe(audioData []byte, format, lang, hint string) (*Result, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -88,6 +89,11 @@ func (e *ElevenLabs) transcribe(audioData []byte, format, lang string) (*Result,
 		writer.WriteField("language_code", lang)
 	}
 	writer.WriteField("tag_audio_events", "false")
+	if hint != "" {
+		for _, word := range strings.Split(hint, ",") {
+			writer.WriteField("keyterms[]", strings.TrimSpace(word))
+		}
+	}
 	writer.Close()
 
 	req, err := http.NewRequest("POST", e.apiURL, &body)
