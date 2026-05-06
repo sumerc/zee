@@ -21,6 +21,3 @@ transcribe_log.txt
 
 # OS
 .DS_Store
-
-# Claude
-.claude/

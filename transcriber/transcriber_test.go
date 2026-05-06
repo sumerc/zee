@@ -72,7 +72,7 @@ func TestNewEncoder(t *testing.T) {
 }
 
 func TestBatchSessionFeedAndClose(t *testing.T) {
-	fakeFn := func(audio []byte, format, lang string) (*Result, error) {
+	fakeFn := func(audio []byte, format, lang, hints string) (*Result, error) {
 		return &Result{
 			Text:    "hello world",
 			Metrics: &NetworkMetrics{TTFB: 10 * time.Millisecond},

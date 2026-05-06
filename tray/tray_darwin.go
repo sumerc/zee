@@ -222,6 +222,13 @@ func onReady() {
 		}
 	})
 
+	mEditHints := mSettings.AddSubMenuItem("Edit Hints…", "Edit vocabulary hints file")
+	mEditHints.Click(func() {
+		if editHintsCb != nil {
+			go editHintsCb()
+		}
+	})
+
 	sep := mSettings.AddSubMenuItem("─────────", "")
 	sep.Disable()
 

@@ -43,6 +43,11 @@ make benchmark WAV=file.wav RUNS=5
 - `-benchmark <wav>` - run benchmark instead of live recording
 - `-runs N` - benchmark iterations (default: 3)
 - `-logpath <path>` - log directory (default: `$ZEE_LOG_PATH` or OS-specific, use `./` for current directory)
+- `-hints <words>` - comma-separated vocabulary hints (overrides `hints.txt`)
+- `-transcribe <file>` - transcribe an audio file (mp3/flac/wav) and exit
+
+**Environment variables:**
+- `ZEE_SAVE_LAST_AUDIO=1` - enables "Save Last Recording" tray button (saves audio + metadata to `config/samples/`)
 
 ## Architecture
 
@@ -56,7 +61,7 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - `main.go` - hotkey handling, audio capture, recording logic, panic recovery
 - `tray/` - system tray icon, menus (devices, providers, languages, auto-paste), dynamic icons
 - `encoder/` - AudioEncoder interface, FLAC, MP3, and Adaptive implementations
-- `transcriber/` - Groq and DeepGram API clients with shared TracedClient for HTTP timing metrics
+- `transcriber/` - STT providers (Groq, OpenAI, Deepgram, Mistral, ElevenLabs) with shared TracedClient for HTTP timing metrics
 - `hotkey/` - global hotkey registration (Ctrl+Shift+Space) with platform-specific backends
 - `clipboard/` - platform-specific clipboard and paste operations (Cmd+V / Ctrl+V)
 - `audio/` - platform-specific audio capture (malgo on macOS, PulseAudio on Linux)
@@ -66,7 +71,7 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - `device.go` - microphone picker with arrow-key navigation
 - `vad.go` - voice activity detection using WebRTC VAD with debounced speech confirmation
 - `silence.go` - silence monitoring with warnings, repeat beeps, and auto-close (toggle mode)
-- `settings.go` - persistent settings (language, device, provider/model, auto-paste, auto-start) with JSON config file
+- `config/` - persistent settings (`config.json`) and vocabulary hints (`hints.txt`)
 - `log.go` - diagnostic logging and panic capture to `diagnostics_log.txt`
 
 ## Design Philosophy

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"zee/encoder"
 )
 
@@ -45,18 +47,19 @@ func (d *Deepgram) Models() []ModelInfo { return DeepgramModels }
 func (d *Deepgram) NewSession(ctx context.Context, cfg SessionConfig) (Session, error) {
 	go d.client.Warm()
 	if cfg.Stream {
-		return d.newStreamSession(ctx, cfg.Language)
+		return d.newStreamSession(ctx, cfg.Language, cfg.Hints)
 	}
-	return newBatchSession(cfg, d.transcribe)
+	return newBatchSession(cfg, d.Transcribe)
 }
 
-func (d *Deepgram) newStreamSession(ctx context.Context, lang string) (Session, error) {
+func (d *Deepgram) newStreamSession(ctx context.Context, lang, hints string) (Session, error) {
 	dial := func() (rawStreamSession, error) {
 		return d.startStream(ctx, streamSessionConfig{
 			SampleRate: encoder.SampleRate,
 			Channels:   encoder.Channels,
 			Language:   lang,
 			Model:      "nova-3",
+			Hints:      hints,
 		})
 	}
 	return newStreamSession(dial), nil
@@ -77,13 +80,27 @@ type deepgramResponse struct {
 	} `json:"results"`
 }
 
-func (d *Deepgram) transcribe(audioData []byte, format, lang string) (*Result, error) {
+func (d *Deepgram) Transcribe(audioData []byte, format, lang, hints string) (*Result, error) {
 	contentType := "audio/flac"
 	if format == "mp3" {
 		contentType = "audio/mpeg"
 	}
 
-	req, err := http.NewRequest("POST", d.apiURL, bytes.NewReader(audioData))
+	apiURL := d.apiURL
+	if hints != "" {
+		u, err := url.Parse(apiURL)
+		if err != nil {
+			return nil, err
+		}
+		q := u.Query()
+		for _, term := range strings.Split(hints, ",") {
+			q.Add("keyterm", strings.TrimSpace(term))
+		}
+		u.RawQuery = q.Encode()
+		apiURL = u.String()
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(audioData))
 	if err != nil {
 		return nil, err
 	}

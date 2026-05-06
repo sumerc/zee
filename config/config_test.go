@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"os"
@@ -8,13 +8,12 @@ import (
 )
 
 func TestSettingsDefaults(t *testing.T) {
-	cfgDir = t.TempDir()
-	current = Settings{}
+	SetDir(t.TempDir())
 
-	if err := loadSettings(); err != nil {
-		t.Fatalf("loadSettings: %v", err)
+	if err := Load(); err != nil {
+		t.Fatalf("Load: %v", err)
 	}
-	s := getSettings()
+	s := Get()
 	if s.Language != "en" {
 		t.Errorf("Language = %q, want %q", s.Language, "en")
 	}
@@ -27,14 +26,13 @@ func TestSettingsDefaults(t *testing.T) {
 }
 
 func TestSettingsRoundTrip(t *testing.T) {
-	cfgDir = t.TempDir()
-	current = Settings{}
+	SetDir(t.TempDir())
 
-	if err := loadSettings(); err != nil {
-		t.Fatalf("loadSettings: %v", err)
+	if err := Load(); err != nil {
+		t.Fatalf("Load: %v", err)
 	}
 
-	updateSettings(func(s *Settings) {
+	Update(func(s *Settings) {
 		s.Language = "fr"
 		s.Device = "Blue Yeti"
 		s.Provider = "groq"
@@ -43,13 +41,11 @@ func TestSettingsRoundTrip(t *testing.T) {
 		s.AutoStart = true
 	})
 
-	// Re-load from disk
-	current = Settings{}
-	if err := loadSettings(); err != nil {
-		t.Fatalf("loadSettings after update: %v", err)
+	if err := Load(); err != nil {
+		t.Fatalf("Load after update: %v", err)
 	}
 
-	s := getSettings()
+	s := Get()
 	if s.Language != "fr" {
 		t.Errorf("Language = %q, want %q", s.Language, "fr")
 	}
@@ -71,47 +67,47 @@ func TestSettingsRoundTrip(t *testing.T) {
 }
 
 func TestSettingsCopySafety(t *testing.T) {
-	cfgDir = t.TempDir()
-	current = settingsDefaults
+	SetDir(t.TempDir())
+	Load()
 
-	s := getSettings()
+	s := Get()
 	s.Language = "xx"
 
-	s2 := getSettings()
+	s2 := Get()
 	if s2.Language == "xx" {
 		t.Error("mutating returned Settings affected internal state")
 	}
 }
 
 func TestSettingsCorruptFile(t *testing.T) {
-	cfgDir = t.TempDir()
-	current = Settings{}
+	d := t.TempDir()
+	SetDir(d)
 
-	os.WriteFile(filepath.Join(cfgDir, settingsFile), []byte("not json{{{"), 0644)
+	os.WriteFile(filepath.Join(d, "config.json"), []byte("not json{{{"), 0644)
 
-	if err := loadSettings(); err != nil {
-		t.Fatalf("loadSettings should not error on corrupt file: %v", err)
+	if err := Load(); err != nil {
+		t.Fatalf("Load should not error on corrupt file: %v", err)
 	}
-	s := getSettings()
+	s := Get()
 	if s.Language != "en" {
 		t.Errorf("Language = %q, want default %q after corrupt file", s.Language, "en")
 	}
 }
 
 func TestSettingsConcurrent(t *testing.T) {
-	cfgDir = t.TempDir()
-	current = settingsDefaults
+	SetDir(t.TempDir())
+	Load()
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			updateSettings(func(s *Settings) { s.Language = "es" })
+			Update(func(s *Settings) { s.Language = "es" })
 		}()
 		go func() {
 			defer wg.Done()
-			_ = getSettings()
+			_ = Get()
 		}()
 	}
 	wg.Wait()

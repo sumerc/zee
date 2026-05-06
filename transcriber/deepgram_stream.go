@@ -16,6 +16,7 @@ type streamSessionConfig struct {
 	Channels   int
 	Language   string
 	Model      string
+	Hints      string
 }
 
 type deepgramStreamResponse struct {
@@ -57,6 +58,11 @@ func (d *Deepgram) startStream(ctx context.Context, cfg streamSessionConfig) (ra
 	}
 	if cfg.Language != "" {
 		q.Set("language", cfg.Language)
+	}
+	if cfg.Hints != "" {
+		for _, term := range strings.Split(cfg.Hints, ",") {
+			q.Add("keyterm", strings.TrimSpace(term))
+		}
 	}
 	endpoint.RawQuery = q.Encode()
 

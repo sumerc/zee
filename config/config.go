@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -22,19 +22,20 @@ type Settings struct {
 const settingsFile = "config.json"
 
 var (
-	settingsMu sync.Mutex
-	current    Settings
-	cfgDir     string
+	mu       sync.Mutex
+	current  Settings
+	dir      string
+	defaults = Settings{
+		Language:  "en",
+		AutoPaste: true,
+	}
 )
 
-var settingsDefaults = Settings{
-	Language:  "en",
-	AutoPaste: true,
-}
+func SetDir(d string) { dir = d }
 
-func settingsDir() string {
-	if cfgDir != "" {
-		return cfgDir
+func Dir() string {
+	if dir != "" {
+		return dir
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -58,12 +59,12 @@ func settingsDir() string {
 }
 
 func settingsPath() string {
-	return filepath.Join(settingsDir(), settingsFile)
+	return filepath.Join(Dir(), settingsFile)
 }
 
-func loadSettings() error {
-	cfgDir = settingsDir()
-	current = settingsDefaults
+func Load() error {
+	dir = Dir()
+	current = defaults
 
 	data, err := os.ReadFile(settingsPath())
 	if err != nil {
@@ -81,30 +82,30 @@ func loadSettings() error {
 
 	current = s
 	if current.Language == "" {
-		current.Language = settingsDefaults.Language
+		current.Language = defaults.Language
 	}
 	return nil
 }
 
-func getSettings() Settings {
-	settingsMu.Lock()
+func Get() Settings {
+	mu.Lock()
 	s := current
-	settingsMu.Unlock()
+	mu.Unlock()
 	return s
 }
 
-func updateSettings(fn func(*Settings)) {
-	settingsMu.Lock()
+func Update(fn func(*Settings)) {
+	mu.Lock()
 	fn(&current)
 	s := current
-	settingsMu.Unlock()
+	mu.Unlock()
 
-	saveSettings(s)
+	save(s)
 }
 
-func saveSettings(s Settings) {
-	dir := cfgDir
-	if err := os.MkdirAll(dir, 0755); err != nil {
+func save(s Settings) {
+	d := dir
+	if err := os.MkdirAll(d, 0755); err != nil {
 		log.Warnf("settings: create dir: %v", err)
 		return
 	}
@@ -116,7 +117,7 @@ func saveSettings(s Settings) {
 	}
 	data = append(data, '\n')
 
-	tmp, err := os.CreateTemp(dir, ".config-*.json")
+	tmp, err := os.CreateTemp(d, ".config-*.json")
 	if err != nil {
 		log.Warnf("settings: create temp: %v", err)
 		return

@@ -18,6 +18,7 @@ import (
 
 	"zee/alert"
 	"zee/audio"
+	"zee/config"
 	"zee/beep"
 	"zee/clipboard"
 	"zee/doctor"
@@ -81,6 +82,7 @@ type recordingConfig struct {
 	stream    bool
 	format    string
 	lang      string
+	hints     string
 	autoPaste bool
 }
 
@@ -171,6 +173,8 @@ func run() {
 	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
+	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
+	transcribeFlag := flag.String("transcribe", "", "Transcribe an audio file and exit")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -217,10 +221,10 @@ func run() {
 		os.Exit(doctor.Run(wavFile))
 	}
 	// Load persistent settings, merge with CLI flags
-	if err := loadSettings(); err != nil {
+	if err := config.Load(); err != nil {
 		log.Warnf("settings: %v", err)
 	}
-	cfg := getSettings()
+	cfg := config.Get()
 	flagSet := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
 	if !flagSet["lang"] && cfg.Language != "" {
@@ -240,6 +244,9 @@ func run() {
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
 		activeFormat = *formatFlag
+		if *hintsFlag != "" {
+			config.SetHints(*hintsFlag)
+		}
 	default:
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
 	}
@@ -309,6 +316,11 @@ func run() {
 		return
 	}
 
+	if *transcribeFlag != "" {
+		runTranscribeFile(*transcribeFlag)
+		return
+	}
+
 	if autoPaste {
 		if err := clipboard.Init(); err != nil {
 			log.Warnf("paste init failed: %v", err)
@@ -374,7 +386,7 @@ func run() {
 		}
 			tray.SetDevices(names, preferredDevice, func(name string) {
 			preferredDevice = name
-			updateSettings(func(s *Settings) { s.Device = name })
+			config.Update(func(s *config.Settings) { s.Device = name })
 			if name == "" {
 				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
 			} else {
@@ -430,7 +442,7 @@ func run() {
 			activeFormat = *formatFlag
 		}
 
-		updateSettings(func(s *Settings) { s.Provider = provider; s.Model = model })
+		config.Update(func(s *config.Settings) { s.Provider = provider; s.Model = model })
 		tray.SetLanguages(newTr.SupportedLanguages())
 	})
 
@@ -438,18 +450,21 @@ func run() {
 		configMu.Lock()
 		activeTranscriber.SetLanguage(code)
 		configMu.Unlock()
-		updateSettings(func(s *Settings) { s.Language = code })
+		config.Update(func(s *config.Settings) { s.Language = code })
 	})
 	tray.SetLogin(login.Enabled())
 	tray.SetVersion(version)
 	tray.OnSaveAudio(saveLastRecording)
+	tray.OnEditHints(func() {
+		exec.Command("open", config.HintsPath()).Run()
+	})
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
 		configMu.Lock()
 		autoPaste = on
 		configMu.Unlock()
-		updateSettings(func(s *Settings) { s.AutoPaste = on })
+		config.Update(func(s *config.Settings) { s.AutoPaste = on })
 	})
 	tray.OnLogin(func(on bool) error {
 		var err error
@@ -462,7 +477,7 @@ func run() {
 			log.Errorf("login toggle: %v", err)
 			tray.SetError(err.Error())
 		} else {
-			updateSettings(func(s *Settings) { s.AutoStart = on })
+			config.Update(func(s *config.Settings) { s.AutoStart = on })
 		}
 		return err
 	})
@@ -647,6 +662,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		stream:    streamEnabled,
 		format:    activeFormat,
 		lang:      activeTranscriber.GetLanguage(),
+		hints:     config.GetHints(),
 		autoPaste: autoPaste,
 	}
 	configMu.Unlock()
@@ -655,6 +671,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		Stream:   cfg.stream,
 		Format:   cfg.format,
 		Language: cfg.lang,
+		Hints:    cfg.hints,
 	})
 	if err != nil {
 		return nil, err
@@ -813,7 +830,7 @@ func saveLastRecording() {
 	}
 
 	ts := rec.Timestamp.Format("2006-01-02T15-04-05")
-	dir := filepath.Join(settingsDir(), "samples", ts)
+	dir := filepath.Join(config.Dir(), "samples", ts)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		alert.Error("Save failed: " + err.Error())
 		return
@@ -835,6 +852,42 @@ func saveLastRecording() {
 	os.WriteFile(filepath.Join(dir, "info.json"), info, 0644)
 
 	alert.Info("Saved to " + dir)
+}
+
+func runTranscribeFile(audioFile string) {
+	data, err := os.ReadFile(audioFile)
+	if err != nil {
+		fatal("Error reading file: %v", err)
+	}
+
+	ext := filepath.Ext(audioFile)
+	format := "mp3"
+	switch ext {
+	case ".flac":
+		format = "flac"
+	case ".wav":
+		format = "wav"
+	case ".mp3":
+		format = "mp3"
+	default:
+		fatal("Unsupported audio format: %s", ext)
+	}
+
+	type directTranscriber interface {
+		Transcribe(audio []byte, format, lang, hints string) (*transcriber.Result, error)
+	}
+
+	dt, ok := activeTranscriber.(directTranscriber)
+	if !ok {
+		fatal("Provider %q does not support direct file transcription", activeTranscriber.Name())
+	}
+
+	result, err := dt.Transcribe(data, format, activeTranscriber.GetLanguage(), config.GetHints())
+	if err != nil {
+		fatal("Transcription error: %v", err)
+	}
+
+	fmt.Println(result.Text)
 }
 
 func runBenchmark(wavFile string, runs int) {
