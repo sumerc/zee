@@ -73,8 +73,20 @@ EOF
 }
 
 # Discover samples (sorted by directory name = chronological).
+# Optional SAMPLE env var filters to a single dir (basename match) or "latest".
 SAMPLE_DIRS=()
 while IFS= read -r d; do SAMPLE_DIRS+=("$d"); done < <(find "$SAMPLES" -maxdepth 1 -mindepth 1 -type d -name "2026-*" | sort)
+if [ -n "${SAMPLE:-}" ]; then
+  if [ "$SAMPLE" = "latest" ]; then
+    SAMPLE_DIRS=("${SAMPLE_DIRS[-1]}")
+  else
+    FILTERED=()
+    for d in "${SAMPLE_DIRS[@]}"; do
+      [ "$(basename "$d")" = "$SAMPLE" ] && FILTERED+=("$d")
+    done
+    SAMPLE_DIRS=("${FILTERED[@]}")
+  fi
+fi
 
 if [ "${#SAMPLE_DIRS[@]}" -eq 0 ]; then
   echo "No samples found under $SAMPLES — enable ZEE_SAVE_LAST_AUDIO=1 and record some clips first." >&2
@@ -94,22 +106,26 @@ for combo in "${COMBOS[@]}"; do
     audio=$(find "$d" -maxdepth 1 -type f -name "audio.*" | head -1)
     [ -z "$audio" ] && continue
     echo "----- $sample -----" | tee -a "$HUMAN"
+    t0=$(python3 -c 'import time; print(int(time.time()*1000))')
     text=$(timeout 45 "$ZEE_BIN" -transcribe "$audio" 2>&1)
     rc=$?
-    echo "$text" | tee -a "$HUMAN"
-    # Emit JSONL (one line per sample/model). Trim trailing newline from text first.
+    t1=$(python3 -c 'import time; print(int(time.time()*1000))')
+    elapsed_ms=$((t1 - t0))
+    echo "[${elapsed_ms}ms] $text" | tee -a "$HUMAN"
     text_trimmed=$(printf '%s' "$text")
     if [ $rc -ne 0 ]; then
-      printf '{"sample":%s,"provider":%s,"model":%s,"error":%s}\n' \
+      printf '{"sample":%s,"provider":%s,"model":%s,"elapsed_ms":%d,"error":%s}\n' \
         "$(printf '%s' "$sample" | jesc)" \
         "$(printf '%s' "$prov" | jesc)" \
         "$(printf '%s' "$model" | jesc)" \
+        "$elapsed_ms" \
         "$(printf '%s' "$text_trimmed" | jesc)" >> "$JSONL"
     else
-      printf '{"sample":%s,"provider":%s,"model":%s,"text":%s}\n' \
+      printf '{"sample":%s,"provider":%s,"model":%s,"elapsed_ms":%d,"text":%s}\n' \
         "$(printf '%s' "$sample" | jesc)" \
         "$(printf '%s' "$prov" | jesc)" \
         "$(printf '%s' "$model" | jesc)" \
+        "$elapsed_ms" \
         "$(printf '%s' "$text_trimmed" | jesc)" >> "$JSONL"
     fi
   done

@@ -54,10 +54,10 @@ Then for each sample directory (sorted by timestamp), produce one block:
 **Originally transcribed by:** <provider> / <model>
 **Original text:** "<text>"
 
-| Provider / Model         | Transcription                            |
-|--------------------------|------------------------------------------|
-| groq / whisper-v3-turbo  | ...                                      |
-| ...                      | ...                                      |
+| Provider / Model         | Latency  | Transcription                  |
+|--------------------------|----------|--------------------------------|
+| groq / whisper-v3-turbo  | 412 ms   | ...                            |
+| ...                      | ...      | ...                            |
 ```
 
 Mark the row matching the original `(provider, model)` with `*` after the model name so the user can quickly see the baseline.
