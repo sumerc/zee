@@ -169,7 +169,6 @@ func run() {
 	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
-	longPressDurationFlag := flag.Duration("longpressduration", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe an audio file and exit")
 	flag.Parse()
@@ -549,7 +548,7 @@ func run() {
 	}
 
 	sessions := make(chan recSession, 1)
-	go listenHotkey(hk, *longPressDurationFlag, sessions)
+	go listenHotkey(hk, longPressDuration(), sessions)
 
 	go func() {
 		for range trayRecordChan {
@@ -572,6 +571,17 @@ func run() {
 			tray.SetError(err.Error())
 		}
 	}
+}
+
+func longPressDuration() time.Duration {
+	const def = 350 * time.Millisecond
+	if v := os.Getenv("ZEE_LONGPRESS_DURATION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+		log.Warnf("invalid ZEE_LONGPRESS_DURATION %q, using default %s", v, def)
+	}
+	return def
 }
 
 func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- recSession) {

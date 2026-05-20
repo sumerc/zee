@@ -8,6 +8,7 @@
 ### Removed
 - `-stream` CLI flag — streaming is derived from the selected provider/model (set via tray menu / persisted in `config.json`). The flag was overwritten ~40 lines after being read and had no effect.
 - Spurious "format ignored in streaming mode" warning.
+- `-crash`, `-profile`, and `-longpress` CLI flags — moved to env vars (`ZEE_CRASH=1`, `ZEE_PPROF=:6060`, `ZEE_LONGPRESS_DURATION=350ms`). Dev/tuning knobs, no need to clutter `-h`.
 
 ### Added
 - `ZEE_FAKE_STREAM=1` env var to make the fake transcriber report a streaming model (used by integration tests that previously relied on `-stream`).
