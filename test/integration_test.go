@@ -165,14 +165,14 @@ func TestBatchEarlyKeyup(t *testing.T) {
 func TestStreamWords(t *testing.T) {
 	requireDeepgramKey(t)
 	logDir := runZee(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "SLEEP 300", "KEYUP", "WAIT", "QUIT"),
-		"-test", "-stream", "data/short.wav")
+		"-test", "data/short.wav")
 	requireTranscription(t, logDir)
 }
 
 func TestStreamMetrics(t *testing.T) {
 	requireDeepgramKey(t)
 	logDir := runZee(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "SLEEP 300", "KEYUP", "WAIT", "QUIT"),
-		"-test", "-stream", "data/short.wav")
+		"-test", "data/short.wav")
 	diag := readLog(t, logDir, "diagnostics_log.txt")
 	if !strings.Contains(diag, "stream_transcription") {
 		t.Error("expected stream_transcription in diagnostics")
@@ -185,7 +185,7 @@ func TestStreamMetrics(t *testing.T) {
 func TestStreamKeyupAtBoundary(t *testing.T) {
 	requireDeepgramKey(t)
 	logDir := runZee(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "KEYUP", "WAIT", "QUIT"),
-		"-test", "-stream", "data/short.wav")
+		"-test", "data/short.wav")
 	_ = readLog(t, logDir, "diagnostics_log.txt")
 }
 
@@ -240,8 +240,8 @@ func TestNoVoiceWarningBatch(t *testing.T) {
 
 func TestNoVoiceWarningStream(t *testing.T) {
 	logDir := runZeeOpts(t, cmds("KEYDOWN", silenceWarnSleep, "KEYUP", "WAIT", "QUIT"),
-		runOpts{env: []string{"ZEE_FAKE_TEXT=hello", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
-		"-test", "-stream", "data/silence.wav")
+		runOpts{env: []string{"ZEE_FAKE_TEXT=hello", "ZEE_FAKE_STREAM=1", "GROQ_API_KEY=", "DEEPGRAM_API_KEY="}},
+		"-test", "data/silence.wav")
 	diag := readLog(t, logDir, "diagnostics_log.txt")
 	if !strings.Contains(diag, "no_voice_warning") {
 		t.Errorf("expected 'no_voice_warning' in diagnostics, got: %q", diag)

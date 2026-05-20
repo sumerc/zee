@@ -15,12 +15,17 @@ make app                              # build macOS DMG (binary + icns + .app bu
 GROQ_API_KEY=xxx ./zee                # run (hold Ctrl+Shift+Space to record)
 ```
 
-## Install (macOS DMG)
+## Install
 
-1. `make app` produces `Zee-<version>.dmg`
-2. Open the DMG and drag `Zee.app` to `/Applications`
-3. On first launch, grant **Microphone** and **Accessibility** permissions to the terminal or Zee.app via System Settings > Privacy & Security
-4. Set `GROQ_API_KEY` in your shell profile or launch via: `GROQ_API_KEY=xxx open /Applications/Zee.app`
+End users install via:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash
+```
+
+`install.sh` downloads the latest DMG from GitHub Releases, verifies its SHA256 against `checksums.txt`, copies `Zee.app` to `/Applications`, and runs `xattr -cr` to clear quarantine. Permissions (Microphone, Accessibility) are still granted lazily by macOS TCC on first use — installers cannot pre-grant them.
+
+Local dev DMG: `make app` produces `Zee-<version>.dmg`; drag to `/Applications`.
 
 ## Testing
 
@@ -32,7 +37,6 @@ make benchmark WAV=file.wav RUNS=5
 
 ## Flags
 
-- `-stream` - enable streaming transcription (Deepgram only)
 - `-debug` - enable diagnostic logging (default: false)
 - `-debug-transcribe` - enable transcription text logging (requires `-debug`)
 - `-format <mp3@16|mp3@64|flac>` - audio format (default: mp3@16)
@@ -106,12 +110,11 @@ git tag v0.3.0 && git push origin v0.3.0   # triggers CI release
 CI (`.github/workflows/release.yml`) does:
 1. Verify tag is on `main`
 2. GoReleaser builds arm64 + amd64 binaries, universal binary, tar.gz archives, checksums, GitHub release
-3. GoReleaser pushes Homebrew formula to `sumerc/homebrew-tap`
-4. Post-step creates DMG from universal binary and uploads to release
+3. Post-step creates DMG from universal binary, appends its SHA256 to `checksums.txt`, uploads to release
 
-Requires `ZEE_RELEASE_TOKEN` repo secret (fine-grained PAT with Contents read/write on `zee` + `homebrew-tap`).
+Requires `ZEE_RELEASE_TOKEN` repo secret (fine-grained PAT with Contents read/write on `zee`).
 
-Users install via: `brew install sumerc/tap/zee`
+Users install via the one-liner in README (`install.sh` fetches the DMG and verifies the checksum).
 
 ## Packaging
 

@@ -159,7 +159,6 @@ func run() {
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
 	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
-	streamFlag := flag.Bool("stream", false, "Enable streaming transcription (Deepgram only)")
 	setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
 	deviceFlag := flag.String("device", "", "Use named microphone device")
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
@@ -238,8 +237,6 @@ func run() {
 	} else {
 		autoPaste = *autoPasteFlag
 	}
-	streamEnabled = *streamFlag
-
 	// Validate format
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
@@ -249,10 +246,6 @@ func run() {
 		}
 	default:
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
-	}
-
-	if streamEnabled && *formatFlag != "mp3@16" {
-		log.Warn("format ignored in streaming mode")
 	}
 
 	// Restore saved provider/model or fall back to auto-detection

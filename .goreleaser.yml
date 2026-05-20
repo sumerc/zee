@@ -34,16 +34,3 @@ release:
   github:
     owner: sumerc
     name: zee
-
-brews:
-  - name: zee
-    repository:
-      owner: sumerc
-      name: homebrew-tap
-      token: "{{ .Env.GITHUB_TOKEN }}"
-    homepage: "https://github.com/sumerc/zee"
-    description: "Push-to-talk transcription for macOS"
-    install: |
-      bin.install "zee"
-    test: |
-      system "#{bin}/zee", "-version"

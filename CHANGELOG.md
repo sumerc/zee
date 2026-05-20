@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Distribution: replaced Homebrew tap with `install.sh` one-liner (downloads DMG, verifies SHA256, copies to `/Applications`, runs `xattr -cr`). GoReleaser `brews:` block and the cask-update CI step removed.
+
+### Removed
+- `-stream` CLI flag — streaming is derived from the selected provider/model (set via tray menu / persisted in `config.json`). The flag was overwritten ~40 lines after being read and had no effect.
+- Spurious "format ignored in streaming mode" warning.
+
+### Added
+- `ZEE_FAKE_STREAM=1` env var to make the fake transcriber report a streaming model (used by integration tests that previously relied on `-stream`).
+
+### Fixed
+- Release workflow: re-upload `checksums.txt` after appending the DMG SHA256, so `install.sh` can verify the DMG.
+
 ## v0.3.6
 
 ### Added

@@ -17,7 +17,7 @@
 
 - **System tray app** — lives in the menu bar. Switch microphones, transcription providers, and languages from the tray menu. Dynamic icons show recording and warning states.
 - **Two recording modes** — push-to-talk (hold hotkey) or tap-to-toggle (tap to start/stop).
-- **Real-time streaming** — with `-stream`, words appear as you speak and auto-paste into the focused window incrementally. Powered by Deepgram's WebSocket API.
+- **Real-time streaming** — when a streaming-capable model is selected (e.g. Deepgram Nova-3), words appear as you speak and auto-paste into the focused window incrementally.
 - **Fast batch mode** — HTTP keep-alive, TLS connection reuse, pre-warmed connections, streaming encoder runs during recording (not after). Typical key-release to clipboard: under 500ms.
 - **Auto-paste** — transcribed text goes straight to clipboard and pastes into the active window. In streaming mode, each new phrase pastes as it arrives.
 - **Silence detection** — VAD-based voice activity detection warns when no speech is heard. In streaming mode, auto-closes recording after 30 seconds of silence.
@@ -31,35 +31,26 @@
 
 ## Install
 
-### Homebrew (recommended)
+### One-liner (recommended)
 
 ```bash
-brew install --cask sumerc/tap/zee
+curl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash
 ```
 
-Installs `Zee.app` to `/Applications`. Launch from Spotlight or the Applications folder.
+Downloads the latest signed DMG, verifies its SHA256 against `checksums.txt`, copies `Zee.app` to `/Applications`, and clears the quarantine attribute. Pin a version with `VERSION=v0.3.0 bash`.
 
-On first launch, macOS may warn that the app can't be verified. Run once to clear it:
-
-```bash
-xattr -cr /Applications/Zee.app
-```
-
-### macOS (DMG)
+### Manual DMG
 
 1. Download `Zee-<version>.dmg` from the [latest release](https://github.com/sumerc/zee/releases/latest)
 2. Open the DMG and drag **Zee.app** to **Applications**
+3. Clear quarantine: `xattr -cr /Applications/Zee.app`
 
 ### CLI binary
 
-For terminal usage, install the formula or download directly:
+For terminal usage:
 
 ```bash
-brew install sumerc/tap/zee         # installs to /opt/homebrew/bin/zee
-```
-
-```bash
-# or download manually — Apple Silicon
+# Apple Silicon
 curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_arm64.tar.gz | tar xz
 
 # Intel
@@ -67,9 +58,9 @@ curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_amd64.
 ```
 
 ```bash
-GROQ_API_KEY=xxx zee                # Groq Whisper
-OPENAI_API_KEY=xxx zee -stream      # Deepgram streaming
-zee -debug                          # with diagnostic logging
+GROQ_API_KEY=xxx ./zee              # Groq Whisper
+DEEPGRAM_API_KEY=xxx ./zee          # Deepgram (streaming auto-enabled when a streaming model is selected from the tray)
+./zee -debug                        # with diagnostic logging
 ```
 
 > **Note:** When running from a terminal, macOS permissions (Microphone, Accessibility) are granted to the **terminal app** (e.g. Ghostty, iTerm2, Terminal), not to zee itself.
@@ -92,7 +83,6 @@ export OPENAI_API_KEY=your_key     # batch mode (OpenAI Whisper)
 export DEEPGRAM_API_KEY=your_key   # streaming mode (Deepgram)
 export MISTRAL_API_KEY=your_key    # batch mode (Mistral Voxtral)
 zee                                # starts in menu bar, hold Ctrl+Shift+Space to record
-zee -stream                        # words appear as you speak
 ```
 
 > **Note:** `export` only works in the current terminal session. To make API keys available to `Zee.app` when launched from Spotlight or Applications, use `launchctl`:
@@ -128,7 +118,6 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-stream` | false | Real-time streaming transcription (Deepgram) |
 | `-format` | mp3@16 | Audio format: `mp3@16`, `mp3@64`, or `flac` |
 | `-autopaste` | true | Auto-paste into focused window |
 | `-setup` | false | Select microphone device |
