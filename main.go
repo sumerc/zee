@@ -167,11 +167,9 @@ func run() {
 	debugFlag := flag.Bool("debug", true, "Enable diagnostic logging (timing, errors, events)")
 	debugTranscribeFlag := flag.Bool("debug-transcribe", false, "Enable transcription text logging")
 	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
-	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
-	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
-	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
+	longPressDurationFlag := flag.Duration("longpressduration", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe an audio file and exit")
 	flag.Parse()
@@ -194,16 +192,16 @@ func run() {
 		debug.SetCrashOutput(crashFile, debug.CrashOptions{})
 	}
 
-	if *profileFlag != "" {
+	if pprofAddr := os.Getenv("ZEE_PPROF"); pprofAddr != "" {
 		go func() {
-			fmt.Fprintf(os.Stderr, "pprof server listening on http://%s/debug/pprof/\n", *profileFlag)
-			if err := http.ListenAndServe(*profileFlag, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "pprof server listening on http://%s/debug/pprof/\n", pprofAddr)
+			if err := http.ListenAndServe(pprofAddr, nil); err != nil {
 				fmt.Fprintf(os.Stderr, "pprof server error: %v\n", err)
 			}
 		}()
 	}
 
-	if *crashFlag {
+	if os.Getenv("ZEE_CRASH") == "1" {
 		panic("TEST CRASH: synthetic panic to verify crash logging")
 	}
 
@@ -551,7 +549,7 @@ func run() {
 	}
 
 	sessions := make(chan recSession, 1)
-	go listenHotkey(hk, *longPressFlag, sessions)
+	go listenHotkey(hk, *longPressDurationFlag, sessions)
 
 	go func() {
 		for range trayRecordChan {
