@@ -2,69 +2,50 @@
 
 ## Unreleased
 
-### Changed
-- Distribution: replaced Homebrew tap with `install.sh` one-liner (downloads DMG, verifies SHA256, copies to `/Applications`, runs `xattr -cr`). GoReleaser `brews:` block and the cask-update CI step removed.
+## v0.3.7
 
-### Removed
-- `-stream` CLI flag — streaming is derived from the selected provider/model (set via tray menu / persisted in `config.json`). The flag was overwritten ~40 lines after being read and had no effect.
-- Spurious "format ignored in streaming mode" warning.
-- `-crash`, `-profile`, and `-longpress` CLI flags — moved to env vars (`ZEE_CRASH=1`, `ZEE_PPROF=:6060`, `ZEE_LONGPRESS_DURATION=350ms`). Dev/tuning knobs, no need to clutter `-h`.
-
-### Added
-- `ZEE_FAKE_STREAM=1` env var to make the fake transcriber report a streaming model (used by integration tests that previously relied on `-stream`).
-
-### Fixed
-- Release workflow: re-upload `checksums.txt` after appending the DMG SHA256, so `install.sh` can verify the DMG.
+- Replace Homebrew cask distribution with DMG installer script
+- Add release workflow support for DMG checksum verification
+- Add vocabulary hints support for transcription providers
+- Add Deepgram keyterm support for hints
+- Add optional last-recording sample export for debugging
+- Remove dead streaming and dev-only CLI flags
 
 ## v0.3.6
 
-### Added
-- **Persistent settings** — language, device, provider/model, auto-paste, auto-start saved to `config.json` and restored on launch
-- **ElevenLabs provider** — speech-to-text via ElevenLabs Scribe
-
-### Changed
-- Update flow simplified: removed self-update binary patching, now directs to Homebrew or release page
+- Add persistent settings for language, device, provider/model, auto-paste, and auto-start
+- Add ElevenLabs Scribe transcription provider
+- Replace self-update patching with Homebrew/release-page update guidance
 - CLI flags override persisted settings when explicitly passed
-
-### Fixed
 - Fix hotkey unable to stop tray-initiated recordings (global stop channel replaces per-session channels)
 
 ## v0.3.5
 
-### Added
-- **Mistral Voxtral provider** — batch transcription via Voxtral Mini
-- **Per-model language filtering** — tray language menu shows only languages supported by the active model
-- **Accessibility check at startup** — warns if auto-paste permission is missing or stale
-
-### Changed
+- Add Mistral Voxtral batch transcription provider
+- Add per-model language filtering in the tray menu
+- Add startup Accessibility warning for missing/stale auto-paste permission
 - Alert dialogs for all user-visible errors/warnings (no more invisible stdout messages in .app mode)
-- `alert.Error()` for fatal errors, `alert.Warn()` for non-fatal warnings with caution icon
+- Use `alert.Error()` for fatal errors and `alert.Warn()` for non-fatal warnings
 - GitHub Actions updated to checkout@v5 and setup-go@v6
 
 ## v0.3.1
 
-### Fixed
 - Code-sign app bundle with stable identifier (`com.zee.app`) to prevent repeated permission prompts
 
 ## v0.3.0
 
-### Added
-- **macOS DMG packaging** — `make app` produces a drag-and-drop installable DMG with Zee.app bundle
-- **OpenAI Whisper provider** — switchable from tray menu alongside Groq and Deepgram
-- **Language menu** — 36 languages selectable from the tray menu
-- **Separate transcription logging** — new `-debug-transcribe` flag for transcription text history, independent from diagnostic logging
-- **Alert/fatal on init errors** — clear error dialogs instead of silent failures
-- **Auto-paste toggle** — enable/disable from tray menu
-- **Login item support** — auto-start zee on macOS login
-
-### Changed
-- **System tray only** — removed terminal UI mode, zee now runs exclusively as a menu bar app
-- **Hybrid mode default** — `-hybrid` is now enabled by default (tap-to-toggle + hold-to-talk)
-- **Default device checked** — tray menu shows checkmark on the active microphone
-- **Consistent app icon** — tray icon and app icon now use the same black circle design
-- **VAD threshold tuning** — decreased VAD threshold for better silence detection
-
-### Fixed
+- Add macOS DMG packaging via `make app`
+- Add OpenAI Whisper provider
+- Add tray language menu
+- Add separate transcription logging with `-debug-transcribe`
+- Add visible alert dialogs for init errors
+- Add tray auto-paste toggle
+- Add login item support
+- Make system tray mode the only UI mode
+- Enable hybrid tap/hold hotkey mode by default
+- Show checkmark for active microphone in tray menu
+- Use consistent tray/app icon
+- Tune VAD threshold for better silence detection
 - Fix stale stopCh after tray cancel
 - Fix integration tests
 - Harden login item security and device selection
@@ -72,7 +53,6 @@
 
 ## v0.2.0
 
-### Added
 - VAD-based silence detection with warnings and auto-close
 - System tray mode with dynamic icons
 - Bluetooth headset warning

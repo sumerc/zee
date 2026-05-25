@@ -46,7 +46,7 @@ bump-version:
 	ver="$(VER)"; \
 	if [ -z "$$ver" ]; then echo "usage: make bump-version VER=0.3.7" && exit 1; fi; \
 	latest=$$(git tag --sort=-v:refname | head -1); \
-	claude -p "Look at the git log from tag $$latest to HEAD. Write a CHANGELOG.md entry for Zee version v$$ver in this exact format: ## v$$ver, blank line, then markdown groups using ### Added, ### Changed, ### Fixed, ### Removed only when relevant, with concise '- ' bullets. Skip merge commits and CI-only changes. Output ONLY the changelog entry, no code fences." > /tmp/zee-changelog-entry; \
+	claude -p "Look at the git log from tag $$latest to HEAD. Write a CHANGELOG.md entry for Zee version v$$ver in this exact format: ## v$$ver, blank line, then concise '- ' bullets only. No Added/Changed/Fixed headings. Skip merge commits and CI-only changes. Output ONLY the changelog entry, no code fences." > /tmp/zee-changelog-entry; \
 	echo "" >> /tmp/zee-changelog-entry; \
 	sed -i '' '/^## Unreleased/r /tmp/zee-changelog-entry' CHANGELOG.md; \
 	rm -f /tmp/zee-changelog-entry; \
