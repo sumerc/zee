@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean release icns app
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -40,10 +40,33 @@ app: build icns
 clean:
 	rm -f zee Zee-*.dmg
 
+bump-version:
+	@branch=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$branch" != "main" ]; then echo "ERROR: must be on main branch" && exit 1; fi; \
+	ver="$(VER)"; \
+	if [ -z "$$ver" ]; then echo "usage: make bump-version VER=0.3.7" && exit 1; fi; \
+	latest=$$(git tag --sort=-v:refname | head -1); \
+	claude -p "Look at the git log from tag $$latest to HEAD. Write a CHANGELOG.md entry for Zee version v$$ver in this exact format: ## v$$ver, blank line, then markdown groups using ### Added, ### Changed, ### Fixed, ### Removed only when relevant, with concise '- ' bullets. Skip merge commits and CI-only changes. Output ONLY the changelog entry, no code fences." > /tmp/zee-changelog-entry; \
+	echo "" >> /tmp/zee-changelog-entry; \
+	sed -i '' '/^## Unreleased/r /tmp/zee-changelog-entry' CHANGELOG.md; \
+	rm -f /tmp/zee-changelog-entry; \
+	echo "CHANGELOG.md updated — review and edit as needed"
+
 release:
-	@latest=$$(gh release view --json tagName -q .tagName 2>/dev/null || echo "none"); \
-	echo "latest release: $$latest"; \
-	read -p "new version (e.g. 0.2.0): " ver; \
-	test -n "$$ver" || (echo "aborted" && exit 1); \
-	echo "tagging v$$ver and pushing..."; \
-	git tag "v$$ver" && git push origin "v$$ver"
+	@branch=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$branch" != "main" ]; then echo "ERROR: must be on main branch" && exit 1; fi; \
+	ver="$(VER)"; \
+	if [ -z "$$ver" ]; then echo "usage: make release VER=0.3.7" && exit 1; fi; \
+	grep -q "^## v$$ver$$" CHANGELOG.md || (echo "ERROR: v$$ver missing from CHANGELOG.md — run make bump-version first" && exit 1); \
+	git diff --quiet || (echo "ERROR: working tree has uncommitted changes" && exit 1); \
+	git diff --cached --quiet || (echo "ERROR: index has staged changes" && exit 1); \
+	notes=$$(awk "/^## v$$ver$$/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md | sed '/^$$/d'); \
+	echo ""; \
+	echo "v$$ver Release Notes:"; \
+	echo ""; \
+	echo "$$notes"; \
+	echo ""; \
+	read -p "create and push tag v$$ver? [y/N] " confirm; \
+	case "$$confirm" in y|Y) ;; *) echo "aborted" && exit 1;; esac; \
+	git tag -a "v$$ver" -m "v$$ver"; \
+	git push origin "v$$ver"

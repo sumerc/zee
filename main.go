@@ -159,7 +159,6 @@ func run() {
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
 	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
-	streamFlag := flag.Bool("stream", false, "Enable streaming transcription (Deepgram only)")
 	setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
 	deviceFlag := flag.String("device", "", "Use named microphone device")
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
@@ -168,11 +167,8 @@ func run() {
 	debugFlag := flag.Bool("debug", true, "Enable diagnostic logging (timing, errors, events)")
 	debugTranscribeFlag := flag.Bool("debug-transcribe", false, "Enable transcription text logging")
 	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
-	crashFlag := flag.Bool("crash", false, "Trigger synthetic panic for testing crash logging")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
-	profileFlag := flag.String("profile", "", "Enable pprof profiling server (e.g., :6060 or localhost:6060)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
-	longPressFlag := flag.Duration("longpress", 350*time.Millisecond, "Long-press threshold for PTT vs tap (e.g., 350ms)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe an audio file and exit")
 	flag.Parse()
@@ -195,16 +191,16 @@ func run() {
 		debug.SetCrashOutput(crashFile, debug.CrashOptions{})
 	}
 
-	if *profileFlag != "" {
+	if pprofAddr := os.Getenv("ZEE_PPROF"); pprofAddr != "" {
 		go func() {
-			fmt.Fprintf(os.Stderr, "pprof server listening on http://%s/debug/pprof/\n", *profileFlag)
-			if err := http.ListenAndServe(*profileFlag, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "pprof server listening on http://%s/debug/pprof/\n", pprofAddr)
+			if err := http.ListenAndServe(pprofAddr, nil); err != nil {
 				fmt.Fprintf(os.Stderr, "pprof server error: %v\n", err)
 			}
 		}()
 	}
 
-	if *crashFlag {
+	if os.Getenv("ZEE_CRASH") == "1" {
 		panic("TEST CRASH: synthetic panic to verify crash logging")
 	}
 
@@ -238,8 +234,6 @@ func run() {
 	} else {
 		autoPaste = *autoPasteFlag
 	}
-	streamEnabled = *streamFlag
-
 	// Validate format
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
@@ -249,10 +243,6 @@ func run() {
 		}
 	default:
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
-	}
-
-	if streamEnabled && *formatFlag != "mp3@16" {
-		log.Warn("format ignored in streaming mode")
 	}
 
 	// Restore saved provider/model or fall back to auto-detection
@@ -558,7 +548,7 @@ func run() {
 	}
 
 	sessions := make(chan recSession, 1)
-	go listenHotkey(hk, *longPressFlag, sessions)
+	go listenHotkey(hk, longPressDuration(), sessions)
 
 	go func() {
 		for range trayRecordChan {
@@ -581,6 +571,17 @@ func run() {
 			tray.SetError(err.Error())
 		}
 	}
+}
+
+func longPressDuration() time.Duration {
+	const def = 350 * time.Millisecond
+	if v := os.Getenv("ZEE_LONGPRESS_DURATION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+		log.Warnf("invalid ZEE_LONGPRESS_DURATION %q, using default %s", v, def)
+	}
+	return def
 }
 
 func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- recSession) {

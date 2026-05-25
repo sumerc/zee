@@ -3,26 +3,38 @@ package transcriber
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 )
 
 type FakeTranscriber struct {
-	text string
-	err  error
-	lang string
+	text   string
+	err    error
+	lang   string
+	stream bool
 }
 
 func NewFake(text string, err error) *FakeTranscriber {
-	return &FakeTranscriber{text: text, err: err}
+	return &FakeTranscriber{text: text, err: err, stream: os.Getenv("ZEE_FAKE_STREAM") == "1"}
 }
 
 func (f *FakeTranscriber) Name() string                   { return "fake" }
 func (f *FakeTranscriber) SupportedLanguages() []Language { return nil }
 func (f *FakeTranscriber) SetLanguage(lang string)  { f.lang = lang }
 func (f *FakeTranscriber) GetLanguage() string      { return f.lang }
-func (f *FakeTranscriber) Models() []ModelInfo       { return nil }
+func (f *FakeTranscriber) Models() []ModelInfo {
+	if f.stream {
+		return []ModelInfo{{ID: "fake-stream", Label: "fake (stream)", Stream: true}}
+	}
+	return nil
+}
 func (f *FakeTranscriber) SetModel(_ string)        {}
-func (f *FakeTranscriber) GetModel() string         { return "" }
+func (f *FakeTranscriber) GetModel() string {
+	if f.stream {
+		return "fake-stream"
+	}
+	return ""
+}
 
 func (f *FakeTranscriber) NewSession(_ context.Context, cfg SessionConfig) (Session, error) {
 	updates := make(chan string, 1)
