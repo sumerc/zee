@@ -18,7 +18,7 @@ jobs:
       - name: Verify tag is on main
         run: git merge-base --is-ancestor ${{ github.sha }} origin/main
 
-  test:
+  unit-test:
     needs: guard
     runs-on: macos-15
     steps:
@@ -31,6 +31,16 @@ jobs:
       - name: Unit tests
         run: make test
 
+  integration-test:
+    needs: guard
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24'
+
       - name: Integration tests
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -38,7 +48,7 @@ jobs:
         run: make test-integration
 
   release:
-    needs: test
+    needs: [unit-test, integration-test]
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
@@ -68,4 +78,3 @@ jobs:
           packaging/mkdmg.sh "$universal" "$VERSION" "Zee-${VERSION}.dmg"
           shasum -a 256 "Zee-${VERSION}.dmg" >> dist/checksums.txt
           gh release upload "$VERSION" "Zee-${VERSION}.dmg" dist/checksums.txt --clobber
-
