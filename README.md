@@ -37,7 +37,7 @@
 curl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash
 ```
 
-Downloads the latest signed DMG, verifies its SHA256 against `checksums.txt`, copies `Zee.app` to `/Applications`, and clears the quarantine attribute. Pin a version with `VERSION=v0.3.0 bash`.
+Downloads the latest DMG, verifies its SHA256 against `checksums.txt`, copies `Zee.app` to `/Applications`, and clears the quarantine attribute. Pin a version with `VERSION=vX.Y.Z bash`.
 
 ### Manual DMG
 
