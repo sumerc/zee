@@ -2,7 +2,7 @@
   <img src="eye.gif" alt="zee" width="264"><br>
   <strong>zee</strong><br><br>
   Voice transcription that stays out of your way.<br>
-  Supports Groq, OpenAI, Mistral and Deepgram models.<br>
+  Supports Groq, OpenAI, Mistral, ElevenLabs and Deepgram models.<br>
   Push-to-talk, tap-to-toggle, or real-time streaming. Pure Go. Sub-second fast.<br><br>
   <img src="https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white" alt="Go 1.24">
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple" alt="macOS">
@@ -22,7 +22,7 @@
 - **Auto-paste** — transcribed text goes straight to clipboard and pastes into the active window. In streaming mode, each new phrase pastes as it arrives.
 - **Silence detection** — VAD-based voice activity detection warns when no speech is heard. In streaming mode, auto-closes recording after 30 seconds of silence.
 - **Pure Go encoding** — MP3 and FLAC encoders, no CGO. Three formats: `mp3@16` (smallest), `mp3@64` (balanced), `flac` (lossless).
-- **Multiple providers** — Groq, OpenAI, and Deepgram, switchable from the tray menu at runtime.
+- **Multiple providers** — Groq, OpenAI, Mistral, ElevenLabs, and Deepgram, switchable from the tray menu at runtime.
 - **36 languages** — select transcription language from the tray menu or via `-lang` flag.
 - **Cross-platform** — minimal dependencies, pure Go where possible.
   - [x] macOS
@@ -60,7 +60,7 @@ curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_amd64.
 ```bash
 GROQ_API_KEY=xxx ./zee              # Groq Whisper
 DEEPGRAM_API_KEY=xxx ./zee          # Deepgram (streaming auto-enabled when a streaming model is selected from the tray)
-./zee -debug                        # with diagnostic logging
+./zee -debug-transcribe             # include transcription text logs
 ```
 
 > **Note:** When running from a terminal, macOS permissions (Microphone, Accessibility) are granted to the **terminal app** (e.g. Ghostty, iTerm2, Terminal), not to zee itself.
@@ -82,6 +82,7 @@ export GROQ_API_KEY=your_key       # batch mode (Groq Whisper)
 export OPENAI_API_KEY=your_key     # batch mode (OpenAI Whisper)
 export DEEPGRAM_API_KEY=your_key   # streaming mode (Deepgram)
 export MISTRAL_API_KEY=your_key    # batch mode (Mistral Voxtral)
+export ELEVENLABS_API_KEY=your_key # batch mode (ElevenLabs Scribe)
 zee                                # starts in menu bar, hold Ctrl+Shift+Space to record
 ```
 
@@ -123,14 +124,25 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 | `-setup` | false | Select microphone device |
 | `-device` | (default) | Use named microphone device |
 | `-lang` | en | Language code (e.g., `en`, `es`, `fr`) |
-| `-debug` | false | Enable diagnostic logging |
-| `-debug-transcribe` | false | Enable transcription text logging (requires `-debug`) |
+| `-debug` | true | Enable diagnostic logging |
+| `-debug-transcribe` | false | Enable transcription text logging |
 | `-doctor` | false | Run system diagnostics and exit |
 | `-logpath` | OS-specific | Log directory (use `./` for current dir) |
-| `-profile` | - | pprof server address (e.g., `:6060`) |
+| `-hints` | - | Vocabulary hints for transcription (comma-separated) |
+| `-transcribe` | - | Audio file to transcribe and exit |
 | `-benchmark` | - | WAV file for benchmarking |
 | `-runs` | 3 | Benchmark iterations |
 | `-version` | false | Print version and exit |
+
+## Environment
+
+| Variable | Description |
+|----------|-------------|
+| `ZEE_LOG_PATH` | Log directory override |
+| `ZEE_PPROF` | pprof server address (e.g., `:6060`) |
+| `ZEE_CRASH=1` | Trigger synthetic crash for crash-log testing |
+| `ZEE_LONGPRESS_DURATION` | Hybrid hotkey long-press threshold (e.g., `350ms`) |
+| `ZEE_SAVE_LAST_AUDIO=1` | Enable tray action to save the last recording sample |
 
 ## About
 
