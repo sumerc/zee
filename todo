@@ -1,0 +1,4 @@
+- main.go
+  - Lazy-init microphone capture on first recording instead of startup to avoid early macOS privacy prompts.
+  - Split run() into parseOptions/loadSettings/initTranscriber/initTray/initAudio/runEventLoop helpers.
+  - Replace flag pointer mutation + flag.Visit settings merge with an options struct.
