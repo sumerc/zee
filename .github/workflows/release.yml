@@ -65,12 +65,12 @@ jobs:
           version: '~> v2'
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.ZEE_RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Create and upload DMG
         env:
           VERSION: ${{ github.ref_name }}
-          GITHUB_TOKEN: ${{ secrets.ZEE_RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           universal=$(find dist -path "*universal*" -name "zee" -type f | head -1)
           test -n "$universal" || { echo "universal binary not found"; find dist -type f; exit 1; }

@@ -151,7 +151,7 @@ func run() {
 			os.Exit(0)
 		}
 		fmt.Printf("\nUpdate available: %s → %s\n\n", version, rel.Version)
-		fmt.Println("Homebrew:  brew upgrade sumerc/tap/zee")
+		fmt.Println("Install:   curl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash")
 		fmt.Printf("Download:  %s\n", rel.URL)
 		os.Exit(0)
 	}
@@ -518,7 +518,7 @@ func run() {
 				alert.Info("You're on the latest version (" + version + ")")
 				return
 			}
-			if alert.Confirm("Update available: "+version+" → "+rel.Version+"\n\nHomebrew:\nbrew upgrade sumerc/tap/zee", "Open Release Page") {
+			if alert.Confirm("Update available: "+version+" → "+rel.Version+"\n\nInstall:\ncurl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash", "Open Release Page") {
 				exec.Command("open", rel.URL).Start()
 			}
 		}()
