@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+## v0.3.8
+
+- Update dialog points to install instructions
+
 
 ## v0.3.7
 
