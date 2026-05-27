@@ -518,8 +518,9 @@ func run() {
 				alert.Info("You're on the latest version (" + version + ")")
 				return
 			}
-			if alert.Confirm("Update available: "+version+" → "+rel.Version+"\n\nInstall:\ncurl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash", "Open Release Page") {
-				exec.Command("open", rel.URL).Start()
+			installURL := "https://github.com/" + update.Repo + "#install"
+			if alert.Confirm("Update available: "+version+" → "+rel.Version+"\n\nOne-liner install instructions:\n"+installURL, "Open Install Instructions") {
+				exec.Command("open", installURL).Start()
 			}
 		}()
 	})
