@@ -51,7 +51,7 @@ func updateRecordingIcon(rec bool) {
 			mRecord.SetTitle("● Stop Recording (Shift+Control+Space)")
 		}
 	} else {
-		systray.SetTemplateIcon(iconIdleHi, iconIdle)
+		systray.SetIcon(iconIdleHi)
 		if mRecord != nil {
 			mRecord.SetTitle("○ Start Recording (Shift+Control+Space)")
 		}
@@ -155,7 +155,7 @@ func RefreshDevices(names []string, selected string) {
 }
 
 func onReady() {
-	systray.SetTemplateIcon(iconIdleHi, iconIdle)
+	systray.SetIcon(iconIdleHi)
 	systray.SetTooltip("zee – push to talk")
 
 	mStatus = systray.AddMenuItem(statusText(), "")

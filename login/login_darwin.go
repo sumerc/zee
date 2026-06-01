@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	plistName  = "com.zee.app.plist"
-	appBundle  = "/Applications/Zee.app/Contents/MacOS/zee"
-	bundleSig  = ".app/Contents/MacOS/"
+	plistNameApp = "com.zee.app.plist"     // installed /Applications/Zee.app
+	plistNameDev = "com.zee.app.dev.plist" // local dev build
+	bundleSig    = ".app/Contents/MacOS/"
 )
 
 func xmlEscape(s string) string {
@@ -23,12 +23,31 @@ func xmlEscape(s string) string {
 	return b.String()
 }
 
+// isRunningFromApp reports whether this binary is the installed Zee.app bundle
+// rather than a local dev build. The login item (plist filename, launchd Label,
+// and target binary) is keyed off this so a dev build never clobbers — or gets
+// clobbered by — the installed app's entry.
+func isRunningFromApp() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(exe, bundleSig)
+}
+
+func plistName() string {
+	if isRunningFromApp() {
+		return plistNameApp
+	}
+	return plistNameDev
+}
+
 func plistPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "Library", "LaunchAgents", plistName), nil
+	return filepath.Join(home, "Library", "LaunchAgents", plistName()), nil
 }
 
 func Enabled() bool {
@@ -40,24 +59,10 @@ func Enabled() bool {
 	return err == nil
 }
 
-func bundleExe() (string, error) {
+func Enable() error {
 	exe, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("resolve executable: %w", err)
-	}
-	if strings.Contains(exe, bundleSig) {
-		return exe, nil
-	}
-	if _, err := os.Stat(appBundle); err == nil {
-		return appBundle, nil
-	}
-	return "", fmt.Errorf("Zee.app not found in /Applications — install it first")
-}
-
-func Enable() error {
-	exe, err := bundleExe()
-	if err != nil {
-		return err
+		return fmt.Errorf("resolve executable: %w", err)
 	}
 
 	var env strings.Builder
@@ -86,7 +91,7 @@ func Enable() error {
 %s	</dict>
 </dict>
 </plist>
-`, plistName, xmlEscape(exe), env.String())
+`, plistName(), xmlEscape(exe), env.String())
 
 	path, err := plistPath()
 	if err != nil {
