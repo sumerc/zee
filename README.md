@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="eye.gif" alt="zee" width="264"><br>
+  <img src="zee-logo-stack.svg" alt="zee" width="180"><br>
   <strong>zee</strong><br><br>
   Voice transcription that stays out of your way.<br>
   Supports Groq, OpenAI, Mistral, ElevenLabs and Deepgram models.<br>
