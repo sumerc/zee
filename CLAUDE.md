@@ -118,7 +118,7 @@ Users install via the one-liner in README (`install.sh` fetches the DMG and veri
 
 ## Packaging
 
-- `packaging/appicon.png` - source icon (1024px black circle, transparent background)
+- `packaging/appicon.png` - source icon (1024px, stack Z design: shadow square + framed Z, transparent background)
 - `packaging/mkicns.sh` - generates `Zee.icns` from `appicon.png` (via `make icns`)
 - `packaging/mkdmg.sh` - creates DMG with Zee.app + Applications symlink (via `make app`)
 - `packaging/Info.plist` - app bundle metadata (version templated from git tag)
