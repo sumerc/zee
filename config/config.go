@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"zee/log"
@@ -60,6 +61,18 @@ func Dir() string {
 
 func settingsPath() string {
 	return filepath.Join(Dir(), settingsFile)
+}
+
+// IsAppBundle reports whether this binary is the installed Zee.app rather than a
+// local dev build, keyed off the executable path (not cwd). It's the single
+// "am I the installed app?" signal — used to pick app-vs-dev locations
+// consistently (login-item plist, local models dir).
+func IsAppBundle() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(exe, ".app/Contents/MacOS/")
 }
 
 func Load() error {

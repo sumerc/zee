@@ -9,12 +9,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"zee/config"
 )
 
 const (
 	plistNameApp = "com.zee.app.plist"     // installed /Applications/Zee.app
 	plistNameDev = "com.zee.app.dev.plist" // local dev build
-	bundleSig    = ".app/Contents/MacOS/"
 )
 
 func xmlEscape(s string) string {
@@ -23,20 +24,11 @@ func xmlEscape(s string) string {
 	return b.String()
 }
 
-// isRunningFromApp reports whether this binary is the installed Zee.app bundle
-// rather than a local dev build. The login item (plist filename, launchd Label,
-// and target binary) is keyed off this so a dev build never clobbers — or gets
-// clobbered by — the installed app's entry.
-func isRunningFromApp() bool {
-	exe, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(exe, bundleSig)
-}
-
+// plistName keys the login item (plist filename, launchd Label, target binary)
+// off config.IsAppBundle so a dev build never clobbers — or gets clobbered by —
+// the installed app's entry.
 func plistName() string {
-	if isRunningFromApp() {
+	if config.IsAppBundle() {
 		return plistNameApp
 	}
 	return plistNameDev

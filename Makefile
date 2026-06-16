@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app parakeet-lib
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app parakeet-lib download-models
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -13,8 +13,14 @@ ifeq ($(HOST),darwin/arm64)
 CGO_ENV := MACOSX_DEPLOYMENT_TARGET=$(MACOS_MIN) CGO_CFLAGS=-mmacosx-version-min=$(MACOS_MIN) CGO_LDFLAGS=-mmacosx-version-min=$(MACOS_MIN)
 endif
 
-build: parakeet-lib
+build: parakeet-lib download-models
 	$(CGO_ENV) go build -ldflags="-X main.version=$(VERSION)" -o zee
+
+# Fetch the mandatory (PreFetch) local models into the dev folder from the
+# pinned models-<Version> GitHub release. Reuses the localmodel registry +
+# downloader (single source of truth) and is a per-file no-op when present.
+download-models:
+	go run ./cmd/modeldl
 
 # Build the static archives once. cmake auto-applies upstream's in-tree ggml
 # patches during configure (third_party/ggml-patches/), so we carry none.
