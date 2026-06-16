@@ -22,19 +22,25 @@ build: parakeet-lib download-models
 download-models:
 	go run ./cmd/modeldl
 
-# Build the static archives once. cmake auto-applies upstream's in-tree ggml
-# patches during configure (third_party/ggml-patches/), so we carry none.
+# Configure once (submodule init + cmake, which auto-applies the in-tree ggml
+# patches), then always `cmake --build` so source changes recompile incrementally
+# and relink — a no-op when nothing changed. After a submodule bump, delete
+# build-release to force a reconfigure (re-applies the patch to the new ggml).
 parakeet-lib:
-	@if [ "$(HOST)" = "darwin/arm64" ] && [ ! -f $(PARAKEET_LIB) ]; then \
-	  echo "==> building parakeet.cpp static libs (one-time)"; \
-	  git submodule update --init --recursive $(PARAKEET_DIR) && \
+	@if [ "$(HOST)" != "darwin/arm64" ]; then exit 0; fi; \
+	if [ ! -f $(PARAKEET_DIR)/CMakeLists.txt ]; then \
+	  echo "==> initializing parakeet.cpp submodule (first checkout)"; \
+	  git submodule update --init --recursive $(PARAKEET_DIR); \
+	fi; \
+	if [ ! -d $(PARAKEET_DIR)/build-release ]; then \
+	  echo "==> configuring parakeet.cpp (one-time)"; \
 	  cmake -S $(PARAKEET_DIR) -B $(PARAKEET_DIR)/build-release \
 	    -DBUILD_SHARED_LIBS=OFF -DPARAKEET_SHARED=OFF -DPARAKEET_BUILD_CLI=OFF \
 	    -DPARAKEET_GGML_METAL=OFF -DGGML_NATIVE=OFF \
 	    -DCMAKE_OSX_DEPLOYMENT_TARGET=$(MACOS_MIN) \
-	    -DCMAKE_C_FLAGS="-mcpu=apple-m1" -DCMAKE_CXX_FLAGS="-mcpu=apple-m1" && \
-	  cmake --build $(PARAKEET_DIR)/build-release -j; \
-	fi
+	    -DCMAKE_C_FLAGS="-mcpu=apple-m1" -DCMAKE_CXX_FLAGS="-mcpu=apple-m1"; \
+	fi && \
+	cmake --build $(PARAKEET_DIR)/build-release -j
 
 build-linux-amd64:
 	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-amd64
