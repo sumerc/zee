@@ -223,17 +223,17 @@ func Confidence(confidence float64) {
 }
 
 type StreamMetricsData struct {
-	Provider      string
-	ConnectMs     float64
-	FinalizeMs    float64
-	TotalMs       float64
-	AudioS        float64
-	SentChunks    int
-	SentKB        float64
-	RecvMessages  int
-	RecvFinal     int
-	CommitEvents  int
-	ProcessRSSMB  float64
+	Provider     string
+	ConnectMs    float64
+	FinalizeMs   float64
+	TotalMs      float64
+	AudioS       float64
+	SentChunks   int
+	SentKB       float64
+	RecvMessages int
+	RecvFinal    int
+	CommitEvents int
+	ProcessRSSMB float64
 }
 
 func StreamMetrics(m StreamMetricsData) {

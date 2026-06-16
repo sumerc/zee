@@ -832,20 +832,17 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	if result.Stream != nil {
 		ss := result.Stream
 		log.StreamMetrics(log.StreamMetricsData{
-			Provider:      cfg.tr.Name(),
-			ConnectMs:     ss.ConnectMs,
-			FinalizeMs:    ss.FinalizeMs,
-			TotalMs:       ss.TotalMs,
-			AudioS:        ss.AudioS,
-			SentChunks:    ss.SentChunks,
-			SentKB:        ss.SentKB,
-			RecvMessages:  ss.RecvMessages,
-			RecvFinal:     ss.RecvFinal,
-			CommitEvents:  ss.CommitEvents,
-			MemoryAllocMB: result.MemoryAllocMB,
-			MemoryPeakMB:  result.MemoryPeakMB,
-			ProcessRSSMB:  result.ProcessRSSMB,
-			Goroutines:    result.Goroutines,
+			Provider:     cfg.tr.Name(),
+			ConnectMs:    ss.ConnectMs,
+			FinalizeMs:   ss.FinalizeMs,
+			TotalMs:      ss.TotalMs,
+			AudioS:       ss.AudioS,
+			SentChunks:   ss.SentChunks,
+			SentKB:       ss.SentKB,
+			RecvMessages: ss.RecvMessages,
+			RecvFinal:    ss.RecvFinal,
+			CommitEvents: ss.CommitEvents,
+			ProcessRSSMB: result.ProcessRSSMB,
 		})
 	}
 

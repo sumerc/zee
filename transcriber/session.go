@@ -54,16 +54,16 @@ type StreamStats struct {
 }
 
 type SessionResult struct {
-	Text          string
-	HasText       bool
-	NoSpeech      bool
-	RateLimit     string // "remaining/limit" or empty
-	ProcessRSSMB  float64      // resident set size (incl. cgo/mmap), all providers
-	Batch         *BatchStats  // non-nil for batch sessions
-	Stream        *StreamStats // non-nil for stream sessions
-	Metrics       []string     // pre-formatted metric lines
-	AudioData     []byte       // exact bytes sent to the model
-	AudioFormat   string       // "mp3", "flac", or "wav"
+	Text         string
+	HasText      bool
+	NoSpeech     bool
+	RateLimit    string       // "remaining/limit" or empty
+	ProcessRSSMB float64      // resident set size (incl. cgo/mmap), all providers
+	Batch        *BatchStats  // non-nil for batch sessions
+	Stream       *StreamStats // non-nil for stream sessions
+	Metrics      []string     // pre-formatted metric lines
+	AudioData    []byte       // exact bytes sent to the model
+	AudioFormat  string       // "mp3", "flac", or "wav"
 }
 
 type Session interface {
