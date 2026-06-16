@@ -73,6 +73,6 @@ func (s *fakeSession) Close() (SessionResult, error) {
 		},
 		Metrics: []string{"total: 10ms (fake)"},
 	}
-	r.captureMemStats()
+	r.captureRSS()
 	return r, nil
 }

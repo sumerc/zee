@@ -233,7 +233,7 @@ func (s *streamSession) Close() (SessionResult, error) {
 			AudioS:       audioDuration,
 		},
 	}
-	sr.captureMemStats()
+	sr.captureRSS()
 	return sr, sessionErr
 }
 

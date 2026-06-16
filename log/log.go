@@ -12,14 +12,14 @@ import (
 )
 
 var (
-	diagLog          zerolog.Logger
-	diagFile         *os.File
-	transcribeFile   *os.File
-	logMu            sync.Mutex
-	logReady         atomic.Bool
-	transcribeOn     bool
-	pid              int
-	dir              string
+	diagLog        zerolog.Logger
+	diagFile       *os.File
+	transcribeFile *os.File
+	logMu          sync.Mutex
+	logReady       atomic.Bool
+	transcribeOn   bool
+	pid            int
+	dir            string
 )
 
 type Metrics struct {
@@ -32,8 +32,7 @@ type Metrics struct {
 	TLSTimeMs        float64
 	TTFBMs           float64
 	TotalTimeMs      float64
-	MemoryAllocMB    float64
-	MemoryPeakMB     float64
+	ProcessRSSMB     float64
 	InferenceMs      float64
 }
 
@@ -197,8 +196,7 @@ func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused b
 		Float64("tls_ms", m.TLSTimeMs).
 		Float64("ttfb_ms", m.TTFBMs).
 		Float64("total_ms", m.TotalTimeMs).
-		Float64("mem_mb", m.MemoryAllocMB).
-		Float64("peak_mb", m.MemoryPeakMB)
+		Float64("rss_mb", m.ProcessRSSMB)
 	if m.InferenceMs > 0 {
 		ev = ev.Float64("inference_ms", m.InferenceMs)
 	}
@@ -225,16 +223,17 @@ func Confidence(confidence float64) {
 }
 
 type StreamMetricsData struct {
-	Provider     string
-	ConnectMs    float64
-	FinalizeMs   float64
-	TotalMs      float64
-	AudioS       float64
-	SentChunks   int
-	SentKB       float64
-	RecvMessages int
-	RecvFinal    int
-	CommitEvents int
+	Provider      string
+	ConnectMs     float64
+	FinalizeMs    float64
+	TotalMs       float64
+	AudioS        float64
+	SentChunks    int
+	SentKB        float64
+	RecvMessages  int
+	RecvFinal     int
+	CommitEvents  int
+	ProcessRSSMB  float64
 }
 
 func StreamMetrics(m StreamMetricsData) {
@@ -252,6 +251,7 @@ func StreamMetrics(m StreamMetricsData) {
 		Int("recv_messages", m.RecvMessages).
 		Int("recv_final", m.RecvFinal).
 		Int("commit_events", m.CommitEvents).
+		Float64("rss_mb", m.ProcessRSSMB).
 		Msg("stream_transcription")
 }
 

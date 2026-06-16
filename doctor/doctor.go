@@ -155,49 +155,18 @@ func checkMicAndTranscription() bool {
 		fmt.Printf("Selected: %s\n", device.Name)
 	}
 
-	// Select provider
-	fmt.Println()
-	fmt.Println("Select transcription provider:")
-	fmt.Println("  1. Groq")
-	fmt.Println("  2. DeepGram")
-	fmt.Println("  3. OpenAI")
-	fmt.Print("Choice [1/2/3]: ")
-
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
-
-	var provider string
-	switch choice {
-	case "1", "":
-		provider = "groq"
-	case "2":
-		provider = "deepgram"
-	case "3":
-		provider = "openai"
-	default:
-		fmt.Printf("  FAIL: invalid choice %q\n", choice)
+	// Use the same engine the app would: local Parakeet when a model is present,
+	// else the first cloud provider whose API key is set. No interactive prompt.
+	trans, err := transcriber.New()
+	if err != nil {
+		fmt.Printf("  FAIL: no transcription engine available: %v\n", err)
 		return false
 	}
-
-	// Get API key
-	fmt.Printf("Enter %s API key: ", provider)
-	apiKey, _ := reader.ReadString('\n')
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		fmt.Println("  FAIL: API key required")
-		return false
+	engine := "cloud"
+	if transcriber.IsLocal(trans) {
+		engine = "Local (Parakeet)"
 	}
-
-	// Create transcriber
-	var trans transcriber.Transcriber
-	switch provider {
-	case "groq":
-		trans = transcriber.NewGroq(apiKey)
-	case "deepgram":
-		trans = transcriber.NewDeepgram(apiKey)
-	case "openai":
-		trans = transcriber.NewOpenAI(apiKey)
-	}
+	fmt.Printf("Using engine: %s\n", engine)
 
 	fmt.Println()
 	fmt.Print("Press Enter and speak for 3 seconds...")

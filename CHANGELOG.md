@@ -8,6 +8,9 @@
 - Download missing local models on demand from the tray with progress
 - `-transcribe` supports local WAV (16 kHz mono) transcription without a network call
 - `-doctor` reports local model status (present, path, size, decoder)
+- `-doctor` transcription test uses the app's default engine (local Parakeet, else first cloud key) instead of prompting for a provider + API key
+- Idle tray icon adapts to the menubar appearance (template tinting) — renders white on dark/transparent menubars instead of black
+- Diagnostics log per-transcription RSS (`rss_mb`, includes cgo/mmap model memory) and live goroutine count (`goroutines`) for batch and stream sessions
 
 ## v0.3.8
 

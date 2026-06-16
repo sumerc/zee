@@ -257,6 +257,6 @@ func (s *pcmSession) Close() (SessionResult, error) {
 			fmt.Sprintf("rtfx:       %.1fx", audioSec/(inferenceMs/1000)),
 		},
 	}
-	sr.captureMemStats()
+	sr.captureRSS()
 	return sr, nil
 }
