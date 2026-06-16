@@ -15,6 +15,7 @@
 
 ## Highlights
 
+- **Offline, on-device** — on Apple Silicon, transcribes fully locally via Parakeet (parakeet.cpp, CPU) with **no API key and no network**. Cloud providers are optional and switchable from the tray.
 - **System tray app** — lives in the menu bar. Switch microphones, transcription providers, and languages from the tray menu. Dynamic icons show recording and warning states.
 - **Two recording modes** — push-to-talk (hold hotkey) or tap-to-toggle (tap to start/stop).
 - **Real-time streaming** — when a streaming-capable model is selected (e.g. Deepgram Nova-3), words appear as you speak and auto-paste into the focused window incrementally.
@@ -25,7 +26,7 @@
 - **Multiple providers** — Groq, OpenAI, Mistral, ElevenLabs, and Deepgram, switchable from the tray menu at runtime.
 - **36 languages** — select transcription language from the tray menu or via `-lang` flag.
 - **Cross-platform** — minimal dependencies, pure Go where possible.
-  - [x] macOS
+  - [x] macOS (Apple Silicon)
   - [ ] Linux
   - [ ] Windows
 
@@ -50,15 +51,13 @@ Downloads the latest DMG, verifies its SHA256 against `checksums.txt`, copies `Z
 For terminal usage:
 
 ```bash
-# Apple Silicon
+# Apple Silicon (the only supported target)
 curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_arm64.tar.gz | tar xz
-
-# Intel
-curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_amd64.tar.gz | tar xz
 ```
 
 ```bash
-GROQ_API_KEY=xxx ./zee              # Groq Whisper
+./zee                               # offline, on-device (no key needed)
+GROQ_API_KEY=xxx ./zee              # Groq Whisper (cloud)
 DEEPGRAM_API_KEY=xxx ./zee          # Deepgram (streaming auto-enabled when a streaming model is selected from the tray)
 ./zee -debug-transcribe             # include transcription text logs
 ```
@@ -67,15 +66,20 @@ DEEPGRAM_API_KEY=xxx ./zee          # Deepgram (streaming auto-enabled when a st
 
 ### Build from source
 
+Requires **Apple Silicon**, plus `cmake` and the Xcode Command Line Tools (for the one-time on-device STT engine build).
+
 ```bash
 git clone https://github.com/sumerc/zee && cd zee
-make build        # CLI binary
+make build        # builds the local STT engine (cmake) + CLI binary;
+                  # first run also fetches the default models (~900 MB) into models/parakeet/v1/
 make app          # macOS DMG
 ```
 
+The submodule, static libraries, and models are all set up automatically by `make build` — no manual steps.
+
 ## Usage
 
-Set at least one API key, then run zee:
+On Apple Silicon, zee works offline out of the box — no key required. To use a cloud provider instead, set its key (pick the provider from the tray), then run zee:
 
 ```bash
 export GROQ_API_KEY=your_key       # batch mode (Groq Whisper)
