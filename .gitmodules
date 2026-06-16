@@ -1,3 +1,4 @@
 [submodule "parakeet.cpp"]
 	path = third_party/parakeet.cpp
 	url = https://github.com/mudler/parakeet.cpp
+	ignore = dirty
