@@ -1,9 +1,34 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app parakeet-lib
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
-build:
-	go build -ldflags="-X main.version=$(VERSION)" -o zee
+# Local STT (Parakeet) is a darwin/arm64-only cgo feature. On that host we build
+# the static parakeet.cpp + ggml archives first and stamp the macOS deploy
+# target; everywhere else the no-cgo stub is compiled and these are no-ops.
+MACOS_MIN     := 11.0
+PARAKEET_DIR  := third_party/parakeet.cpp
+PARAKEET_LIB  := $(PARAKEET_DIR)/build-release/libparakeet.a
+HOST          := $(shell go env GOOS)/$(shell go env GOARCH)
+ifeq ($(HOST),darwin/arm64)
+CGO_ENV := MACOSX_DEPLOYMENT_TARGET=$(MACOS_MIN) CGO_CFLAGS=-mmacosx-version-min=$(MACOS_MIN) CGO_LDFLAGS=-mmacosx-version-min=$(MACOS_MIN)
+endif
+
+build: parakeet-lib
+	$(CGO_ENV) go build -ldflags="-X main.version=$(VERSION)" -o zee
+
+# Build the static archives once. cmake auto-applies upstream's in-tree ggml
+# patches during configure (third_party/ggml-patches/), so we carry none.
+parakeet-lib:
+	@if [ "$(HOST)" = "darwin/arm64" ] && [ ! -f $(PARAKEET_LIB) ]; then \
+	  echo "==> building parakeet.cpp static libs (one-time)"; \
+	  git submodule update --init --recursive $(PARAKEET_DIR) && \
+	  cmake -S $(PARAKEET_DIR) -B $(PARAKEET_DIR)/build-release \
+	    -DBUILD_SHARED_LIBS=OFF -DPARAKEET_SHARED=OFF -DPARAKEET_BUILD_CLI=OFF \
+	    -DPARAKEET_GGML_METAL=OFF -DGGML_NATIVE=OFF \
+	    -DCMAKE_OSX_DEPLOYMENT_TARGET=$(MACOS_MIN) \
+	    -DCMAKE_C_FLAGS="-mcpu=apple-m1" -DCMAKE_CXX_FLAGS="-mcpu=apple-m1" && \
+	  cmake --build $(PARAKEET_DIR)/build-release -j; \
+	fi
 
 build-linux-amd64:
 	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-amd64
@@ -11,24 +36,24 @@ build-linux-amd64:
 build-linux-arm64:
 	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-arm64
 
-test:
-	go test -race -v ./...
+test: parakeet-lib
+	$(CGO_ENV) go test -race -v ./...
 
-integration-test:
+integration-test: parakeet-lib
 	@test -n "$(WAV)" || (echo "Usage: make integration-test WAV=file.wav" && exit 1)
 	@if [ -f .env ]; then export $$(grep -v '^#' .env | xargs); fi; \
 	test -n "$$GROQ_API_KEY" || (echo "Error: GROQ_API_KEY not set (create .env or export it)" && exit 1); \
-	go run test/integration_test.go $(WAV)
+	$(CGO_ENV) go run test/integration_test.go $(WAV)
 
 benchmark: build
 	@test -n "$(WAV)" || (echo "Usage: make benchmark WAV=file.wav [RUNS=5]" && exit 1)
 	@if [ -f .env ]; then export $$(grep -v '^#' .env | xargs); fi; \
 	./zee -benchmark $(WAV) -runs $(or $(RUNS),3)
 
-test-integration:
+test-integration: parakeet-lib
 	@tmp=$$(mktemp -d) && \
-	go build -o "$$tmp/zee-test-bin" . && \
-	ZEE_TEST_BIN="$$tmp/zee-test-bin" go test -race -tags integration -v -timeout 120s -count=1 ./test/ ; \
+	$(CGO_ENV) go build -o "$$tmp/zee-test-bin" . && \
+	ZEE_TEST_BIN="$$tmp/zee-test-bin" $(CGO_ENV) go test -race -tags integration -v -timeout 120s -count=1 ./test/ ; \
 	status=$$? ; rm -rf "$$tmp" ; exit $$status
 
 icns:

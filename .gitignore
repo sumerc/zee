@@ -5,6 +5,9 @@ zee-gui
 Zee-*.dmg
 packaging/Zee.icns
 
+# Local STT models (downloaded / dev-placed ggufs — never committed)
+/models/
+
 # Environment
 .env
 

@@ -34,6 +34,40 @@ log "Installing Zee ${VERSION}"
 DMG="Zee-${VERSION}.dmg"
 BASE="https://github.com/${REPO}/releases/download/${VERSION}"
 
+# Offline models live under an immutable, app-version-independent tag.
+MODELS_TAG="models-v1"
+MODELS_BASE="https://github.com/${REPO}/releases/download/${MODELS_TAG}"
+MODELS_DIR="${HOME}/Library/Application Support/zee/models"
+# filename<space>sha256 — the default 110M + the multilingual v3 (v2 is opt-in).
+PREFETCH_MODELS=(
+  "tdt_ctc-110m-f16.gguf 7f9a6376edde6a74592ace48b2ebdc27a1ac972d0be9dfcc29e668d99381faf1"
+  "tdt-0.6b-v3-q4_k.gguf 993d73feb4206dadda865ab25bd64b50c48dc4d013c3bf6126a721f28b1d5ee8"
+)
+
+# Best-effort: pre-download the offline models so Apple Silicon works with no
+# API key on first launch. Never fails the install — the in-app downloader
+# recovers anything missing.
+prefetch_models() {
+  [[ "$(uname -m)" == "arm64" ]] || return 0
+  mkdir -p "$MODELS_DIR" 2>/dev/null || return 0
+  local entry f sum dest
+  for entry in "${PREFETCH_MODELS[@]}"; do
+    f="${entry%% *}"; sum="${entry##* }"; dest="${MODELS_DIR}/${f}"
+    if [[ -f "$dest" ]] && shasum -a 256 "$dest" | grep -q "$sum"; then
+      log "Model ${f} already present"; continue
+    fi
+    log "Downloading model ${f} (best-effort)..."
+    if curl -fL --progress-bar "${MODELS_BASE}/${f}" -o "${dest}.part" \
+       && shasum -a 256 "${dest}.part" | grep -q "$sum"; then
+      mv -f "${dest}.part" "$dest"
+      log "Model ${f} OK"
+    else
+      log "Model ${f} unavailable — the app will fetch it on first launch"
+      rm -f "${dest}.part"
+    fi
+  done
+}
+
 log "Downloading ${DMG}..."
 curl -fL --progress-bar "${BASE}/${DMG}" -o "${TMP}/${DMG}" \
   || err "download failed: ${BASE}/${DMG}"
@@ -64,21 +98,26 @@ run_or_sudo cp -R "$MOUNT/Zee.app" "${APP_DIR}/"
 log "Clearing quarantine attribute..."
 run_or_sudo xattr -cr "${APP_DIR}/Zee.app"
 
+log "Fetching offline models (best-effort)..."
+prefetch_models || true
+
 cat <<EOF
 
 Zee ${VERSION} installed to ${APP_DIR}/Zee.app
 
 Next:
-  1. Set an API key (at least one):
-       launchctl setenv GROQ_API_KEY     your_key
-       launchctl setenv OPENAI_API_KEY   your_key
-       launchctl setenv DEEPGRAM_API_KEY your_key
-       launchctl setenv MISTRAL_API_KEY  your_key
-     (add to ~/.zshrc to persist across logins)
-
-  2. Launch Zee from Spotlight or:
+  1. Launch Zee from Spotlight or:
        open ${APP_DIR}/Zee.app
 
-  3. macOS may prompt for Microphone and Accessibility.
+  2. macOS may prompt for Microphone and Accessibility.
      Grant both, then hold Ctrl+Shift+Space to record.
+
+On Apple Silicon, Zee works offline out of the box — no API key needed.
+For cloud providers, set a key and pick the provider from the tray menu:
+       launchctl setenv GROQ_API_KEY       your_key
+       launchctl setenv OPENAI_API_KEY     your_key
+       launchctl setenv DEEPGRAM_API_KEY   your_key
+       launchctl setenv MISTRAL_API_KEY    your_key
+       launchctl setenv ELEVENLABS_API_KEY your_key
+     (add to ~/.zshrc to persist across logins)
 EOF

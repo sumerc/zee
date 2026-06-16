@@ -10,19 +10,20 @@ import (
 )
 
 var (
-	mStatus     *systray.MenuItem
-	mRecord     *systray.MenuItem
-	mCopy       *systray.MenuItem
+	mStatus        *systray.MenuItem
+	mRecord        *systray.MenuItem
+	mCopy          *systray.MenuItem
 	mDevices       *systray.MenuItem
 	mDefaultDevice *systray.MenuItem
 	deviceItems    []*systray.MenuItem
 	deviceReady    chan struct{}
 
-	mSettings  *systray.MenuItem
-	mAutoPaste *systray.MenuItem
-	mLogin     *systray.MenuItem
-	mBackend   *systray.MenuItem
-	mLanguage *systray.MenuItem
+	mSettings   *systray.MenuItem
+	mAutoPaste  *systray.MenuItem
+	mLogin      *systray.MenuItem
+	mEditHints  *systray.MenuItem
+	mBackend    *systray.MenuItem
+	mLanguage   *systray.MenuItem
 	langEntries []struct {
 		item *systray.MenuItem
 		code string
@@ -222,12 +223,15 @@ func onReady() {
 		}
 	})
 
-	mEditHints := mSettings.AddSubMenuItem("Edit Hints…", "Edit vocabulary hints file")
+	mEditHints = mSettings.AddSubMenuItem("Edit Hints…", "Edit vocabulary hints file")
 	mEditHints.Click(func() {
 		if editHintsCb != nil {
 			go editHintsCb()
 		}
 	})
+	if !hintsEnabled {
+		mEditHints.Disable()
+	}
 
 	sep := mSettings.AddSubMenuItem("─────────", "")
 	sep.Disable()
@@ -260,46 +264,47 @@ func onReady() {
 	modelMu.Lock()
 	if len(models) > 0 {
 		mBackend = mSettings.AddSubMenuItem("Model", "Select transcription model")
-		modelItems = make([]*systray.MenuItem, 0, len(models))
-		var curProvider string
-		var provMenu *systray.MenuItem
-		for i, m := range models {
-			if m.Provider != curProvider {
-				curProvider = m.Provider
-				label := m.ProviderLabel
-				if !m.HasKey {
-					label += " (no API key)"
+		modelItems = make([]*systray.MenuItem, len(models))
+		// models are grouped by provider (contiguous); one submenu per provider.
+		for i := 0; i < len(models); {
+			prov := models[i].Provider
+			j, anyUsable := i, false
+			for j < len(models) && models[j].Provider == prov {
+				if models[j].State != ModelUnavailable {
+					anyUsable = true
 				}
-				provMenu = mBackend.AddSubMenuItem(label, label)
-				if !m.HasKey {
-					provMenu.Disable()
-				}
+				j++
 			}
-			idx := i
-			item := provMenu.AddSubMenuItemCheckbox(m.Label, m.Label, m.Active)
-			item.Click(func() {
-				modelMu.Lock()
-				mm := models[idx]
-				cb := modelCb
-				modelMu.Unlock()
-				if !mm.HasKey || cb == nil {
-					return
+			label := models[i].ProviderLabel
+			if !anyUsable {
+				label += " (no API key)"
+			}
+			provMenu := mBackend.AddSubMenuItem(label, label)
+			if !anyUsable {
+				provMenu.Disable()
+			}
+			for k := i; k < j; k++ {
+				idx := k
+				m := models[k]
+				item := provMenu.AddSubMenuItemCheckbox(modelTitle(m), m.Label, m.Active && m.State == ModelReady)
+				if m.State == ModelUnavailable || m.State == ModelDownloading {
+					item.Disable()
 				}
-				cb(mm.Provider, mm.ModelID)
-				modelMu.Lock()
-				for j, it := range modelItems {
-					if j == idx {
-						it.Check()
-						models[j].Active = true
-					} else {
-						it.Uncheck()
-						models[j].Active = false
+				item.Click(func() {
+					modelMu.Lock()
+					mm := models[idx]
+					cb := modelCb
+					modelMu.Unlock()
+					// Ready → switch; NeedsDownload → fetch. The handler (main)
+					// dispatches and drives checkmarks via SetActiveModel.
+					if cb == nil || (mm.State != ModelReady && mm.State != ModelNeedsDownload) {
+						return
 					}
-				}
-				modelMu.Unlock()
-				updateStatus()
-			})
-			modelItems = append(modelItems, item)
+					cb(mm.Provider, mm.ModelID)
+				})
+				modelItems[idx] = item
+			}
+			i = j
 		}
 	}
 	modelMu.Unlock()
@@ -332,6 +337,32 @@ func updateCopyLastTitle(title string) {
 	}
 }
 
+// updateModelItem re-renders one model entry (title, checkmark, enabled) from
+// its current state. Called on download progress and on model switch.
+func updateModelItem(idx int) {
+	modelMu.Lock()
+	if idx < 0 || idx >= len(modelItems) || idx >= len(models) {
+		modelMu.Unlock()
+		return
+	}
+	m := models[idx]
+	it := modelItems[idx]
+	modelMu.Unlock()
+	if it == nil {
+		return
+	}
+	it.SetTitle(modelTitle(m))
+	if m.Active && m.State == ModelReady {
+		it.Check()
+	} else {
+		it.Uncheck()
+	}
+	if m.State == ModelReady || m.State == ModelNeedsDownload {
+		it.Enable()
+	} else {
+		it.Disable()
+	}
+}
 
 func addLangEntry(code, label string) {
 	idx := len(langEntries)
@@ -389,6 +420,17 @@ func refreshLanguageMenu() {
 func updateStatusItem(text string) {
 	if mStatus != nil {
 		mStatus.SetTitle(text)
+	}
+}
+
+func setHintsEnabled(on bool) {
+	if mEditHints == nil {
+		return
+	}
+	if on {
+		mEditHints.Enable()
+	} else {
+		mEditHints.Disable()
 	}
 }
 

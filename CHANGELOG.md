@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+
+- Add offline, on-device transcription via Parakeet (parakeet.cpp, CPU) on Apple Silicon
+- Works out of the box with no API key on Apple Silicon (falls back to the local 110M model)
+- Add local model picker in the tray: 110M English (default), 0.6B v3 multilingual, 0.6B v2 English (opt-in download)
+- Download missing local models on demand from the tray with progress
+- `-transcribe` supports local WAV (16 kHz mono) transcription without a network call
+- `-doctor` reports local model status (present, path, size, decoder)
+
 ## v0.3.8
 
 - Update dialog points to install instructions

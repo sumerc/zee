@@ -13,6 +13,8 @@ import (
 	"zee/clipboard"
 	"zee/encoder"
 	"zee/hotkey"
+	"zee/internal/parakeet"
+	"zee/localmodel"
 	"zee/transcriber"
 )
 
@@ -23,6 +25,8 @@ func Run(_ string) int {
 
 	fmt.Println("zee doctor - interactive system diagnostics")
 	fmt.Println("============================================")
+
+	printLocalModels()
 
 	allPass := true
 
@@ -47,6 +51,25 @@ func Run(_ string) int {
 		return 0
 	}
 	return 1
+}
+
+// printLocalModels reports the offline engine + which models are on disk.
+// Informational only — it never fails the run (cloud-only users have none).
+func printLocalModels() {
+	fmt.Println()
+	fmt.Println("Local models (Parakeet)")
+	if !parakeet.Available() {
+		fmt.Println("  engine: not available on this platform (Apple Silicon only)")
+		return
+	}
+	fmt.Printf("  engine available — models dir: %s\n", localmodel.Dir())
+	for _, m := range localmodel.All() {
+		state := "missing"
+		if localmodel.Present(m) {
+			state = "present"
+		}
+		fmt.Printf("  %-34s %5d MB  %s\n", m.Label, m.SizeBytes>>20, state)
+	}
 }
 
 func checkHotkey() bool {

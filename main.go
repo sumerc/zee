@@ -18,9 +18,9 @@ import (
 
 	"zee/alert"
 	"zee/audio"
-	"zee/config"
 	"zee/beep"
 	"zee/clipboard"
+	"zee/config"
 	"zee/doctor"
 	"zee/encoder"
 	"zee/hotkey"
@@ -61,6 +61,17 @@ var (
 	lastRecMu sync.Mutex
 	lastRec   *savedRecording
 )
+
+func trayModelState(s transcriber.ModelStatus) tray.ModelState {
+	switch {
+	case s.Ready:
+		return tray.ModelReady
+	case s.Downloadable:
+		return tray.ModelNeedsDownload
+	default:
+		return tray.ModelUnavailable
+	}
+}
 
 func modelSupportsStream(tr transcriber.Transcriber) bool {
 	id := tr.GetModel()
@@ -248,12 +259,10 @@ func run() {
 	// Restore saved provider/model or fall back to auto-detection
 	if cfg.Provider != "" {
 		for _, p := range transcriber.Providers() {
-			if p.Name == cfg.Provider {
-				if key := os.Getenv(p.EnvKey); key != "" {
-					activeTranscriber = p.NewFn(key)
-					if cfg.Model != "" {
-						activeTranscriber.SetModel(cfg.Model)
-					}
+			if p.Name == cfg.Provider && p.Available() {
+				activeTranscriber = p.New()
+				if cfg.Model != "" {
+					activeTranscriber.SetModel(cfg.Model)
 				}
 				break
 			}
@@ -360,7 +369,12 @@ func run() {
 
 	tray.OnCopyLast(clip.CopyLast)
 	tray.OnRecord(
-		func() { select { case trayRecordChan <- struct{}{}: default: } },
+		func() {
+			select {
+			case trayRecordChan <- struct{}{}:
+			default:
+			}
+		},
 		func() { requestStop() },
 	)
 	// preferredDevice remembers the user's choice so we can auto-reconnect
@@ -374,7 +388,7 @@ func run() {
 		for i := range devices {
 			names[i] = devices[i].Name
 		}
-			tray.SetDevices(names, preferredDevice, func(name string) {
+		tray.SetDevices(names, preferredDevice, func(name string) {
 			preferredDevice = name
 			config.Update(func(s *config.Settings) { s.Device = name })
 			if name == "" {
@@ -389,14 +403,15 @@ func run() {
 	var trayModels []tray.Model
 	modelIndex := map[string]transcriber.ModelInfo{}
 	for _, p := range transcriber.Providers() {
-		key := os.Getenv(p.EnvKey)
 		for _, m := range p.Models {
+			st := p.Status(m.ID)
 			trayModels = append(trayModels, tray.Model{
 				Provider:      p.Name,
 				ProviderLabel: p.Label,
 				ModelID:       m.ID,
 				Label:         m.Label,
-				HasKey:        key != "",
+				State:         trayModelState(st),
+				Detail:        st.Detail,
 				Active:        activeTranscriber.Name() == p.Name && activeTranscriber.GetModel() == m.ID,
 			})
 			modelIndex[p.Name+":"+m.ID] = m
@@ -405,35 +420,65 @@ func run() {
 
 	tray.SetLanguages(transcriber.AllLanguages())
 
-	tray.SetModels(trayModels, func(provider, model string) {
-		configMu.Lock()
-		defer configMu.Unlock()
-
-		currentLang := activeTranscriber.GetLanguage()
-
-		var newTr transcriber.Transcriber
+	providerByName := func(name string) (transcriber.ProviderInfo, bool) {
 		for _, p := range transcriber.Providers() {
-			if p.Name == provider {
-				if key := os.Getenv(p.EnvKey); key != "" {
-					newTr = p.NewFn(key)
-				}
-				break
+			if p.Name == name {
+				return p, true
 			}
 		}
-		if newTr == nil {
-			return
-		}
-		newTr.SetLanguage(currentLang)
-		newTr.SetModel(model)
+		return transcriber.ProviderInfo{}, false
+	}
 
-		activeTranscriber = newTr
-		streamEnabled = modelIndex[provider+":"+model].Stream
+	// switchModel makes (provider, model) active, reusing the current instance
+	// when the provider is unchanged so we don't reload a local model twice.
+	switchModel := func(p transcriber.ProviderInfo, model string) {
+		configMu.Lock()
+		if activeTranscriber.Name() != p.Name {
+			newTr := p.New()
+			newTr.SetLanguage(activeTranscriber.GetLanguage())
+			activeTranscriber = newTr
+		}
+		activeTranscriber.SetModel(model) // local: blocks here during gguf load
+		streamEnabled = modelIndex[p.Name+":"+model].Stream
 		if !streamEnabled {
 			activeFormat = *formatFlag
 		}
+		langs := activeTranscriber.SupportedLanguages()
+		local := transcriber.IsLocal(activeTranscriber)
+		configMu.Unlock()
 
-		config.Update(func(s *config.Settings) { s.Provider = provider; s.Model = model })
-		tray.SetLanguages(newTr.SupportedLanguages())
+		config.Update(func(s *config.Settings) { s.Provider = p.Name; s.Model = model })
+		tray.SetLanguages(langs)
+		tray.SetHintsEnabled(!local)
+		tray.SetActiveModel(p.Name, model)
+	}
+
+	tray.SetModels(trayModels, func(provider, model string) {
+		p, ok := providerByName(provider)
+		if !ok {
+			return
+		}
+		st := p.Status(model)
+		switch {
+		case st.Ready:
+			switchModel(p, model)
+		case st.Downloadable:
+			// Async: a model download takes minutes; show progress in the menu.
+			go func() {
+				tray.UpdateModelState(provider, model, tray.ModelDownloading, "0%")
+				err := p.Download(model, func(f float64) {
+					tray.UpdateModelState(provider, model, tray.ModelDownloading, fmt.Sprintf("%.0f%%", f*100))
+				})
+				if err != nil {
+					log.Errorf("model download: %v", err)
+					tray.SetError("Download failed: " + err.Error())
+					tray.UpdateModelState(provider, model, tray.ModelNeedsDownload, st.Detail)
+					return
+				}
+				tray.UpdateModelState(provider, model, tray.ModelReady, "")
+				switchModel(p, model)
+			}()
+		}
 	})
 
 	tray.SetLanguage(*langFlag, func(code string) {
@@ -442,6 +487,7 @@ func run() {
 		configMu.Unlock()
 		config.Update(func(s *config.Settings) { s.Language = code })
 	})
+	tray.SetHintsEnabled(!transcriber.IsLocal(activeTranscriber))
 	tray.SetLogin(login.Enabled())
 	tray.SetVersion(version)
 	tray.OnSaveAudio(saveLastRecording)
@@ -611,7 +657,12 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 				requestStop()
 				st = idle
 			case <-hk.Keyup():
-				if !timer.Stop() { select { case <-timer.C: default: } }
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
 				sc.Store(true)
 				st = toggleRecording
 			}
@@ -875,20 +926,40 @@ func runTranscribeFile(audioFile string) {
 		fatal("Unsupported audio format: %s", ext)
 	}
 
+	// Cloud providers forward the encoded bytes directly. Local (Parakeet)
+	// has no such shortcut: route WAV → PCM → Session, the same path live
+	// recording uses (decision #6; WAV-only in v1).
 	type directTranscriber interface {
 		Transcribe(audio []byte, format, lang, hints string) (*transcriber.Result, error)
 	}
 
-	dt, ok := activeTranscriber.(directTranscriber)
-	if !ok {
-		fatal("Provider %q does not support direct file transcription", activeTranscriber.Name())
+	if dt, ok := activeTranscriber.(directTranscriber); ok {
+		result, err := dt.Transcribe(data, format, activeTranscriber.GetLanguage(), config.GetHints())
+		if err != nil {
+			fatal("Transcription error: %v", err)
+		}
+		fmt.Println(result.Text)
+		return
 	}
 
-	result, err := dt.Transcribe(data, format, activeTranscriber.GetLanguage(), config.GetHints())
+	if format != "wav" {
+		fatal("Local transcription supports WAV files only (got %s)", ext)
+	}
+	pcm, err := audio.WAVToPCM(data)
+	if err != nil {
+		fatal("Cannot read WAV: %v", err)
+	}
+	sess, err := activeTranscriber.NewSession(context.Background(), transcriber.SessionConfig{
+		Language: activeTranscriber.GetLanguage(),
+	})
+	if err != nil {
+		fatal("Session error: %v", err)
+	}
+	sess.Feed(pcm)
+	result, err := sess.Close()
 	if err != nil {
 		fatal("Transcription error: %v", err)
 	}
-
 	fmt.Println(result.Text)
 }
 
