@@ -58,6 +58,32 @@ func WAVToPCM(b []byte) ([]byte, error) {
 	return data, nil
 }
 
+// PCMToWAV wraps raw 16 kHz mono signed-16-bit little-endian PCM in a minimal
+// 44-byte RIFF/WAVE container — the inverse of WAVToPCM. Local (Parakeet)
+// recordings are never encoded, so this is how they're persisted to disk.
+func PCMToWAV(pcm []byte) []byte {
+	const sampleRate, channels, bits = 16000, 1, 16
+	byteRate := sampleRate * channels * bits / 8
+	blockAlign := channels * bits / 8
+
+	buf := make([]byte, WAVHeaderSize+len(pcm))
+	copy(buf[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(36+len(pcm)))
+	copy(buf[8:12], "WAVE")
+	copy(buf[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(buf[16:20], 16) // PCM fmt chunk size
+	binary.LittleEndian.PutUint16(buf[20:22], 1)  // format = PCM
+	binary.LittleEndian.PutUint16(buf[22:24], channels)
+	binary.LittleEndian.PutUint32(buf[24:28], sampleRate)
+	binary.LittleEndian.PutUint32(buf[28:32], uint32(byteRate))
+	binary.LittleEndian.PutUint16(buf[32:34], uint16(blockAlign))
+	binary.LittleEndian.PutUint16(buf[34:36], bits)
+	copy(buf[36:40], "data")
+	binary.LittleEndian.PutUint32(buf[40:44], uint32(len(pcm)))
+	copy(buf[WAVHeaderSize:], pcm)
+	return buf
+}
+
 var btKeywords = []string{
 	"airpods", "beats", "bose", "wh-1000", "wf-1000",
 	"sony wh-", "sony wf-",

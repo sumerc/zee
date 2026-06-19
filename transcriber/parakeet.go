@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"zee/audio"
 	"zee/encoder"
 	"zee/internal/parakeet"
 	"zee/localmodel"
@@ -242,9 +243,11 @@ func (s *pcmSession) Close() (SessionResult, error) {
 	rawKB := float64(len(raw)) / 1024
 
 	sr := SessionResult{
-		Text:     text,
-		HasText:  !noSpeech,
-		NoSpeech: noSpeech,
+		Text:        text,
+		HasText:     !noSpeech,
+		NoSpeech:    noSpeech,
+		AudioData:   audio.PCMToWAV(raw),
+		AudioFormat: "wav",
 		Batch: &BatchStats{
 			AudioLengthS: audioSec,
 			RawSizeKB:    rawKB,

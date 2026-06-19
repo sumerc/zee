@@ -11,6 +11,7 @@
 - `-doctor` transcription test uses the app's default engine (local Parakeet, else first cloud key) instead of prompting for a provider + API key
 - Idle tray icon adapts to the menubar appearance (template tinting) — renders white on dark/transparent menubars instead of black
 - Diagnostics log per-transcription process RSS (`rss_mb`, from gopsutil — includes cgo/mmap model memory) for both batch and stream sessions
+- "Save Last Recording" now works for the local (Parakeet) model — captured PCM is saved as WAV (was cloud-only before)
 
 ## v0.3.8
 
