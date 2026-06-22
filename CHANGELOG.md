@@ -12,6 +12,7 @@
 - Idle tray icon adapts to the menubar appearance (template tinting) — renders white on dark/transparent menubars instead of black
 - Diagnostics log per-transcription process RSS (`rss_mb`, from gopsutil — includes cgo/mmap model memory) for both batch and stream sessions
 - "Save Last Recording" now works for the local (Parakeet) model — captured PCM is saved as WAV (was cloud-only before)
+- Add `-provider` and `-model` flags to override the saved provider/model from the CLI (an unavailable explicit `-provider` is now a hard error)
 
 ## v0.3.8
 

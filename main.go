@@ -182,6 +182,8 @@ func run() {
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe an audio file and exit")
+	providerFlag := flag.String("provider", "", "Transcription provider (e.g. parakeet, groq); overrides saved config")
+	modelFlag := flag.String("model", "", "Model ID for the selected provider; overrides saved config")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -256,6 +258,15 @@ func run() {
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
 	}
 
+	// CLI -provider/-model override the saved provider/model (also lets the
+	// integration test pick a specific local model).
+	if flagSet["provider"] {
+		cfg.Provider = *providerFlag
+	}
+	if flagSet["model"] {
+		cfg.Model = *modelFlag
+	}
+
 	// Restore saved provider/model or fall back to auto-detection
 	if cfg.Provider != "" {
 		for _, p := range transcriber.Providers() {
@@ -266,6 +277,11 @@ func run() {
 				}
 				break
 			}
+		}
+		// An explicit -provider that didn't resolve is a hard error (don't
+		// silently fall back to a different engine under the test's feet).
+		if activeTranscriber == nil && flagSet["provider"] {
+			fatal("Provider %q is not available", *providerFlag)
 		}
 	}
 	if activeTranscriber == nil {
