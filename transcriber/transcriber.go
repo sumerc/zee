@@ -122,6 +122,18 @@ func langsFromCodes(codes []string) []Language {
 	return langs
 }
 
+// AllLanguages returns every known language (Auto-detect first, then the rest
+// sorted alphabetically). The tray uses this as the fixed universe of language
+// menu items; SetLanguages then shows only the active model's subset.
+func AllLanguages() []Language {
+	codes := make([]string, 0, len(langLabels))
+	for c := range langLabels {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	return langsFromCodes(codes)
+}
+
 type baseTranscriber struct {
 	client *TracedClient
 	apiURL string
@@ -140,16 +152,6 @@ func (b *baseTranscriber) GetLanguage() string {
 	b.langMu.RLock()
 	defer b.langMu.RUnlock()
 	return b.lang
-}
-
-// AllLanguages returns every known language, sorted alphabetically.
-func AllLanguages() []Language {
-	codes := make([]string, 0, len(langLabels))
-	for c := range langLabels {
-		codes = append(codes, c)
-	}
-	sort.Strings(codes)
-	return langsFromCodes(codes)
 }
 
 func (b *baseTranscriber) Models() []ModelInfo { return nil }

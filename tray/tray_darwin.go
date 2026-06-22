@@ -7,6 +7,8 @@ import (
 
 	"github.com/energye/systray"
 	"golang.design/x/hotkey/mainthread"
+
+	"zee/transcriber"
 )
 
 var (
@@ -309,8 +311,10 @@ func onReady() {
 	}
 	modelMu.Unlock()
 
+	// Build a fixed item per known language (systray can't add items after
+	// CreateMenu). refreshLanguageMenu then shows only the active model's set.
 	mLanguage = mSettings.AddSubMenuItem("Language", "Select transcription language")
-	for _, lang := range languages {
+	for _, lang := range transcriber.AllLanguages() {
 		addLangEntry(lang.Code, lang.Label)
 	}
 
@@ -326,6 +330,8 @@ func onReady() {
 	mQuit := systray.AddMenuItem("Quit", "Quit zee")
 	mQuit.Click(func() { Quit() })
 	systray.CreateMenu()
+
+	refreshLanguageMenu() // constrain the freshly-built menu to the active model
 
 	close(deviceReady)
 }
@@ -392,26 +398,29 @@ func refreshLanguageMenu() {
 	for _, l := range languages {
 		want[l.Code] = true
 	}
-	langValid := false
+	// If the active model no longer offers the current language, fall back to
+	// its first offered one (Auto-detect for multilingual models, English for
+	// the English-only ones).
+	if !want[langCode] {
+		langCode = ""
+		if len(languages) > 0 {
+			langCode = languages[0].Code
+		}
+		if langCb != nil {
+			langCb(langCode)
+		}
+	}
 	for _, e := range langEntries {
-		if e.code == "" || want[e.code] {
+		if want[e.code] {
 			e.item.Show()
 			if e.code == langCode {
-				langValid = true
 				e.item.Check()
+			} else {
+				e.item.Uncheck()
 			}
 		} else {
 			e.item.Hide()
 			e.item.Uncheck()
-		}
-	}
-	if !langValid {
-		langCode = ""
-		if len(langEntries) > 0 {
-			langEntries[0].item.Check()
-		}
-		if langCb != nil {
-			langCb("")
 		}
 	}
 	updateStatus()

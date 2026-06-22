@@ -434,7 +434,7 @@ func run() {
 		}
 	}
 
-	tray.SetLanguages(transcriber.AllLanguages())
+	tray.SetLanguages(activeTranscriber.SupportedLanguages())
 
 	providerByName := func(name string) (transcriber.ProviderInfo, bool) {
 		for _, p := range transcriber.Providers() {
