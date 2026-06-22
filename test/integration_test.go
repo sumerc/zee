@@ -313,11 +313,11 @@ func localModelsDir(t *testing.T) string {
 	return dir
 }
 
-// transcribeLocal runs `zee -transcribe` against a local Parakeet model and
-// returns the printed transcript. It points the binary at the dev models dir
-// (its cwd is the test package, not the repo root) and skips if the gguf is
-// missing.
-func transcribeLocal(t *testing.T, modelID, lang, file string) string {
+// transcribeFiles runs `zee -transcribe` over one or more files in a SINGLE
+// process (the model is loaded once and reused across files) and returns the
+// per-file transcripts — one per stdout line, in input order. Skips if the
+// model's gguf isn't present.
+func transcribeFiles(t *testing.T, modelID, lang string, files ...string) []string {
 	t.Helper()
 	m, ok := localmodel.ByID(modelID)
 	if !ok {
@@ -328,16 +328,36 @@ func transcribeLocal(t *testing.T, modelID, lang, file string) string {
 		t.Skipf("model %q not downloaded (run: make download-models)", modelID)
 	}
 
-	args := []string{"-logpath", t.TempDir(), "-transcribe", file,
-		"-provider", "parakeet", "-model", modelID, "-lang", lang}
+	// Flags must precede the positional files: Go's flag parser stops at the
+	// first non-flag arg, so -transcribe and the files come last.
+	args := append([]string{"-logpath", t.TempDir(), "-provider", "parakeet",
+		"-model", modelID, "-lang", lang, "-transcribe"}, files...)
 	cmd := exec.Command(testBinary, args...)
 	cmd.Env = append(os.Environ(), "ZEE_MODELS_DIR="+modelsDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+
+	start := time.Now()
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("transcribe %s failed: %v\nstderr: %s", file, err, stderr.String())
+		t.Fatalf("transcribe %v failed: %v\nstderr: %s", files, err, stderr.String())
 	}
-	return strings.TrimSpace(stdout.String())
+	t.Logf("%s: %d file(s) in %s", modelID, len(files), time.Since(start).Round(time.Millisecond))
+
+	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
+	if len(lines) != len(files) {
+		t.Fatalf("expected %d transcripts, got %d:\n%s", len(files), len(lines), stdout.String())
+	}
+	return lines
+}
+
+// assertTranscript checks the transcript matches the expected text by normalized
+// token overlap (TTS+ASR drifts slightly, so we don't require an exact match).
+func assertTranscript(t *testing.T, got, want string) {
+	t.Helper()
+	g, w := normalizeText(got), normalizeText(want)
+	if o := tokenOverlap(g, w); o < 0.8 {
+		t.Errorf("token overlap %.2f below 0.8\n got:  %q\n want: %q", o, g, w)
+	}
 }
 
 // normalizeText lowercases and collapses everything but letters/digits to single
@@ -380,30 +400,21 @@ func TestLocalParakeetModels(t *testing.T) {
 		t.Skip("local Parakeet transcription is darwin/arm64 only")
 	}
 
-	cases := []struct {
-		name, model, lang, file, want string
-	}{
-		{"english-110m-default", "parakeet-110m-en", "en", "data/en.wav",
-			"The quick brown fox jumps over the lazy dog."},
-		{"english-v3-multilingual", "parakeet-v3-multi", "", "data/en.wav",
-			"The quick brown fox jumps over the lazy dog."},
-		{"french-v3-multilingual", "parakeet-v3-multi", "", "data/fr.wav",
-			"Bonjour, je m'appelle Thomas et j'habite à Paris depuis trois ans."},
-		{"russian-v3-multilingual", "parakeet-v3-multi", "", "data/ru.wav",
-			"Здравствуйте, меня зовут Милена, я живу в Москве."},
-	}
+	const wantEN = "The quick brown fox jumps over the lazy dog."
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			start := time.Now()
-			got := normalizeText(transcribeLocal(t, tc.model, tc.lang, tc.file))
-			t.Logf("%s: transcribed in %s", tc.model, time.Since(start).Round(time.Millisecond))
-			want := normalizeText(tc.want)
-			if o := tokenOverlap(got, want); o < 0.8 {
-				t.Errorf("token overlap %.2f below 0.8\n got:  %q\n want: %q", o, got, want)
-			}
-		})
-	}
+	t.Run("english-110m", func(t *testing.T) {
+		got := transcribeFiles(t, "parakeet-110m-en", "en", "data/en.wav")
+		assertTranscript(t, got[0], wantEN)
+	})
+
+	// One process, one v3 load, three languages (auto-detect).
+	t.Run("v3-multilingual", func(t *testing.T) {
+		got := transcribeFiles(t, "parakeet-v3-multi", "",
+			"data/en.wav", "data/fr.wav", "data/ru.wav")
+		assertTranscript(t, got[0], wantEN)
+		assertTranscript(t, got[1], "Bonjour, je m'appelle Thomas et j'habite à Paris depuis trois ans.")
+		assertTranscript(t, got[2], "Здравствуйте, меня зовут Милена, я живу в Москве.")
+	})
 }
 
 // TestLocalModelDiagnostics checks that a local-model transcription emits the

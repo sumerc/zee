@@ -181,7 +181,7 @@ func run() {
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
-	transcribeFlag := flag.String("transcribe", "", "Transcribe an audio file and exit")
+	transcribeFlag := flag.String("transcribe", "", "Transcribe audio file(s) and exit; extra files may follow as positional args (one transcript printed per line)")
 	providerFlag := flag.String("provider", "", "Transcription provider (e.g. parakeet, groq); overrides saved config")
 	modelFlag := flag.String("model", "", "Model ID for the selected provider; overrides saved config")
 	flag.Parse()
@@ -332,7 +332,9 @@ func run() {
 	}
 
 	if *transcribeFlag != "" {
-		runTranscribeFile(*transcribeFlag)
+		// First file is the flag value; any remaining positionals are extra
+		// files transcribed in the same process (the model loads once).
+		runTranscribeFiles(append([]string{*transcribeFlag}, flag.Args()...))
 		return
 	}
 
@@ -923,10 +925,29 @@ func saveLastRecording() {
 	alert.Info("Saved to " + dir)
 }
 
-func runTranscribeFile(audioFile string) {
+// directTranscriber is implemented by cloud providers that accept encoded audio
+// bytes directly; local (Parakeet) instead routes WAV → PCM → Session.
+type directTranscriber interface {
+	Transcribe(audio []byte, format, lang, hints string) (*transcriber.Result, error)
+}
+
+// runTranscribeFiles transcribes one or more files with the already-loaded
+// engine — the model is loaded once at startup and reused across files — and
+// prints one transcript per line, in input order.
+func runTranscribeFiles(files []string) {
+	for _, f := range files {
+		text, err := transcribeFile(f)
+		if err != nil {
+			fatal("%s: %v", f, err)
+		}
+		fmt.Println(text)
+	}
+}
+
+func transcribeFile(audioFile string) (string, error) {
 	data, err := os.ReadFile(audioFile)
 	if err != nil {
-		fatal("Error reading file: %v", err)
+		return "", err
 	}
 
 	ext := filepath.Ext(audioFile)
@@ -939,44 +960,36 @@ func runTranscribeFile(audioFile string) {
 	case ".mp3":
 		format = "mp3"
 	default:
-		fatal("Unsupported audio format: %s", ext)
-	}
-
-	// Cloud providers forward the encoded bytes directly. Local (Parakeet)
-	// has no such shortcut: route WAV → PCM → Session, the same path live
-	// recording uses (decision #6; WAV-only in v1).
-	type directTranscriber interface {
-		Transcribe(audio []byte, format, lang, hints string) (*transcriber.Result, error)
+		return "", fmt.Errorf("unsupported audio format %q", ext)
 	}
 
 	if dt, ok := activeTranscriber.(directTranscriber); ok {
 		result, err := dt.Transcribe(data, format, activeTranscriber.GetLanguage(), config.GetHints())
 		if err != nil {
-			fatal("Transcription error: %v", err)
+			return "", err
 		}
-		fmt.Println(result.Text)
-		return
+		return result.Text, nil
 	}
 
 	if format != "wav" {
-		fatal("Local transcription supports WAV files only (got %s)", ext)
+		return "", fmt.Errorf("local transcription supports WAV files only (got %s)", ext)
 	}
 	pcm, err := audio.WAVToPCM(data)
 	if err != nil {
-		fatal("Cannot read WAV: %v", err)
+		return "", fmt.Errorf("cannot read WAV: %w", err)
 	}
 	sess, err := activeTranscriber.NewSession(context.Background(), transcriber.SessionConfig{
 		Language: activeTranscriber.GetLanguage(),
 	})
 	if err != nil {
-		fatal("Session error: %v", err)
+		return "", err
 	}
 	sess.Feed(pcm)
 	result, err := sess.Close()
 	if err != nil {
-		fatal("Transcription error: %v", err)
+		return "", err
 	}
-	fmt.Println(result.Text)
+	return result.Text, nil
 }
 
 func runBenchmark(wavFile string, runs int) {

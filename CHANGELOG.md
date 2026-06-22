@@ -6,7 +6,7 @@
 - Works out of the box with no API key on Apple Silicon (falls back to the local 110M model)
 - Add local model picker in the tray: 110M English (default), 0.6B v3 multilingual, 0.6B v2 English (opt-in download)
 - Download missing local models on demand from the tray with progress
-- `-transcribe` supports local WAV (16 kHz mono) transcription without a network call
+- `-transcribe` supports local WAV (16 kHz mono) transcription without a network call, and accepts multiple files in one invocation (model loaded once; one transcript printed per line)
 - `-doctor` reports local model status (present, path, size, decoder)
 - `-doctor` transcription test uses the app's default engine (local Parakeet, else first cloud key) instead of prompting for a provider + API key
 - Idle tray icon adapts to the menubar appearance (template tinting) — renders white on dark/transparent menubars instead of black
