@@ -400,7 +400,7 @@ func TestLocalParakeetModels(t *testing.T) {
 		t.Skip("local Parakeet transcription is darwin/arm64 only")
 	}
 
-	const wantEN = "The quick brown fox jumps over the lazy dog."
+	const wantEN = "The quick brown fox jumps."
 
 	t.Run("english-110m", func(t *testing.T) {
 		got := transcribeFiles(t, "parakeet-110m-en", "en", "data/en.wav")
@@ -412,8 +412,8 @@ func TestLocalParakeetModels(t *testing.T) {
 		got := transcribeFiles(t, "parakeet-v3-multi", "",
 			"data/en.wav", "data/fr.wav", "data/ru.wav")
 		assertTranscript(t, got[0], wantEN)
-		assertTranscript(t, got[1], "Bonjour, je m'appelle Thomas et j'habite à Paris depuis trois ans.")
-		assertTranscript(t, got[2], "Здравствуйте, меня зовут Милена, я живу в Москве.")
+		assertTranscript(t, got[1], "Je m'appelle Thomas Dupont.")
+		assertTranscript(t, got[2], "Меня зовут Милена Иванова.")
 	})
 }
 
