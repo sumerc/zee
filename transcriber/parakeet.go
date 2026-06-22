@@ -17,8 +17,10 @@ import (
 // Parakeet is the offline, on-device provider. It wraps one loaded GGUF model
 // (decision #2: a single shared ctx; push-to-talk is serial) and swaps the
 // gguf to change models (decision #3: 110m loaded at startup, switching freezes
-// briefly). The C-API has no language parameter, so language is model-driven
-// (decision #1): English-only for 110m/v2, auto-detect for the multilingual v3.
+// briefly). The C-API has no usable language parameter for these models, so
+// language is model-driven (decision #1): English-only for 110m/v2, and the
+// multilingual v3 auto-detects (it is not prompt-conditioned, so a target
+// language cannot be forced).
 type Parakeet struct {
 	mu      sync.Mutex
 	modelID string
@@ -133,7 +135,9 @@ func (p *Parakeet) Models() []ModelInfo {
 
 func parakeetLanguages(m localmodel.Model) []Language {
 	if m.Multilingual {
-		return []Language{{Code: "", Label: "Auto-detect"}, {Code: "en", Label: "English"}}
+		// v3 auto-detects and is not prompt-conditioned, so a target language
+		// cannot be forced — Auto-detect is the only meaningful option.
+		return []Language{{Code: "", Label: "Auto-detect"}}
 	}
 	return []Language{{Code: "en", Label: "English"}}
 }
