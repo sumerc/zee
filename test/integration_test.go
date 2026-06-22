@@ -395,7 +395,9 @@ func TestLocalParakeetModels(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			start := time.Now()
 			got := normalizeText(transcribeLocal(t, tc.model, tc.lang, tc.file))
+			t.Logf("%s: transcribed in %s", tc.model, time.Since(start).Round(time.Millisecond))
 			want := normalizeText(tc.want)
 			if o := tokenOverlap(got, want); o < 0.8 {
 				t.Errorf("token overlap %.2f below 0.8\n got:  %q\n want: %q", o, got, want)

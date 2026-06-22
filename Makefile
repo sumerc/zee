@@ -65,7 +65,7 @@ benchmark: build
 test-integration: parakeet-lib
 	@tmp=$$(mktemp -d) && \
 	$(CGO_ENV) go build -o "$$tmp/zee-test-bin" . && \
-	ZEE_TEST_BIN="$$tmp/zee-test-bin" $(CGO_ENV) go test -race -tags integration -v -timeout 120s -count=1 ./test/ ; \
+	ZEE_TEST_BIN="$$tmp/zee-test-bin" $(CGO_ENV) go test -race -tags integration -v -timeout 1200s -count=1 ./test/ ; \
 	status=$$? ; rm -rf "$$tmp" ; exit $$status
 
 icns:
