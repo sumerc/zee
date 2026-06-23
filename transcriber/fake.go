@@ -12,11 +12,20 @@ type FakeTranscriber struct {
 	err    error
 	lang   string
 	stream bool
+	delay  time.Duration // simulated inference time (Close blocks for this long)
 }
 
 func NewFake(text string, err error) *FakeTranscriber {
-	return &FakeTranscriber{text: text, err: err, stream: os.Getenv("ZEE_FAKE_STREAM") == "1"}
+	f := &FakeTranscriber{text: text, err: err, stream: os.Getenv("ZEE_FAKE_STREAM") == "1"}
+	if d := os.Getenv("ZEE_FAKE_DELAY"); d != "" {
+		f.delay, _ = time.ParseDuration(d)
+	}
+	return f
 }
+
+// SetDelay makes Close block for d, simulating inference latency (for tests that
+// need a window where transcription is in progress).
+func (f *FakeTranscriber) SetDelay(d time.Duration) { f.delay = d }
 
 func (f *FakeTranscriber) Name() string                   { return "fake" }
 func (f *FakeTranscriber) SupportedLanguages() []Language { return nil }
@@ -47,13 +56,14 @@ func (f *FakeTranscriber) NewSession(_ context.Context, cfg SessionConfig) (Sess
 	} else {
 		close(updates)
 	}
-	return &fakeSession{text: f.text, err: f.err, updates: updates}, nil
+	return &fakeSession{text: f.text, err: f.err, updates: updates, delay: f.delay}, nil
 }
 
 type fakeSession struct {
 	text    string
 	err     error
 	updates chan string
+	delay   time.Duration
 }
 
 func (s *fakeSession) Feed([]byte) {}
@@ -61,6 +71,9 @@ func (s *fakeSession) Feed([]byte) {}
 func (s *fakeSession) Updates() <-chan string { return s.updates }
 
 func (s *fakeSession) Close() (SessionResult, error) {
+	if s.delay > 0 {
+		time.Sleep(s.delay)
+	}
 	if s.err != nil {
 		return SessionResult{}, fmt.Errorf("fake transcriber error: %w", s.err)
 	}

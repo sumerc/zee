@@ -14,4 +14,7 @@ var (
 
 	//go:embed icon_warn.png
 	iconWarnHi []byte
+
+	//go:embed icon_busy.png
+	iconBusyHi []byte
 )

@@ -81,6 +81,14 @@ func updateWarningIcon(on bool) {
 	}
 }
 
+func updateTranscribingIcon(on bool) {
+	if on {
+		systray.SetIcon(iconBusyHi)
+	} else {
+		systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
+	}
+}
+
 func updateTooltip(msg string) {
 	systray.SetTooltip(msg)
 }

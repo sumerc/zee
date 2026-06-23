@@ -102,6 +102,12 @@ var configMu sync.Mutex
 var trayRecordChan = make(chan struct{}, 1)
 var isRecording atomic.Bool
 
+// isTranscribing is true while a recording has stopped but its transcription is
+// still running. isRecording stays true across this phase too (so a re-press is
+// blocked); isTranscribing distinguishes "stop the live recording" from "denied,
+// transcription in progress" for the hotkey feedback.
+var isTranscribing atomic.Bool
+
 var (
 	stopMu   sync.Mutex
 	stopCh   chan struct{} // closed to stop the active recording
@@ -608,10 +614,6 @@ func run() {
 	}
 	defer hk.Unregister()
 
-	logRecordDevice := func() {
-		log.Info("recording_device: " + captureDevice.DeviceName())
-	}
-
 	sessions := make(chan recSession, 1)
 	go listenHotkey(hk, longPressDuration(), sessions)
 
@@ -621,19 +623,40 @@ func run() {
 		}
 	}()
 
+	recordSessions(captureDevice, sessions)
+}
+
+// afterRecordCycle, when non-nil, is called by recordSessions at the end of each
+// record+transcribe cycle. Test-only hook (lets the harness know a cycle ended).
+var afterRecordCycle func()
+
+// recordSessions is the core record→transcribe loop, shared by the live app and
+// tests. isRecording stays true for the WHOLE cycle — recording AND inference —
+// so listenHotkey blocks a new recording while a transcription is still running
+// (handleRecording returns a `done` channel that closes when inference ends).
+func recordSessions(capture audio.CaptureDevice, sessions <-chan recSession) {
 	for sess := range sessions {
 		log.Info("recording_start")
-		logRecordDevice()
+		log.Info("recording_device: " + capture.DeviceName())
 		isRecording.Store(true)
 		tray.SetRecording(true)
 		go beep.PlayStart()
 
-		_, err := handleRecording(captureDevice, sess)
-		isRecording.Store(false)
-		tray.SetRecording(false)
+		done, err := handleRecording(capture, sess)
 		if err != nil {
 			log.Errorf("recording error: %v", err)
 			tray.SetError(err.Error())
+		}
+		if done != nil {
+			isTranscribing.Store(true)
+			tray.SetTranscribing(true) // blue status dot while inference runs
+			<-done                     // hold isRecording too — blocks re-record
+			isTranscribing.Store(false)
+		}
+		isRecording.Store(false)
+		tray.SetRecording(false)
+		if afterRecordCycle != nil {
+			afterRecordCycle()
 		}
 	}
 }
@@ -663,7 +686,11 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 			<-hk.Keydown()
 			if isRecording.Load() {
 				<-hk.Keyup()
-				requestStop()
+				if isTranscribing.Load() {
+					go beep.PlayDenied() // ignored: transcription still in progress
+				} else {
+					requestStop()
+				}
 				continue
 			}
 			sc := &atomic.Bool{}

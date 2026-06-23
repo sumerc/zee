@@ -21,6 +21,12 @@ const (
 	errorFreq   = 350
 	errorVolume = 0.6
 	errorDecay  = 30
+
+	// Denied beep: low, short single tick — a press was ignored (e.g. while a
+	// transcription is still in progress).
+	deniedFreq   = 240
+	deniedVolume = 0.45
+	deniedDecay  = 40
 )
 
 // Platform-specific durations (darwin uses shorter durations)

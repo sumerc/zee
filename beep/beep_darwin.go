@@ -13,10 +13,11 @@ import (
 var (
 	malgoCtx     *malgo.AllocatedContext
 	device       *malgo.Device
-	startSamples []byte
-	endSamples   []byte
-	errorSamples []byte
-	soundOnce    sync.Once
+	startSamples  []byte
+	endSamples    []byte
+	errorSamples  []byte
+	deniedSamples []byte
+	soundOnce     sync.Once
 
 	// Playback state - accessed atomically from callback
 	playSamples atomic.Pointer[[]byte]
@@ -49,6 +50,7 @@ func initSound() {
 	startSamples = generateTickBytes(sampleRate, startFreq, 0.03, startVolume, startDecay)
 	endSamples = generateTickBytes(sampleRate, endFreq, 0.05, endVolume, endDecay)
 	errorSamples = generateDoubleBeepBytes(sampleRate, errorFreq, 0.08, 0.05, errorVolume, errorDecay)
+	deniedSamples = generateTickBytes(sampleRate, deniedFreq, 0.06, deniedVolume, deniedDecay)
 
 	if err := initDevice(); err != nil {
 		malgoCtx.Uninit()
@@ -168,4 +170,12 @@ func PlayError() {
 	}
 	soundOnce.Do(initSound)
 	playBytes(errorSamples)
+}
+
+func PlayDenied() {
+	if disabled {
+		return
+	}
+	soundOnce.Do(initSound)
+	playBytes(deniedSamples)
 }

@@ -4,7 +4,8 @@ package beep
 
 // No audio playback on Windows - beeps disabled.
 
-func Init()      {}
-func PlayStart() {}
-func PlayEnd()   {}
-func PlayError() {}
+func Init()       {}
+func PlayStart()  {}
+func PlayEnd()    {}
+func PlayError()  {}
+func PlayDenied() {}

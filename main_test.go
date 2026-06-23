@@ -1,10 +1,84 @@
 package main
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"zee/audio"
+	"zee/beep"
+	"zee/encoder"
 	"zee/hotkey"
+	"zee/transcriber"
 )
+
+// TestRecordSessionsBlocksDuringInference verifies the guard's missing half:
+// isRecording must stay true for the WHOLE record+transcribe cycle, not just
+// while recording. It drives the real recordSessions loop with a fake capture
+// and a fake transcriber whose "inference" takes 800ms, then checks isRecording
+// is still set mid-inference. Combined with TestListenHotkey_StopsTrayRecording
+// (a press while isRecording is true starts no new session), this proves a
+// hotkey press during inference is blocked.
+func TestRecordSessionsBlocksDuringInference(t *testing.T) {
+	beep.Disable()
+	isRecording.Store(false)
+
+	fake := transcriber.NewFake("hello", nil)
+	fake.SetDelay(800 * time.Millisecond) // simulated inference window
+	activeTranscriber = fake
+
+	ctx, err := audio.NewFakeContext("test/data/short.wav", false)
+	if err != nil {
+		t.Fatalf("fake audio context: %v", err)
+	}
+	capture, err := ctx.NewCapture(nil, audio.CaptureConfig{
+		SampleRate: encoder.SampleRate, Channels: encoder.Channels,
+	})
+	if err != nil {
+		t.Fatalf("fake capture: %v", err)
+	}
+	defer capture.Close()
+
+	var cycles int32
+	afterRecordCycle = func() { atomic.AddInt32(&cycles, 1) }
+	defer func() { afterRecordCycle = nil }()
+
+	sessions := make(chan recSession, 1)
+	loopDone := make(chan struct{})
+	go func() { recordSessions(capture, sessions); close(loopDone) }()
+
+	// Start a recording, let it capture briefly, then stop it (as a keyup would)
+	// so the 800ms "inference" begins.
+	sessions <- recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}}
+	time.Sleep(150 * time.Millisecond)
+	requestStop()
+
+	// Mid-inference: the guard must still be engaged, and isTranscribing (which
+	// drives the blue icon + denied beep) must be set.
+	time.Sleep(250 * time.Millisecond)
+	if !isRecording.Load() {
+		t.Fatal("isRecording cleared during inference — a re-record would NOT be blocked")
+	}
+	if !isTranscribing.Load() {
+		t.Fatal("isTranscribing not set during inference — no blue icon / denied beep")
+	}
+
+	// Wait out the cycle, confirm both flags were released after inference.
+	deadline := time.Now().Add(3 * time.Second)
+	for atomic.LoadInt32(&cycles) < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("record cycle never completed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if isRecording.Load() || isTranscribing.Load() {
+		t.Fatal("isRecording/isTranscribing still set after inference completed")
+	}
+
+	// Terminate the loop cleanly so it doesn't leak into other tests.
+	close(sessions)
+	<-loopDone
+}
 
 func TestListenHotkey_TrayStopNoStaleSignal(t *testing.T) {
 	hk := hotkey.NewFake()

@@ -11,16 +11,18 @@ import (
 )
 
 var (
-	startSamples []int16
-	endSamples   []int16
-	errorSamples []int16
-	soundOnce    sync.Once
+	startSamples  []int16
+	endSamples    []int16
+	errorSamples  []int16
+	deniedSamples []int16
+	soundOnce     sync.Once
 )
 
 func initSound() {
 	startSamples = generateTick(sampleRate, startFreq, 0.2, startVolume, startDecay)
 	endSamples = generateTick(sampleRate, endFreq, 0.2, endVolume, endDecay)
 	errorSamples = generateDoubleBeep(sampleRate, errorFreq, 0.08, 0.05, errorVolume, errorDecay)
+	deniedSamples = generateTick(sampleRate, deniedFreq, 0.12, deniedVolume, deniedDecay)
 }
 
 func generateTick(sampleRate int, freq float64, duration float64, volume float64, decay float64) []int16 {
@@ -108,4 +110,12 @@ func PlayError() {
 	}
 	soundOnce.Do(initSound)
 	go playSamples(errorSamples)
+}
+
+func PlayDenied() {
+	if disabled {
+		return
+	}
+	soundOnce.Do(initSound)
+	go playSamples(deniedSamples)
 }

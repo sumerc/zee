@@ -94,6 +94,12 @@ func SetWarning(on bool) {
 	updateWarningIcon(on)
 }
 
+// SetTranscribing shows the "transcription in progress" icon (a blue status
+// dot). The icon returns to idle on the next SetRecording(false).
+func SetTranscribing(on bool) {
+	updateTranscribingIcon(on)
+}
+
 func SetError(msg string) {
 	updateTooltip("zee – " + msg)
 	go func() {

@@ -7,6 +7,7 @@ func RefreshDevices(names []string, selected string) {}
 func refreshLanguageMenu()                           {}
 func updateRecordingIcon(bool)                       {}
 func updateWarningIcon(bool)                         {}
+func updateTranscribingIcon(bool)                    {}
 func updateTooltip(string)                           {}
 func updateCopyLastTitle(string)                     {}
 func addUpdateMenuItem(string)                       {}
