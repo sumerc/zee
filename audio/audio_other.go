@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 
 	"github.com/gen2brain/malgo"
+
+	"zee/internal/malgolock"
 )
 
 type malgoContext struct {
@@ -15,7 +17,9 @@ type malgoContext struct {
 }
 
 func NewContext() (Context, error) {
+	malgolock.Lock()
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	malgolock.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -23,7 +27,9 @@ func NewContext() (Context, error) {
 }
 
 func (m *malgoContext) Devices() ([]DeviceInfo, error) {
+	malgolock.Lock()
 	devices, err := m.ctx.Devices(malgo.Capture)
+	malgolock.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("malgo devices: %w", err)
 	}
@@ -44,7 +50,10 @@ func (m *malgoContext) NewCapture(device *DeviceInfo, config CaptureConfig) (Cap
 		config:     config,
 	}
 
-	if err := c.initDevice(); err != nil {
+	malgolock.Lock()
+	err := c.initDevice()
+	malgolock.Unlock()
+	if err != nil {
 		return nil, err
 	}
 
@@ -52,8 +61,10 @@ func (m *malgoContext) NewCapture(device *DeviceInfo, config CaptureConfig) (Cap
 }
 
 func (m *malgoContext) Close() {
+	malgolock.Lock()
 	m.ctx.Uninit()
 	m.ctx.Free()
+	malgolock.Unlock()
 }
 
 type malgoCapture struct {
@@ -64,6 +75,7 @@ type malgoCapture struct {
 	callback   atomic.Pointer[DataCallback]
 }
 
+// initDevice is lock-free; callers must hold malgolock around it.
 func (c *malgoCapture) initDevice() error {
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatS16
@@ -98,6 +110,8 @@ func (c *malgoCapture) initDevice() error {
 }
 
 func (c *malgoCapture) Start() error {
+	malgolock.Lock()
+	defer malgolock.Unlock()
 	// Always reinitialize before starting — handles macOS sleep/wake
 	// where the device handle goes stale without returning errors
 	c.device.Uninit()
@@ -108,11 +122,15 @@ func (c *malgoCapture) Start() error {
 }
 
 func (c *malgoCapture) Stop() {
+	malgolock.Lock()
 	c.device.Stop()
+	malgolock.Unlock()
 }
 
 func (c *malgoCapture) Close() {
+	malgolock.Lock()
 	c.device.Uninit()
+	malgolock.Unlock()
 }
 
 func (c *malgoCapture) SetCallback(cb DataCallback) {

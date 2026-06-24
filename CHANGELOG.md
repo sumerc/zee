@@ -14,6 +14,7 @@
 - Diagnostics log per-transcription process RSS (`rss_mb`, from gopsutil — includes cgo/mmap model memory) for both batch and stream sessions
 - "Save Last Recording" now works for the local (Parakeet) model — captured PCM is saved as WAV (was cloud-only before)
 - Add `-provider` and `-model` flags to override the saved provider/model from the CLI (an unavailable explicit `-provider` is now a hard error)
+- Fix a SIGSEGV from concurrent miniaudio device lifecycle calls — the start beep (playback) and mic capture re-init ran on separate threads with their own malgo contexts but shared CoreAudio global state; all device init/start/stop/uninit now serialize behind a process-wide lock (`internal/malgolock`)
 - Fix the tray language menu to always reflect the active model's languages — both at startup and on model switch. English-only Parakeet models no longer offer Auto-detect, and switching providers (e.g. to Groq) now updates the list
 
 ## v0.3.8

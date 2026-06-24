@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 
 	"github.com/gen2brain/malgo"
+
+	"zee/internal/malgolock"
 )
 
 var (
@@ -25,6 +27,7 @@ var (
 	playMu      sync.Mutex
 )
 
+// initDevice is lock-free; callers must hold malgolock around it.
 func initDevice() error {
 	config := malgo.DefaultDeviceConfig(malgo.Playback)
 	config.Playback.Format = malgo.FormatS16
@@ -41,6 +44,9 @@ func initDevice() error {
 }
 
 func initSound() {
+	malgolock.Lock()
+	defer malgolock.Unlock()
+
 	var err error
 	malgoCtx, err = malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
@@ -125,6 +131,9 @@ func playBytes(samples []byte) {
 
 	playMu.Lock()
 	defer playMu.Unlock()
+
+	malgolock.Lock()
+	defer malgolock.Unlock()
 
 	// Always reinitialize to pick up current default output device
 	// (handles BT connect/disconnect, sleep/wake)
