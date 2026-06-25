@@ -112,9 +112,15 @@ func (c *malgoCapture) initDevice() error {
 func (c *malgoCapture) Start() error {
 	malgolock.Lock()
 	defer malgolock.Unlock()
-	// Always reinitialize before starting — handles macOS sleep/wake
-	// where the device handle goes stale without returning errors
-	c.device.Uninit()
+	// Always reinitialize before starting — handles macOS sleep/wake where the
+	// device handle goes stale without returning errors. Null the pointer after
+	// Uninit: if the reinit below fails (transient CoreAudio error during a
+	// route/sleep-wake change), c.device must not be left pointing at the freed
+	// device, or the next Start uninits it again and double-frees.
+	if c.device != nil {
+		c.device.Uninit()
+		c.device = nil
+	}
 	if err := c.initDevice(); err != nil {
 		return fmt.Errorf("device reinit failed: %w", err)
 	}
@@ -123,13 +129,18 @@ func (c *malgoCapture) Start() error {
 
 func (c *malgoCapture) Stop() {
 	malgolock.Lock()
-	c.device.Stop()
+	if c.device != nil {
+		c.device.Stop()
+	}
 	malgolock.Unlock()
 }
 
 func (c *malgoCapture) Close() {
 	malgolock.Lock()
-	c.device.Uninit()
+	if c.device != nil {
+		c.device.Uninit()
+		c.device = nil
+	}
 	malgolock.Unlock()
 }
 

@@ -136,12 +136,16 @@ func playBytes(samples []byte) {
 	defer malgolock.Unlock()
 
 	// Always reinitialize to pick up current default output device
-	// (handles BT connect/disconnect, sleep/wake)
+	// (handles BT connect/disconnect, sleep/wake). Null device after Uninit
+	// so a failed reinit can't leave it pointing at the freed device — the
+	// next call would otherwise Uninit it again and double-free.
 	if device != nil {
 		device.Stop()
 		device.Uninit()
+		device = nil
 	}
 	if err := initDevice(); err != nil {
+		device = nil
 		return
 	}
 
