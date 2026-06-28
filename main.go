@@ -99,6 +99,11 @@ type recordingConfig struct {
 
 var configMu sync.Mutex
 
+// captureMu guards the live captureDevice (and selectedDevice) which the
+// device-monitor goroutine hot-swaps on connect/disconnect while recordSessions
+// reads it for each new recording.
+var captureMu sync.Mutex
+
 var trayRecordChan = make(chan struct{}, 1)
 var isRecording atomic.Bool
 
@@ -623,7 +628,11 @@ func run() {
 		}
 	}()
 
-	recordSessions(captureDevice, sessions)
+	recordSessions(func() audio.CaptureDevice {
+		captureMu.Lock()
+		defer captureMu.Unlock()
+		return captureDevice
+	}, sessions)
 }
 
 // afterRecordCycle, when non-nil, is called by recordSessions at the end of each
@@ -634,8 +643,14 @@ var afterRecordCycle func()
 // tests. isRecording stays true for the WHOLE cycle — recording AND inference —
 // so listenHotkey blocks a new recording while a transcription is still running
 // (handleRecording returns a `done` channel that closes when inference ends).
-func recordSessions(capture audio.CaptureDevice, sessions <-chan recSession) {
+//
+// getCapture is called fresh each iteration (not captured once) so a device
+// hot-swap — e.g. the mic being unplugged and the monitor switching to system
+// default — is picked up on the next recording instead of reusing a stale,
+// now-invalid device.
+func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSession) {
 	for sess := range sessions {
+		capture := getCapture()
 		log.Info("recording_start")
 		log.Info("recording_device: " + capture.DeviceName())
 		isRecording.Store(true)
@@ -741,6 +756,8 @@ func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, cap
 		name = newDevice.Name
 	}
 	log.Info("device_switch: " + name)
+	captureMu.Lock()
+	defer captureMu.Unlock()
 	(*captureDevice).Close()
 	newCapture, err := ctx.NewCapture(newDevice, captureConfig)
 	if err != nil {

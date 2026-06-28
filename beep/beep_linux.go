@@ -89,7 +89,7 @@ func Init() {
 }
 
 func PlayStart() {
-	if disabled {
+	if disabled.Load() {
 		return
 	}
 	soundOnce.Do(initSound)
@@ -97,7 +97,7 @@ func PlayStart() {
 }
 
 func PlayEnd() {
-	if disabled {
+	if disabled.Load() {
 		return
 	}
 	soundOnce.Do(initSound)
@@ -105,7 +105,7 @@ func PlayEnd() {
 }
 
 func PlayError() {
-	if disabled {
+	if disabled.Load() {
 		return
 	}
 	soundOnce.Do(initSound)
@@ -113,7 +113,7 @@ func PlayError() {
 }
 
 func PlayDenied() {
-	if disabled {
+	if disabled.Load() {
 		return
 	}
 	soundOnce.Do(initSound)

@@ -1,8 +1,12 @@
 package beep
 
-var disabled bool
+import "sync/atomic"
 
-func Disable() { disabled = true }
+// disabled is set once at startup (or by tests) but read from recording
+// goroutines, so it's atomic to stay race-free.
+var disabled atomic.Bool
+
+func Disable() { disabled.Store(true) }
 
 const (
 	sampleRate = 44100

@@ -14,6 +14,7 @@
 - Diagnostics log per-transcription process RSS (`rss_mb`, from gopsutil — includes cgo/mmap model memory) for both batch and stream sessions
 - "Save Last Recording" now works for the local (Parakeet) model — captured PCM is saved as WAV (was cloud-only before)
 - Add `-provider` and `-model` flags to override the saved provider/model from the CLI (an unavailable explicit `-provider` is now a hard error)
+- Fix recording immediately aborting ("Start" auto-releases) after the selected microphone was unplugged: the record loop kept using a stale reference to the removed device instead of the system-default it was switched to. It now reads the current capture device for each recording (device swaps guarded by a mutex)
 - Fix a crash (SIGSEGV/SIGABRT double-free in `ma_device_uninit`) when recording after a sleep/wake or audio-device change: the per-call device reinit left the device pointer dangling when reinit failed, so the next call uninited the already-freed device. Null the device after uninit in both capture and beep playback. Also serialize all miniaudio device lifecycle calls behind a process-wide lock (`internal/malgolock`) as defense against concurrent capture/playback init/uninit
 - Fix the tray language menu to always reflect the active model's languages — both at startup and on model switch. English-only Parakeet models no longer offer Auto-detect, and switching providers (e.g. to Groq) now updates the list
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestRecordSessionsBlocksDuringInference(t *testing.T) {
 
 	sessions := make(chan recSession, 1)
 	loopDone := make(chan struct{})
-	go func() { recordSessions(capture, sessions); close(loopDone) }()
+	go func() { recordSessions(func() audio.CaptureDevice { return capture }, sessions); close(loopDone) }()
 
 	// Start a recording, let it capture briefly, then stop it (as a keyup would)
 	// so the 800ms "inference" begins.
@@ -78,6 +79,77 @@ func TestRecordSessionsBlocksDuringInference(t *testing.T) {
 	// Terminate the loop cleanly so it doesn't leak into other tests.
 	close(sessions)
 	<-loopDone
+}
+
+// TestRecordSessionsPicksUpDeviceSwitch reproduces the "Start auto-releases"
+// bug: when the selected mic is unplugged mid-run, the device monitor swaps the
+// capture device to system default, but recordSessions kept using a frozen
+// reference to the old (now-gone) device — so every recording aborted with
+// "device reinit failed: No device". recordSessions must read the current
+// device (via getCapture) each iteration. With the old by-value behavior the
+// post-swap session still uses device A and this test fails.
+func TestRecordSessionsPicksUpDeviceSwitch(t *testing.T) {
+	beep.Disable()
+	isRecording.Store(false)
+
+	activeTranscriber = transcriber.NewFake("hello", nil)
+
+	ctx, err := audio.NewFakeContext("test/data/short.wav", false)
+	if err != nil {
+		t.Fatalf("fake audio context: %v", err)
+	}
+	capA, _ := ctx.NewNamedCapture("A")
+	capB, _ := ctx.NewNamedCapture("B")
+	fa := capA.(*audio.FakeCapture)
+	fb := capB.(*audio.FakeCapture)
+
+	var mu sync.Mutex
+	current := capA
+	getCapture := func() audio.CaptureDevice {
+		mu.Lock()
+		defer mu.Unlock()
+		return current
+	}
+
+	var cycles int32
+	afterRecordCycle = func() { atomic.AddInt32(&cycles, 1) }
+	defer func() { afterRecordCycle = nil }()
+
+	sessions := make(chan recSession, 1)
+	loopDone := make(chan struct{})
+	go func() { recordSessions(getCapture, sessions); close(loopDone) }()
+
+	runSession := func() {
+		want := atomic.LoadInt32(&cycles) + 1
+		sessions <- recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}}
+		time.Sleep(120 * time.Millisecond)
+		requestStop()
+		deadline := time.Now().Add(3 * time.Second)
+		for atomic.LoadInt32(&cycles) < want {
+			if time.Now().After(deadline) {
+				t.Fatalf("record cycle %d never completed", want)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	runSession() // session 1 → device A
+
+	mu.Lock() // mic unplugged: monitor swapped to device B
+	current = capB
+	mu.Unlock()
+
+	runSession() // session 2 → must be device B, not the stale A
+
+	close(sessions)
+	<-loopDone
+
+	if fb.Starts.Load() == 0 {
+		t.Fatal("device switch ignored: the session after the swap did not use the new device")
+	}
+	if fa.Starts.Load() != 1 {
+		t.Fatalf("stale device A was used %d times, want 1 (only the pre-swap session)", fa.Starts.Load())
+	}
 }
 
 func TestListenHotkey_TrayStopNoStaleSignal(t *testing.T) {
