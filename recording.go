@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"zee/audio"
-	"zee/beep"
 	"zee/log"
 	"zee/transcriber"
 	"zee/tray"
@@ -84,16 +83,16 @@ func (r *recordingSession) monitorSilence() {
 			case SilenceWarn:
 				log.Info("no_voice_warning")
 				tray.SetWarning(true)
-				beep.PlayError()
+				audio.PlayError()
 			case SilenceWarnClear:
 				tray.SetWarning(false)
 			case SilenceRepeat:
 				log.Info("silence_during_warning")
-				beep.PlayError()
+				audio.PlayError()
 			case SilenceAutoClose:
 				log.Info("silence_auto_close")
 				tray.SetRecording(false)
-				go beep.PlayEnd()
+				go audio.PlayEnd()
 				r.autoClosed.Store(true)
 				r.close()
 				return
@@ -110,7 +109,7 @@ func (r *recordingSession) awaitStop() {
 	}
 	log.Info("recording_stop")
 	tray.SetRecording(false)
-	go beep.PlayEnd()
+	go audio.PlayEnd()
 	if r.stream {
 		time.Sleep(recordTail)
 	}

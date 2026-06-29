@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"zee/audio"
-	"zee/beep"
 	"zee/encoder"
 	"zee/hotkey"
 	"zee/transcriber"
@@ -21,7 +20,7 @@ import (
 // (a press while isRecording is true starts no new session), this proves a
 // hotkey press during inference is blocked.
 func TestRecordSessionsBlocksDuringInference(t *testing.T) {
-	beep.Disable()
+	audio.DisableBeep()
 	isRecording.Store(false)
 
 	fake := transcriber.NewFake("hello", nil)
@@ -89,7 +88,7 @@ func TestRecordSessionsBlocksDuringInference(t *testing.T) {
 // device (via getCapture) each iteration. With the old by-value behavior the
 // post-swap session still uses device A and this test fails.
 func TestRecordSessionsPicksUpDeviceSwitch(t *testing.T) {
-	beep.Disable()
+	audio.DisableBeep()
 	isRecording.Store(false)
 
 	activeTranscriber = transcriber.NewFake("hello", nil)

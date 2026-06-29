@@ -18,7 +18,6 @@ import (
 
 	"zee/alert"
 	"zee/audio"
-	"zee/beep"
 	"zee/clipboard"
 	"zee/config"
 	"zee/doctor"
@@ -610,7 +609,7 @@ func run() {
 		gracefulShutdown()
 	}()
 
-	go beep.Init()
+	go audio.InitBeep()
 
 	hk := hotkey.New()
 	if err := hk.Register(); err != nil {
@@ -655,7 +654,7 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		log.Info("recording_device: " + capture.DeviceName())
 		isRecording.Store(true)
 		tray.SetRecording(true)
-		go beep.PlayStart()
+		go audio.PlayStart()
 
 		done, err := handleRecording(capture, sess)
 		if err != nil {
@@ -702,7 +701,7 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 			if isRecording.Load() {
 				<-hk.Keyup()
 				if isTranscribing.Load() {
-					go beep.PlayDenied() // ignored: transcription still in progress
+					go audio.PlayDenied() // ignored: transcription still in progress
 				} else {
 					requestStop()
 				}

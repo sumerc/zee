@@ -1,35 +1,58 @@
-//go:build !linux
+//go:build darwin
 
 package audio
 
 import (
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/gen2brain/malgo"
-
-	"zee/internal/malgolock"
 )
 
-type malgoContext struct {
-	ctx *malgo.AllocatedContext
+// deviceMu serializes every malgo context/device lifecycle call across capture
+// AND playback (beep_darwin.go). miniaudio's CoreAudio backend keeps process-
+// global default-device state that ma_device_init/uninit/start/stop mutate; two
+// threads touching it concurrently corrupt the heap (observed SIGSEGV in
+// ma_device_uninit). It does NOT guard the audio data callbacks — those run on
+// miniaudio's own thread and don't touch lifecycle state. Non-reentrant:
+// acquire once per logical operation, never nest.
+var deviceMu sync.Mutex
+
+// maCtx is the single process-wide malgo context, shared by capture and
+// playback so there's one piece of CoreAudio global state, not two. Created
+// lazily under deviceMu and never freed — its lifetime is the process.
+var maCtx *malgo.AllocatedContext
+
+// ensureContext creates the shared context on first use. Caller must hold deviceMu.
+func ensureContext() error {
+	if maCtx != nil {
+		return nil
+	}
+	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	if err != nil {
+		return err
+	}
+	maCtx = ctx
+	return nil
 }
 
+type malgoContext struct{}
+
 func NewContext() (Context, error) {
-	malgolock.Lock()
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
-	malgolock.Unlock()
-	if err != nil {
+	deviceMu.Lock()
+	defer deviceMu.Unlock()
+	if err := ensureContext(); err != nil {
 		return nil, err
 	}
-	return &malgoContext{ctx: ctx}, nil
+	return &malgoContext{}, nil
 }
 
 func (m *malgoContext) Devices() ([]DeviceInfo, error) {
-	malgolock.Lock()
-	devices, err := m.ctx.Devices(malgo.Capture)
-	malgolock.Unlock()
+	deviceMu.Lock()
+	devices, err := maCtx.Devices(malgo.Capture)
+	deviceMu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("malgo devices: %w", err)
 	}
@@ -45,14 +68,13 @@ func (m *malgoContext) Devices() ([]DeviceInfo, error) {
 
 func (m *malgoContext) NewCapture(device *DeviceInfo, config CaptureConfig) (CaptureDevice, error) {
 	c := &malgoCapture{
-		malgoCtx:   m,
 		deviceInfo: device,
 		config:     config,
 	}
 
-	malgolock.Lock()
+	deviceMu.Lock()
 	err := c.initDevice()
-	malgolock.Unlock()
+	deviceMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -60,22 +82,19 @@ func (m *malgoContext) NewCapture(device *DeviceInfo, config CaptureConfig) (Cap
 	return c, nil
 }
 
-func (m *malgoContext) Close() {
-	malgolock.Lock()
-	m.ctx.Uninit()
-	m.ctx.Free()
-	malgolock.Unlock()
-}
+// Close is a no-op: the shared malgo context is process-wide and outlives any
+// single Context (playback may still need it). Capture devices are torn down
+// individually via malgoCapture.Close.
+func (m *malgoContext) Close() {}
 
 type malgoCapture struct {
-	malgoCtx   *malgoContext
 	deviceInfo *DeviceInfo
 	config     CaptureConfig
 	device     *malgo.Device
 	callback   atomic.Pointer[DataCallback]
 }
 
-// initDevice is lock-free; callers must hold malgolock around it.
+// initDevice is lock-free; callers must hold deviceMu around it.
 func (c *malgoCapture) initDevice() error {
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatS16
@@ -100,7 +119,7 @@ func (c *malgoCapture) initDevice() error {
 		},
 	}
 
-	dev, err := malgo.InitDevice(c.malgoCtx.ctx.Context, deviceConfig, callbacks)
+	dev, err := malgo.InitDevice(maCtx.Context, deviceConfig, callbacks)
 	if err != nil {
 		return err
 	}
@@ -110,8 +129,8 @@ func (c *malgoCapture) initDevice() error {
 }
 
 func (c *malgoCapture) Start() error {
-	malgolock.Lock()
-	defer malgolock.Unlock()
+	deviceMu.Lock()
+	defer deviceMu.Unlock()
 	// Always reinitialize before starting — handles macOS sleep/wake where the
 	// device handle goes stale without returning errors. Null the pointer after
 	// Uninit: if the reinit below fails (transient CoreAudio error during a
@@ -128,20 +147,20 @@ func (c *malgoCapture) Start() error {
 }
 
 func (c *malgoCapture) Stop() {
-	malgolock.Lock()
+	deviceMu.Lock()
 	if c.device != nil {
 		c.device.Stop()
 	}
-	malgolock.Unlock()
+	deviceMu.Unlock()
 }
 
 func (c *malgoCapture) Close() {
-	malgolock.Lock()
+	deviceMu.Lock()
 	if c.device != nil {
 		c.device.Uninit()
 		c.device = nil
 	}
-	malgolock.Unlock()
+	deviceMu.Unlock()
 }
 
 func (c *malgoCapture) SetCallback(cb DataCallback) {

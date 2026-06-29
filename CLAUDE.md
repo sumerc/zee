@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Rules
 - **CHANGELOG.md** — only log code/behavior changes. No docs, README, or comment-only updates. Be concise.
+- **Clean package interface** — every package must expose a single, platform-neutral interface describing *what it provides*, defined once (typically in `<pkg>.go`). Public API, shared types, and guard logic live there; platform/provider files (build-tag variants) only implement the backend hooks. Never duplicate the public API across build-tag files (see `audio/`: `audio.go` owns the capture interface plus `PlayStart/PlayEnd/...`, platform files provide only the backends — `initSound`/`playOne` for playback, the malgo/pulse capture impls).
 
 ## Build & Run
 
@@ -68,8 +69,7 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - `transcriber/` - STT providers (Groq, OpenAI, Deepgram, Mistral, ElevenLabs) with shared TracedClient for HTTP timing metrics
 - `hotkey/` - global hotkey registration (Ctrl+Shift+Space) with platform-specific backends
 - `clipboard/` - platform-specific clipboard and paste operations (Cmd+V / Ctrl+V)
-- `audio/` - platform-specific audio capture (malgo on macOS, PulseAudio on Linux)
-- `beep/` - platform-specific audio playback for feedback sounds
+- `audio/` - platform-specific audio I/O: capture (malgo on macOS, PulseAudio on Linux) and feedback-tone playback (`PlayStart/PlayEnd/...`); on macOS both share one malgo context + a private device-lifecycle lock
 - `doctor/` - system diagnostics (`-doctor` flag)
 - `internal/mp3/` - vendored shine-mp3 encoder (with mono fix)
 - `device.go` - microphone picker with arrow-key navigation
@@ -80,8 +80,8 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 
 ## Design Philosophy
 
-- **Unix philosophy packages** - Each subfolder is a self-contained utility that does one thing: `beep/` plays sounds, `clipboard/` copies and pastes, `audio/` captures mic input, `transcriber/` talks to STT APIs, `hotkey/` registers global keys. They expose a minimal interface and hide all platform/provider details behind build tags.
-- **Root files are pure business logic** - `main.go` and other root files orchestrate the workflow but never import OS-specific APIs or know implementation details of subpackages. When `main.go` calls `clipboard.Paste()`, it doesn't know whether that's pbcopy, xclip, or Win32 — and it shouldn't. Same for `beep.PlayEnd()`, `audio.Start()`, `transcriber.Transcribe()`, etc.
+- **Unix philosophy packages** - Each subfolder is a self-contained utility that does one thing: `audio/` does audio device I/O (mic capture + feedback-tone playback), `clipboard/` copies and pastes, `transcriber/` talks to STT APIs, `hotkey/` registers global keys. They expose a minimal interface and hide all platform/provider details behind build tags.
+- **Root files are pure business logic** - `main.go` and other root files orchestrate the workflow but never import OS-specific APIs or know implementation details of subpackages. When `main.go` calls `clipboard.Paste()`, it doesn't know whether that's pbcopy, xclip, or Win32 — and it shouldn't. Same for `audio.PlayEnd()`, `audio.NewContext()`, `transcriber.Transcribe()`, etc.
 - **No leaky abstractions** - Never add provider-specific, OS-specific, or library-specific logic to root files. If a new STT provider needs special handling, that belongs in `transcriber/`. If a new platform needs a different paste mechanism, that belongs in `clipboard/`.
 - **Shared constants in one place** - No duplicate magic numbers; extract to package-level constants.
 
