@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix Auto-detect language not persisting: selecting Auto-detect (empty language code) was coerced back to English on the next launch. Settings now load over defaults so an explicit empty language is kept while an unset one still defaults to English
+
 - Add offline, on-device transcription via Parakeet (parakeet.cpp, CPU) on Apple Silicon
 - Works out of the box with no API key on Apple Silicon (falls back to the local 110M model)
 - Add local model picker in the tray: 110M English (default), 0.6B v3 multilingual, 0.6B v2 English (opt-in download)

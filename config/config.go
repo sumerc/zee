@@ -87,16 +87,16 @@ func Load() error {
 		return err
 	}
 
-	var s Settings
+	// Unmarshal into a defaults-seeded copy so fields absent from the file keep
+	// their defaults, while fields present in the file win. This distinguishes
+	// "language not set" (→ default "en") from an explicit "language":""
+	// (Auto-detect), which must persist.
+	s := defaults
 	if err := json.Unmarshal(data, &s); err != nil {
 		log.Warnf("settings: corrupt config.json, using defaults: %v", err)
 		return nil
 	}
-
 	current = s
-	if current.Language == "" {
-		current.Language = defaults.Language
-	}
 	return nil
 }
 

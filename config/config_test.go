@@ -66,6 +66,39 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestAutoDetectLanguagePersists reproduces the bug where selecting Auto-detect
+// (empty language code) is not remembered across restarts: Load coerced the
+// saved "" back to the default "en", so auto-detect silently reverted to
+// English. After the fix an explicit empty language round-trips.
+func TestAutoDetectLanguagePersists(t *testing.T) {
+	SetDir(t.TempDir())
+	if err := Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	Update(func(s *Settings) { s.Language = "" }) // user picks Auto-detect
+	if err := Load(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := Get().Language; got != "" {
+		t.Fatalf("auto-detect not persisted: Language = %q, want \"\"", got)
+	}
+}
+
+// TestMissingLanguageDefaultsToEn guards that a config file with no language
+// field still falls back to "en" (so the fix above doesn't turn unset into
+// auto-detect).
+func TestMissingLanguageDefaultsToEn(t *testing.T) {
+	d := t.TempDir()
+	SetDir(d)
+	os.WriteFile(filepath.Join(d, "config.json"), []byte(`{"device":"x"}`), 0644)
+	if err := Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := Get().Language; got != "en" {
+		t.Fatalf("missing language should default to en, got %q", got)
+	}
+}
+
 func TestSettingsCopySafety(t *testing.T) {
 	SetDir(t.TempDir())
 	Load()

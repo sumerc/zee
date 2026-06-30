@@ -246,7 +246,9 @@ func run() {
 	cfg := config.Get()
 	flagSet := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
-	if !flagSet["lang"] && cfg.Language != "" {
+	if !flagSet["lang"] {
+		// Apply the saved language even when empty — "" is Auto-detect, a real
+		// choice, not "unset". A never-configured config yields "en" via defaults.
 		*langFlag = cfg.Language
 	}
 	if !flagSet["device"] && cfg.Device != "" {
