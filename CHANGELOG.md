@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix language preference being clobbered by English-only models: switching to a model that can't offer the selected language (e.g. Parakeet English-only while on Auto-detect or Turkish) no longer overwrites the saved choice. The fallback is applied transiently; switching back to a capable model restores the original language
+
 - Fix Auto-detect language not persisting: selecting Auto-detect (empty language code) was coerced back to English on the next launch. Settings now load over defaults so an explicit empty language is kept while an unset one still defaults to English
 
 - Add offline, on-device transcription via Parakeet (parakeet.cpp, CPU) on Apple Silicon

@@ -387,8 +387,9 @@ func addLangEntry(code, label string) {
 		}
 		langEntries[idx].item.Check()
 		langCode = langEntries[idx].code
+		langIntent = langCode // a user click is a real choice — remember it
 		if langCb != nil {
-			langCb(langCode)
+			langCb(langCode, true)
 		}
 		updateStatus()
 	})
@@ -406,17 +407,13 @@ func refreshLanguageMenu() {
 	for _, l := range languages {
 		want[l.Code] = true
 	}
-	// If the active model no longer offers the current language, fall back to
-	// its first offered one (Auto-detect for multilingual models, English for
-	// the English-only ones).
-	if !want[langCode] {
-		langCode = ""
-		if len(languages) > 0 {
-			langCode = languages[0].Code
-		}
-		if langCb != nil {
-			langCb(langCode)
-		}
+	// Derive the effective language from the user's intent every refresh. The
+	// fallback (when the model can't offer the intent) is applied to the
+	// transcriber but never persisted, so switching back to a capable model
+	// restores the intent.
+	langCode = effectiveLang(langIntent, languages)
+	if langCb != nil {
+		langCb(langCode, false)
 	}
 	for _, e := range langEntries {
 		if want[e.code] {

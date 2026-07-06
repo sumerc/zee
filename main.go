@@ -511,11 +511,15 @@ func run() {
 		}
 	})
 
-	tray.SetLanguage(*langFlag, func(code string) {
+	tray.SetLanguage(*langFlag, func(code string, persist bool) {
 		configMu.Lock()
 		activeTranscriber.SetLanguage(code)
 		configMu.Unlock()
-		config.Update(func(s *config.Settings) { s.Language = code })
+		// Only a real user choice persists. A model-constraint fallback applies
+		// to the transcriber but must not overwrite the saved preference.
+		if persist {
+			config.Update(func(s *config.Settings) { s.Language = code })
+		}
 	})
 	tray.SetHintsEnabled(!transcriber.IsLocal(activeTranscriber))
 	tray.SetLogin(login.Enabled())

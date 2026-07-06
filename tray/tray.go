@@ -55,8 +55,9 @@ var (
 
 	isBTFn func(string) bool
 
-	langCode string // current language code ("" = auto-detect)
-	langCb   func(string)
+	langCode   string // effective language shown for the active model ("" = auto-detect)
+	langIntent string // user's persisted choice; survives models that can't offer it
+	langCb     func(code string, persist bool)
 
 	appVersion    string
 	checkUpdateCb func()
@@ -206,14 +207,32 @@ func OnCheckUpdate(fn func()) { checkUpdateCb = fn }
 func OnSaveAudio(fn func())   { saveAudioCb = fn }
 func OnEditHints(fn func())   { editHintsCb = fn }
 
-func SetLanguage(code string, onSwitch func(string)) {
+func SetLanguage(code string, onSwitch func(code string, persist bool)) {
 	langCode = code
+	langIntent = code
 	langCb = onSwitch
 }
 
 func SetLanguages(langs []transcriber.Language) {
 	languages = langs
 	refreshLanguageMenu()
+}
+
+// effectiveLang picks the language to actually use for a model that offers
+// `langs`, given the user's intended choice. Intent wins when the model can
+// offer it; otherwise it falls back to the model's first language (Auto-detect
+// for multilingual models, English for English-only ones). The intent itself is
+// never mutated here, so switching back to a capable model restores it.
+func effectiveLang(intent string, langs []transcriber.Language) string {
+	for _, l := range langs {
+		if l.Code == intent {
+			return intent
+		}
+	}
+	if len(langs) > 0 {
+		return langs[0].Code
+	}
+	return ""
 }
 
 func SetBTCheck(fn func(string) bool) {

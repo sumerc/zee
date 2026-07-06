@@ -13,6 +13,24 @@ const hintsFile = "hints.txt"
 const hintsHeader = `# Vocabulary hints for transcription (one per line)
 # These help the model recognize domain-specific terms
 # Empty lines and lines starting with # are ignored
+Opus
+Claude
+Sonnet
+Fable
+Pi.dev
+JSON
+Codex
+Harness
+Gzip
+OpenAI
+Anthropic
+App Router
+Grafana
+favicon
+Mistral
+ElevenLabs
+Bun
+Node.js
 `
 
 func HintsPath() string {
