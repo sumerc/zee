@@ -11,6 +11,7 @@ import (
 
 	"zee/audio"
 	"zee/clipboard"
+	"zee/config"
 	"zee/encoder"
 	"zee/hotkey"
 	"zee/transcriber"
@@ -52,9 +53,11 @@ func Run(_ string) int {
 func checkHotkey() bool {
 	fmt.Println()
 	fmt.Println("[1/3] Hotkey detection")
-	fmt.Println("Press Ctrl+Shift+Space...")
+	_ = config.Load()
+	combo := config.Get().Hotkey
+	fmt.Printf("Press %s...\n", hotkey.FormatCombo(combo))
 
-	hk := hotkey.New()
+	hk := hotkey.New(combo)
 	if err := hk.Register(); err != nil {
 		fmt.Printf("  FAIL: could not register hotkey: %v\n", err)
 		return false

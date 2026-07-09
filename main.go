@@ -171,6 +171,7 @@ func run() {
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe an audio file and exit")
+	hotkeyFlag := flag.String("hotkey", "", "Global hotkey combo, e.g. 'ctrl+shift+space', 'alt+space', 'f8' (persisted to config)")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -233,6 +234,21 @@ func run() {
 		autoPaste = cfg.AutoPaste
 	} else {
 		autoPaste = *autoPasteFlag
+	}
+	// Resolve hotkey: -hotkey flag overrides config; validate and fall back to
+	// the built-in default if unparseable. Persist when set via flag.
+	hotkeyCombo := hotkey.DefaultCombo
+	if flagSet["hotkey"] {
+		hotkeyCombo = *hotkeyFlag
+	} else if cfg.Hotkey != "" {
+		hotkeyCombo = cfg.Hotkey
+	}
+	if err := hotkey.Validate(hotkeyCombo); err != nil {
+		log.Warnf("%v; falling back to %s", err, hotkey.DefaultCombo)
+		hotkeyCombo = hotkey.DefaultCombo
+	}
+	if flagSet["hotkey"] {
+		config.Update(func(s *config.Settings) { s.Hotkey = hotkeyCombo })
 	}
 	// Validate format
 	switch *formatFlag {
@@ -444,6 +460,7 @@ func run() {
 	})
 	tray.SetLogin(login.Enabled())
 	tray.SetVersion(version)
+	tray.SetHotkeyLabel(hotkey.FormatCombo(hotkeyCombo))
 	tray.OnSaveAudio(saveLastRecording)
 	tray.OnEditHints(func() {
 		exec.Command("open", config.HintsPath()).Run()
@@ -537,7 +554,7 @@ func run() {
 
 	go beep.Init()
 
-	hk := hotkey.New()
+	hk := hotkey.New(hotkeyCombo)
 	if err := hk.Register(); err != nil {
 		log.Errorf("hotkey register error: %v", err)
 		fatal("Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security.", err)

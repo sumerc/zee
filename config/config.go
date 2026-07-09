@@ -15,6 +15,7 @@ type Settings struct {
 	Device    string `json:"device"`
 	Provider  string `json:"provider"`
 	Model     string `json:"model"`
+	Hotkey    string `json:"hotkey"`
 	AutoPaste bool   `json:"auto_paste"`
 	AutoStart bool   `json:"auto_start"`
 }

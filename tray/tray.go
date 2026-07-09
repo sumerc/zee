@@ -51,6 +51,8 @@ var (
 	checkUpdateCb  func()
 	saveAudioCb    func()
 	editHintsCb    func()
+
+	hotkeyLabel = "Control+Shift+Space"
 )
 
 var languages []transcriber.Language // set via SetLanguages
@@ -117,6 +119,13 @@ func SetLastRecording(dur time.Duration, totalMs float64) {
 }
 
 func SetVersion(v string)     { appVersion = v }
+
+// SetHotkeyLabel sets the human-readable hotkey shown in the record menu items.
+func SetHotkeyLabel(s string) {
+	if s != "" {
+		hotkeyLabel = s
+	}
+}
 func OnCheckUpdate(fn func()) { checkUpdateCb = fn }
 func OnSaveAudio(fn func())  { saveAudioCb = fn }
 func OnEditHints(fn func())  { editHintsCb = fn }

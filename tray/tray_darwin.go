@@ -48,12 +48,12 @@ func updateRecordingIcon(rec bool) {
 	if rec {
 		systray.SetIcon(iconRecHi)
 		if mRecord != nil {
-			mRecord.SetTitle("● Stop Recording (Shift+Control+Space)")
+			mRecord.SetTitle("● Stop Recording (" + hotkeyLabel + ")")
 		}
 	} else {
 		systray.SetIcon(iconIdleHi)
 		if mRecord != nil {
-			mRecord.SetTitle("○ Start Recording (Shift+Control+Space)")
+			mRecord.SetTitle("○ Start Recording (" + hotkeyLabel + ")")
 		}
 	}
 }
@@ -163,7 +163,7 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	mRecord = systray.AddMenuItem("○ Start Recording (Shift+Control+Space)", "Start or stop recording")
+	mRecord = systray.AddMenuItem("○ Start Recording ("+hotkeyLabel+")", "Start or stop recording")
 	mRecord.Click(func() {
 		if recording {
 			if stopFn != nil {

@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+
+- Add configurable global hotkey via `-hotkey` flag and `config.json` (e.g. `ctrl+shift+space`, `alt+space`, `f8`); tray record labels reflect the active combo (macOS/Windows; Linux stays fixed for now)
+
 ## v0.3.8
 
 - Update dialog points to install instructions

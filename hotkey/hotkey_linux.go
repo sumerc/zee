@@ -32,7 +32,11 @@ type linuxHotkey struct {
 	once    sync.Once
 }
 
-func New() Hotkey {
+// New builds the Linux hotkey. The combo argument is accepted for interface
+// parity with other platforms but is currently ignored: the evdev backend is
+// fixed to Ctrl+Shift+Space. Configurable combos on Linux are tracked as future
+// work.
+func New(combo string) Hotkey {
 	return &linuxHotkey{
 		keydown: make(chan struct{}, 1),
 		keyup:   make(chan struct{}, 1),
@@ -165,6 +169,10 @@ func isKeyboard(eventName string) bool {
 	caps := strings.TrimSpace(string(data))
 	return len(caps) > 10
 }
+
+// Validate accepts any combo on Linux: the evdev backend is fixed to
+// Ctrl+Shift+Space and ignores the configured value, so nothing is rejected.
+func Validate(combo string) error { return nil }
 
 func Diagnose() (string, error) {
 	keyboards, err := findKeyboards()

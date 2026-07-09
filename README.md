@@ -124,6 +124,7 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 | `-setup` | false | Select microphone device |
 | `-device` | (default) | Use named microphone device |
 | `-lang` | en | Language code (e.g., `en`, `es`, `fr`) |
+| `-hotkey` | ctrl+shift+space | Global hotkey combo, e.g. `ctrl+shift+space`, `alt+space`, `cmd+shift+d`, `f8` (persisted to config) |
 | `-debug` | true | Enable diagnostic logging |
 | `-debug-transcribe` | false | Enable transcription text logging |
 | `-doctor` | false | Run system diagnostics and exit |
