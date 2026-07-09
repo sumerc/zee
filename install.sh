@@ -38,10 +38,12 @@ BASE="https://github.com/${REPO}/releases/download/${VERSION}"
 MODELS_TAG="models-v1"
 MODELS_BASE="https://github.com/${REPO}/releases/download/${MODELS_TAG}"
 MODELS_DIR="${HOME}/Library/Application Support/zee/models"
-# filename<space>sha256 — the default 110M + the multilingual v3 (v2 is opt-in).
+# The default 110M + the multilingual v3 (v2 is opt-in). SHA256s are not pinned
+# here — they're read from the release's checksums.txt (published by
+# `make model-release`), so a model bump touches only MODELS_TAG.
 PREFETCH_MODELS=(
-  "tdt_ctc-110m-f16.gguf 7f9a6376edde6a74592ace48b2ebdc27a1ac972d0be9dfcc29e668d99381faf1"
-  "tdt-0.6b-v3-q4_k.gguf 993d73feb4206dadda865ab25bd64b50c48dc4d013c3bf6126a721f28b1d5ee8"
+  "tdt_ctc-110m-f16.gguf"
+  "tdt-0.6b-v3-q4_k.gguf"
 )
 
 # Best-effort: pre-download the offline models so Apple Silicon works with no
@@ -50,9 +52,15 @@ PREFETCH_MODELS=(
 prefetch_models() {
   [[ "$(uname -m)" == "arm64" ]] || return 0
   mkdir -p "$MODELS_DIR" 2>/dev/null || return 0
-  local entry f sum dest
-  for entry in "${PREFETCH_MODELS[@]}"; do
-    f="${entry%% *}"; sum="${entry##* }"; dest="${MODELS_DIR}/${f}"
+  local sums f sum dest
+  sums="$(curl -fsSL "${MODELS_BASE}/checksums.txt" 2>/dev/null)" || {
+    log "Model checksums unavailable — the app will fetch models on first launch"
+    return 0
+  }
+  for f in "${PREFETCH_MODELS[@]}"; do
+    sum="$(awk -v f="$f" '$2==f {print $1}' <<<"$sums")"
+    [[ -n "$sum" ]] || { log "Model ${f} not in checksums — app will fetch on first launch"; continue; }
+    dest="${MODELS_DIR}/${f}"
     if [[ -f "$dest" ]] && shasum -a 256 "$dest" | grep -q "$sum"; then
       log "Model ${f} already present"; continue
     fi

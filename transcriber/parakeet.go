@@ -120,18 +120,7 @@ func IsLocal(tr Transcriber) bool {
 
 func (p *Parakeet) Name() string { return "parakeet" }
 
-func (p *Parakeet) Models() []ModelInfo {
-	out := make([]ModelInfo, 0, len(localmodel.All()))
-	for _, m := range localmodel.All() {
-		out = append(out, ModelInfo{
-			ID:        m.ID,
-			Label:     m.Label,
-			Stream:    false,
-			Languages: parakeetLanguages(m),
-		})
-	}
-	return out
-}
+func (p *Parakeet) Models() []ModelInfo { return ParakeetModels() }
 
 func parakeetLanguages(m localmodel.Model) []Language {
 	if m.Multilingual {

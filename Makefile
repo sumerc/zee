@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app parakeet-lib download-models
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app parakeet-lib download-models model-release
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -88,6 +88,28 @@ bump-version:
 	sed -i '' '/^## Unreleased/r /tmp/zee-changelog-entry' CHANGELOG.md; \
 	rm -f /tmp/zee-changelog-entry; \
 	echo "CHANGELOG.md updated — review and edit as needed"
+
+# Publish the offline Parakeet GGUF models as an immutable, never-"latest"
+# GitHub release. Copy the .gguf files into a folder, then:
+#   make model-release MODELS_DIR=./out MODELS_TAG=models-v2
+# It generates checksums.txt from the ggufs and uploads everything with
+# --latest=false, so the app-release "latest" pointer can never be hijacked
+# (install.sh fetches this checksums.txt to verify downloads — no hardcoded
+# hashes). This ONLY publishes models; adopting them in the app is a separate,
+# deliberate edit to localmodel.go (Version + SHA256s) and install.sh (MODELS_TAG).
+model-release:
+	@test -n "$(MODELS_TAG)" || (echo "usage: make model-release MODELS_DIR=./dir MODELS_TAG=models-vN" && exit 1)
+	@test -d "$(MODELS_DIR)" || (echo "ERROR: MODELS_DIR '$(MODELS_DIR)' not found" && exit 1)
+	@ls "$(MODELS_DIR)"/*.gguf >/dev/null 2>&1 || (echo "ERROR: no .gguf files in $(MODELS_DIR)" && exit 1)
+	@case "$(MODELS_TAG)" in models-*) ;; *) echo "ERROR: MODELS_TAG must start with 'models-'" && exit 1;; esac
+	cd "$(MODELS_DIR)" && shasum -a 256 *.gguf > checksums.txt
+	@echo "==> checksums.txt:"; cat "$(MODELS_DIR)/checksums.txt"
+	gh release create "$(MODELS_TAG)" --repo sumerc/zee --latest=false \
+	  --title "Parakeet $(MODELS_TAG)" \
+	  --notes "GGUF models for zee local STT. Derived from NVIDIA NeMo Parakeet (CC-BY-4.0)." \
+	  "$(MODELS_DIR)"/*.gguf "$(MODELS_DIR)/checksums.txt"
+	@echo "==> published $(MODELS_TAG) (not marked latest)."
+	@echo "==> next: update localmodel.go (Version + SHA256s) and install.sh (MODELS_TAG) to adopt these models."
 
 release:
 	@branch=$$(git rev-parse --abbrev-ref HEAD); \

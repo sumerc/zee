@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `install.sh` verifies pre-fetched model downloads against the release's `checksums.txt` instead of hashes hardcoded in the script; add `make model-release MODELS_DIR=… MODELS_TAG=models-vN` to publish the GGUF models (generates `checksums.txt`, uploads with `--latest=false` so the app-release "latest" pointer can't be hijacked)
+
+- Fix the "no engine available" startup error listing only 3 cloud keys: it now surfaces all five providers plus the offline-on-Apple-Silicon hint (the message is no longer hardcoded and can't drift as providers change)
+
 - Fix language preference being clobbered by English-only models: switching to a model that can't offer the selected language (e.g. Parakeet English-only while on Auto-detect or Turkish) no longer overwrites the saved choice. The fallback is applied transiently; switching back to a capable model restores the original language
 
 - Fix Auto-detect language not persisting: selecting Auto-detect (empty language code) was coerced back to English on the next launch. Settings now load over defaults so an explicit empty language is kept while an unset one still defaults to English

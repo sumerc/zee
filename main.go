@@ -300,7 +300,7 @@ func run() {
 		var initErr error
 		activeTranscriber, initErr = transcriber.New()
 		if initErr != nil {
-			fatal("No API key set.\n\nSet GROQ_API_KEY, OPENAI_API_KEY, or DEEPGRAM_API_KEY.")
+			fatal("%v", initErr)
 		}
 	}
 	streamEnabled = modelSupportsStream(activeTranscriber)
