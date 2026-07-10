@@ -127,15 +127,25 @@ func ByID(id string) (Model, bool) {
 // Default returns the model loaded at startup (110m English).
 func Default() Model { m, _ := ByID(ID110mEN); return m }
 
-// Dir is where ggufs live: the $ZEE_MODELS_DIR override (set by `make
-// download-models`, the integration tests, and any dev workflow that wants the
-// in-repo versioned folder models/parakeet/<Version>), else the stable per-user
-// <config dir>/models. It is intentionally absolute — a cwd-relative default
-// would move with the working directory, so a binary launched from elsewhere
-// (a tar.gz install, or `./zee` from another dir) would report models missing.
+// Dir is where ggufs live, in priority order:
+//   - $ZEE_MODELS_DIR override (set by `make download-models` and the tests);
+//   - dev builds: the versioned folder next to the binary,
+//     <exe dir>/models/parakeet/<Version>, when it exists (populated by
+//     `make download-models`) — resolved against the executable, not the cwd, so
+//     `./zee` finds it from any working directory;
+//   - otherwise the stable per-user <config dir>/models (the .app bundle and
+//     tar.gz installs, which have no in-repo folder).
 func Dir() string {
 	if d := os.Getenv("ZEE_MODELS_DIR"); d != "" {
 		return d
+	}
+	if !config.IsAppBundle() {
+		if exe, err := os.Executable(); err == nil {
+			dev := filepath.Join(filepath.Dir(exe), "models", "parakeet", Version)
+			if fi, err := os.Stat(dev); err == nil && fi.IsDir() {
+				return dev
+			}
+		}
 	}
 	return filepath.Join(config.Dir(), "models")
 }

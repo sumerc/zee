@@ -10,7 +10,7 @@
 - Tray "Start Recording" during inference is now denied (like the hotkey) instead of queuing an unattended recording that fired the moment inference ended; both paths share one guarded entry point
 - Fix a race in the recording stop machinery (`requestStop` touched the stop channel/Once without the lock held)
 - `install.sh` refuses to install on Intel Macs (releases are Apple-Silicon-only) instead of "succeeding" with a binary that can't launch
-- Local models now resolve to a stable absolute directory (`<config>/models`) instead of a cwd-relative path, so a binary launched from any directory finds already-downloaded models (dev override via `ZEE_MODELS_DIR` unchanged)
+- Local models now resolve to an absolute directory instead of a cwd-relative path: dev builds use the versioned folder next to the binary (found from any working directory), installed apps use `<config>/models`, so a binary launched from elsewhere no longer reports downloaded models as missing (dev override via `ZEE_MODELS_DIR` unchanged)
 - Model downloads abort after 60s with no data (stalled connection) instead of wedging the tray menu at "downloading N%" until restart
 - `install.sh` verifies pre-fetched model downloads against the release's `checksums.txt` instead of hashes hardcoded in the script; add `make model-release MODELS_DIR=… MODELS_TAG=models-vN` to publish the GGUF models (generates `checksums.txt`, uploads with `--latest=false` so the app-release "latest" pointer can't be hijacked)
 
