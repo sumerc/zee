@@ -21,6 +21,7 @@ run_or_sudo() {
 trap cleanup EXIT
 
 [[ "$(uname -s)" == "Darwin" ]] || err "Zee currently supports macOS only."
+[[ "$(uname -m)" == "arm64" ]] || err "Zee requires Apple Silicon (arm64) — the local engine is arm64-only, and releases ship no Intel build."
 
 VERSION="${VERSION:-}"
 if [[ -z "$VERSION" ]]; then
@@ -34,17 +35,14 @@ log "Installing Zee ${VERSION}"
 DMG="Zee-${VERSION}.dmg"
 BASE="https://github.com/${REPO}/releases/download/${VERSION}"
 
-# Offline models live under an immutable, app-version-independent tag.
+# Offline models live under an immutable, app-version-independent release tag.
+# The registry — filenames, hashes, and which models to pre-fetch — is generated
+# from localmodel.go into localmodel/manifest.txt and read here from main, so
+# nothing is hardcoded. Columns: filename<TAB>sha256<TAB>prefetch.
 MODELS_TAG="models-v1"
 MODELS_BASE="https://github.com/${REPO}/releases/download/${MODELS_TAG}"
 MODELS_DIR="${HOME}/Library/Application Support/zee/models"
-# The default 110M + the multilingual v3 (v2 is opt-in). SHA256s are not pinned
-# here — they're read from the release's checksums.txt (published by
-# `make model-release`), so a model bump touches only MODELS_TAG.
-PREFETCH_MODELS=(
-  "tdt_ctc-110m-f16.gguf"
-  "tdt-0.6b-v3-q4_k.gguf"
-)
+MANIFEST_URL="https://raw.githubusercontent.com/${REPO}/main/localmodel/manifest.txt"
 
 # Best-effort: pre-download the offline models so Apple Silicon works with no
 # API key on first launch. Never fails the install — the in-app downloader
@@ -52,14 +50,14 @@ PREFETCH_MODELS=(
 prefetch_models() {
   [[ "$(uname -m)" == "arm64" ]] || return 0
   mkdir -p "$MODELS_DIR" 2>/dev/null || return 0
-  local sums f sum dest
-  sums="$(curl -fsSL "${MODELS_BASE}/checksums.txt" 2>/dev/null)" || {
-    log "Model checksums unavailable — the app will fetch models on first launch"
+  local manifest f sum dest
+  manifest="$(curl -fsSL "$MANIFEST_URL" 2>/dev/null)" || {
+    log "Model manifest unavailable — the app will fetch models on first launch"
     return 0
   }
-  for f in "${PREFETCH_MODELS[@]}"; do
-    sum="$(awk -v f="$f" '$2==f {print $1}' <<<"$sums")"
-    [[ -n "$sum" ]] || { log "Model ${f} not in checksums — app will fetch on first launch"; continue; }
+  # Each prefetch=true row: download the gguf from the release, verify its sha.
+  while read -r f sum; do
+    [[ -n "$f" ]] || continue
     dest="${MODELS_DIR}/${f}"
     if [[ -f "$dest" ]] && shasum -a 256 "$dest" | grep -q "$sum"; then
       log "Model ${f} already present"; continue
@@ -73,7 +71,7 @@ prefetch_models() {
       log "Model ${f} unavailable — the app will fetch it on first launch"
       rm -f "${dest}.part"
     fi
-  done
+  done < <(awk '!/^#/ && $3=="true" {print $1, $2}' <<<"$manifest")
 }
 
 log "Downloading ${DMG}..."

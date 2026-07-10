@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app parakeet-lib download-models model-release
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app parakeet-lib download-models manifest model-release
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -20,7 +20,14 @@ build: parakeet-lib download-models
 # pinned models-<Version> GitHub release. Reuses the localmodel registry +
 # downloader (single source of truth) and is a per-file no-op when present.
 download-models:
-	go run ./cmd/modeldl
+	go run ./cmd/localmodels download
+
+# Regenerate localmodel/manifest.txt (the bash-readable projection of the
+# registry that install.sh reads) from localmodel.go. Commit the result;
+# TestManifestUpToDate fails if it drifts.
+manifest:
+	go run ./cmd/localmodels manifest > localmodel/manifest.txt
+	@echo "==> localmodel/manifest.txt regenerated — commit it"
 
 # Configure once (submodule init + cmake, which auto-applies the in-tree ggml
 # patches), then always `cmake --build` so source changes recompile incrementally
@@ -90,26 +97,34 @@ bump-version:
 	echo "CHANGELOG.md updated — review and edit as needed"
 
 # Publish the offline Parakeet GGUF models as an immutable, never-"latest"
-# GitHub release. Copy the .gguf files into a folder, then:
+# GitHub release. Prereq: each .gguf's entry (Filename + SHA256) already exists
+# in localmodel.go. Copy the ggufs into a folder, then:
 #   make model-release MODELS_DIR=./out MODELS_TAG=models-v2
-# It generates checksums.txt from the ggufs and uploads everything with
-# --latest=false, so the app-release "latest" pointer can never be hijacked
-# (install.sh fetches this checksums.txt to verify downloads — no hardcoded
-# hashes). This ONLY publishes models; adopting them in the app is a separate,
-# deliberate edit to localmodel.go (Version + SHA256s) and install.sh (MODELS_TAG).
-model-release:
+# It regenerates the manifest, verifies the local ggufs against the registry's
+# SHA256s, and uploads them with --latest=false so the app-release "latest"
+# pointer is never hijacked. install.sh reads localmodel/manifest.txt (from main)
+# for filenames + hashes + prefetch flags — nothing is hardcoded there. Adopting
+# the models is a separate commit: localmodel.go + the regenerated manifest.txt
+# (+ Version / install.sh MODELS_TAG if the tag changed).
+model-release: manifest
 	@test -n "$(MODELS_TAG)" || (echo "usage: make model-release MODELS_DIR=./dir MODELS_TAG=models-vN" && exit 1)
 	@test -d "$(MODELS_DIR)" || (echo "ERROR: MODELS_DIR '$(MODELS_DIR)' not found" && exit 1)
 	@ls "$(MODELS_DIR)"/*.gguf >/dev/null 2>&1 || (echo "ERROR: no .gguf files in $(MODELS_DIR)" && exit 1)
 	@case "$(MODELS_TAG)" in models-*) ;; *) echo "ERROR: MODELS_TAG must start with 'models-'" && exit 1;; esac
-	cd "$(MODELS_DIR)" && shasum -a 256 *.gguf > checksums.txt
-	@echo "==> checksums.txt:"; cat "$(MODELS_DIR)/checksums.txt"
+	@echo "==> verifying $(MODELS_DIR) ggufs against the localmodel registry..."
+	@cd "$(MODELS_DIR)" && for f in *.gguf; do \
+	  want=$$(awk -v f="$$f" '$$1==f {print $$2}' "$(CURDIR)/localmodel/manifest.txt"); \
+	  test -n "$$want" || { echo "ERROR: $$f is not in localmodel.go — add its entry first" && exit 1; }; \
+	  got=$$(shasum -a 256 "$$f" | awk '{print $$1}'); \
+	  test "$$want" = "$$got" || { echo "ERROR: $$f sha mismatch (registry $$want, file $$got)" && exit 1; }; \
+	  echo "  ok $$f"; \
+	done
 	gh release create "$(MODELS_TAG)" --repo sumerc/zee --latest=false \
 	  --title "Parakeet $(MODELS_TAG)" \
 	  --notes "GGUF models for zee local STT. Derived from NVIDIA NeMo Parakeet (CC-BY-4.0)." \
-	  "$(MODELS_DIR)"/*.gguf "$(MODELS_DIR)/checksums.txt"
+	  "$(MODELS_DIR)"/*.gguf
 	@echo "==> published $(MODELS_TAG) (not marked latest)."
-	@echo "==> next: update localmodel.go (Version + SHA256s) and install.sh (MODELS_TAG) to adopt these models."
+	@echo "==> commit: localmodel.go + localmodel/manifest.txt (+ install.sh MODELS_TAG if bumped)."
 
 release:
 	@branch=$$(git rev-parse --abbrev-ref HEAD); \

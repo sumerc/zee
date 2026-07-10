@@ -3,7 +3,6 @@
 package audio
 
 import (
-	"sync"
 	"sync/atomic"
 
 	"github.com/gen2brain/malgo"
@@ -16,7 +15,6 @@ var (
 	// being played and the current sample offset into it.
 	playMono atomic.Pointer[[]int16]
 	playPos  atomic.Uint32
-	playMu   sync.Mutex
 )
 
 // initPlaybackDevice is lock-free; callers must hold deviceMu around it.
@@ -86,9 +84,6 @@ func playInt16(mono []int16) {
 	if maCtx == nil || len(mono) == 0 {
 		return
 	}
-
-	playMu.Lock()
-	defer playMu.Unlock()
 
 	deviceMu.Lock()
 	defer deviceMu.Unlock()

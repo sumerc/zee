@@ -223,3 +223,60 @@ func TestListenHotkey_StopsTrayRecording(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+// TestTryStartSessionDeniesDuringCycle pins the shared record-request guard: a
+// request while a cycle is active (recording OR still transcribing — both keep
+// isRecording set) is denied and enqueues nothing. Both the hotkey and the tray
+// "Start Recording" button route through tryStartSession, so this closes the bug
+// where a tray click during inference queued an unattended recording.
+func TestTryStartSessionDeniesDuringCycle(t *testing.T) {
+	isRecording.Store(true)
+	defer isRecording.Store(false)
+
+	sessions := make(chan recSession, 1)
+	if sc := tryStartSession(sessions); sc != nil {
+		t.Fatal("tryStartSession should deny (return nil) while a cycle is active")
+	}
+	select {
+	case <-sessions:
+		t.Fatal("no session should be enqueued while a cycle is active")
+	default:
+	}
+}
+
+// TestTryStartSessionEnqueuesWhenIdle verifies the happy path: idle → a session
+// is enqueued and its SilenceClose handle returned.
+func TestTryStartSessionEnqueuesWhenIdle(t *testing.T) {
+	isRecording.Store(false)
+
+	sessions := make(chan recSession, 1)
+	sc := tryStartSession(sessions)
+	if sc == nil {
+		t.Fatal("tryStartSession should return a handle when idle")
+	}
+	select {
+	case <-sessions:
+	default:
+		t.Fatal("tryStartSession should enqueue a session when idle")
+	}
+}
+
+// TestApplyPendingSwitchRunsOnceAtCycleEnd pins the deferred-switch mechanism a
+// model switch requested mid-cycle rides on: recordSessions calls
+// applyPendingSwitch at cycle end, which runs the deferred swap exactly once
+// (when no session is in flight, so the freed model can't be one in use).
+func TestApplyPendingSwitchRunsOnceAtCycleEnd(t *testing.T) {
+	var ran int32
+	pendingMu.Lock()
+	pendingSwitch = func() { atomic.AddInt32(&ran, 1) }
+	pendingMu.Unlock()
+
+	applyPendingSwitch()
+	if atomic.LoadInt32(&ran) != 1 {
+		t.Fatalf("deferred switch ran %d times, want 1", ran)
+	}
+	applyPendingSwitch() // nothing pending now — must be a no-op
+	if atomic.LoadInt32(&ran) != 1 {
+		t.Fatalf("deferred switch ran again after being cleared (%d)", ran)
+	}
+}

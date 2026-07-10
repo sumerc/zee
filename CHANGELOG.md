@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `install.sh` reads the model list (filenames, hashes, prefetch flags) from a generated `localmodel/manifest.txt` instead of a hand-copied list, making `localmodel.go` the single source of truth; a test fails the build if the manifest drifts. Renamed `cmd/modeldl` → `cmd/localmodels` with `download` and `manifest` subcommands
+- Fix data races on tray state: a single `trayMu` now guards the recording flag, model list, device list, and language fields (previously the language/recording fields had no lock while the model-switch goroutine and the systray click thread both touched them)
+- Fix a data race on the selected/preferred microphone: the device-monitor goroutine read them unlocked while the tray callback wrote them; both now go through `captureMu`
+- Fix dictation lost when a model switch (tray menu or a finished background download) lands mid-inference: the switch is now deferred to the end of the record/transcribe cycle instead of freeing the model an in-flight session is using
+- Free the outgoing local (Parakeet) model when switching provider, instead of leaking its 255 MB–1.4 GB of C/ggml memory for the life of the app
+- Tray "Start Recording" during inference is now denied (like the hotkey) instead of queuing an unattended recording that fired the moment inference ended; both paths share one guarded entry point
+- Fix a race in the recording stop machinery (`requestStop` touched the stop channel/Once without the lock held)
+- `install.sh` refuses to install on Intel Macs (releases are Apple-Silicon-only) instead of "succeeding" with a binary that can't launch
+- Local models now resolve to a stable absolute directory (`<config>/models`) instead of a cwd-relative path, so a binary launched from any directory finds already-downloaded models (dev override via `ZEE_MODELS_DIR` unchanged)
+- Model downloads abort after 60s with no data (stalled connection) instead of wedging the tray menu at "downloading N%" until restart
 - `install.sh` verifies pre-fetched model downloads against the release's `checksums.txt` instead of hashes hardcoded in the script; add `make model-release MODELS_DIR=… MODELS_TAG=models-vN` to publish the GGUF models (generates `checksums.txt`, uploads with `--latest=false` so the app-release "latest" pointer can't be hijacked)
 
 - Fix the "no engine available" startup error listing only 3 cloud keys: it now surfaces all five providers plus the offline-on-Apple-Silicon hint (the message is no longer hardcoded and can't drift as providers change)

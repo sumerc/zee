@@ -35,10 +35,15 @@ var (
 	recordFn   func()
 	stopFn     func()
 
+	// trayMu guards all mutable tray state below (recording/warning, the device
+	// list, the model list, the language fields, the hints toggle). It is held
+	// only around field reads/writes — never across a systray update or a
+	// callback, both of which re-enter these accessors and would deadlock.
+	trayMu sync.Mutex
+
 	recording bool
 	warning   bool
 
-	deviceMu    sync.Mutex
 	deviceNames []string
 	deviceSel   string
 	deviceCb    func(string)
@@ -49,7 +54,6 @@ var (
 	loginOn bool
 	loginCb func(bool) error
 
-	modelMu sync.Mutex
 	models  []Model
 	modelCb func(provider, model string)
 
@@ -75,8 +79,10 @@ func SetLogin(on bool)            { loginOn = on }
 func OnLogin(fn func(bool) error) { loginCb = fn }
 
 func SetRecording(rec bool) {
+	trayMu.Lock()
 	recording = rec
 	warning = false
+	trayMu.Unlock()
 	updateRecordingIcon(rec)
 	if rec {
 		disableDevices()
@@ -88,10 +94,13 @@ func SetRecording(rec bool) {
 }
 
 func SetWarning(on bool) {
+	trayMu.Lock()
 	if !recording {
+		trayMu.Unlock()
 		return
 	}
 	warning = on
+	trayMu.Unlock()
 	updateWarningIcon(on)
 }
 
@@ -114,26 +123,26 @@ func Quit() {
 }
 
 func SetDevices(names []string, selected string, onSwitch func(name string)) {
-	deviceMu.Lock()
+	trayMu.Lock()
 	deviceNames = names
 	deviceSel = selected
 	if onSwitch != nil {
 		deviceCb = onSwitch
 	}
-	deviceMu.Unlock()
+	trayMu.Unlock()
 }
 
 func SetModels(m []Model, onSwitch func(provider, model string)) {
-	modelMu.Lock()
+	trayMu.Lock()
 	models = m
 	modelCb = onSwitch
-	modelMu.Unlock()
+	trayMu.Unlock()
 }
 
 // UpdateModelState re-renders a single model entry (used while a local model
 // downloads, and when it becomes ready). Safe to call from any goroutine.
 func UpdateModelState(provider, modelID string, state ModelState, detail string) {
-	modelMu.Lock()
+	trayMu.Lock()
 	idx := -1
 	for i := range models {
 		if models[i].Provider == provider && models[i].ModelID == modelID {
@@ -143,7 +152,7 @@ func UpdateModelState(provider, modelID string, state ModelState, detail string)
 			break
 		}
 	}
-	modelMu.Unlock()
+	trayMu.Unlock()
 	if idx >= 0 {
 		updateModelItem(idx)
 	}
@@ -153,7 +162,7 @@ func UpdateModelState(provider, modelID string, state ModelState, detail string)
 // re-rendering only the entries that changed. Called by the app after a
 // successful model switch.
 func SetActiveModel(provider, modelID string) {
-	modelMu.Lock()
+	trayMu.Lock()
 	var changed []int
 	for i := range models {
 		want := models[i].Provider == provider && models[i].ModelID == modelID
@@ -162,7 +171,7 @@ func SetActiveModel(provider, modelID string) {
 			changed = append(changed, i)
 		}
 	}
-	modelMu.Unlock()
+	trayMu.Unlock()
 	for _, i := range changed {
 		updateModelItem(i)
 	}
@@ -198,7 +207,9 @@ var hintsEnabled = true
 // SetHintsEnabled greys out / restores the "Edit Hints…" menu item. Safe to
 // call before Init (the state is applied when the menu is built).
 func SetHintsEnabled(on bool) {
+	trayMu.Lock()
 	hintsEnabled = on
+	trayMu.Unlock()
 	setHintsEnabled(on)
 }
 
@@ -208,13 +219,17 @@ func OnSaveAudio(fn func())   { saveAudioCb = fn }
 func OnEditHints(fn func())   { editHintsCb = fn }
 
 func SetLanguage(code string, onSwitch func(code string, persist bool)) {
+	trayMu.Lock()
 	langCode = code
 	langIntent = code
 	langCb = onSwitch
+	trayMu.Unlock()
 }
 
 func SetLanguages(langs []transcriber.Language) {
+	trayMu.Lock()
 	languages = langs
+	trayMu.Unlock()
 	refreshLanguageMenu()
 }
 
@@ -240,7 +255,7 @@ func SetBTCheck(fn func(string) bool) {
 }
 
 func statusText() string {
-	modelMu.Lock()
+	trayMu.Lock()
 	var provider, model string
 	for _, m := range models {
 		if m.Active {
@@ -249,7 +264,6 @@ func statusText() string {
 			break
 		}
 	}
-	modelMu.Unlock()
 	lang := "Auto"
 	if langCode != "" {
 		lang = langCode
@@ -258,6 +272,7 @@ func statusText() string {
 	if appVersion != "" && appVersion != "dev" {
 		ver = " · " + appVersion
 	}
+	trayMu.Unlock()
 	if provider == "" {
 		return "𝘻𝘦𝘦"
 	}

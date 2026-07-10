@@ -116,6 +116,17 @@ Requires `ZEE_RELEASE_TOKEN` repo secret (fine-grained PAT with Contents read/wr
 
 Users install via the one-liner in README (`install.sh` fetches the DMG and verifies the checksum).
 
+### Releasing a new local model (Parakeet GGUF)
+
+Models are hosted in an immutable, never-"latest" `models-vN` GitHub release, **separate** from app releases. `localmodel/localmodel.go` is the single source of truth (filenames, SHA256s, `PreFetch` flags); `localmodel/manifest.txt` is its generated, committed projection that `install.sh` reads from `main`. Nothing model-related is hardcoded in `install.sh`.
+
+1. Produce the `.gguf` locally (parakeet.cpp conversion/quantization) into a folder, e.g. `./out`.
+2. Add/edit its entry in `localmodel.go` — `Filename`, `SHA256` (`shasum -a 256`), `SizeBytes` (`ls -l`), `Decoder`, `Multilingual`, `PreFetch`. Re-quantizing existing files → also bump `localmodel.Version` and `install.sh`'s `MODELS_TAG`.
+3. `make model-release MODELS_DIR=./out MODELS_TAG=models-vN` — regenerates `manifest.txt`, verifies the ggufs against the registry SHA256s, and uploads them with `--latest=false`.
+4. Commit `localmodel.go` + `localmodel/manifest.txt` (+ `install.sh` if `MODELS_TAG` changed). `TestManifestUpToDate` fails the build if the manifest is stale.
+
+`make manifest` regenerates the manifest alone. Dev builds pull prefetch models via `make download-models` (`localmodels download`). The CLI `cmd/localmodels` has exactly two verbs: `download` (dev) and `manifest` (release).
+
 ## Packaging
 
 - `packaging/appicon.png` - source icon (1024px, stack Z design: shadow square + framed Z, transparent background)

@@ -21,8 +21,8 @@ miniaudio lifecycle bugs. It directly caused a double-free crash: if the rebuild
 failed transiently, the old (already-freed) device pointer was retained and the
 next `Start` uninited it a second time (SIGABRT/SIGSEGV in `ma_device_uninit`).
 Fixed by never keeping a freed pointer — store `nil` if the rebuild fails (see
-`audio/reinit.go`). The same teardown-on-use pattern (and the same fix) applies
-to `beep` playback.
+`audio/capture_darwin.go`). The same teardown-on-use pattern (and the same fix)
+applies to `beep` playback (`audio/beep_darwin.go`).
 
 **Better long-term options (not yet done):**
 - Init once + reinit only on a real signal — macOS `NSWorkspace` sleep/wake
@@ -33,8 +33,8 @@ to `beep` playback.
   every stale cause, and is unit-testable with a fake device, but it's heuristic.
 
 All miniaudio device lifecycle calls (capture + playback) are also serialized
-behind a process-wide lock (`internal/malgolock`) as defense against concurrent
-init/uninit across the two malgo contexts.
+behind a process-wide lock (`deviceMu` in `audio/capture_darwin.go`) as defense
+against concurrent init/uninit across the two malgo contexts.
 
 ## Why Parakeet (local default), CPU, and which model
 

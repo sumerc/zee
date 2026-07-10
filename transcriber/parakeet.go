@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,12 @@ import (
 	"zee/internal/parakeet"
 	"zee/localmodel"
 )
+
+// saveLastAudio mirrors the ZEE_SAVE_LAST_AUDIO tray feature: only then does the
+// local path retain a WAV copy of the recording. Cloud paths keep the encoded
+// bytes they sent regardless; local decode has none, so the copy is pure
+// overhead on the common path.
+var saveLastAudio = os.Getenv("ZEE_SAVE_LAST_AUDIO") != ""
 
 // Parakeet is the offline, on-device provider. It wraps one loaded GGUF model
 // (decision #2: a single shared ctx; push-to-talk is serial) and swaps the
@@ -52,7 +59,7 @@ func parakeetProvider() ProviderInfo {
 			if localmodel.Present(m) {
 				return ModelStatus{Ready: true}
 			}
-			return ModelStatus{Downloadable: true, Detail: humanSize(m.SizeBytes)}
+			return ModelStatus{Downloadable: true, Detail: m.HumanSize()}
 		},
 		Download: func(id string, progress func(float64)) error {
 			m, ok := localmodel.ByID(id)
@@ -72,13 +79,6 @@ func ParakeetModels() []ModelInfo {
 		out = append(out, ModelInfo{ID: m.ID, Label: m.Label, Stream: false, Languages: parakeetLanguages(m)})
 	}
 	return out
-}
-
-func humanSize(b int64) string {
-	if b >= 1<<30 {
-		return fmt.Sprintf("%.1f GB", float64(b)/(1<<30))
-	}
-	return fmt.Sprintf("%d MB", b>>20)
 }
 
 // NewParakeet builds the provider and eagerly loads the default model (110m,
@@ -154,6 +154,35 @@ func (p *Parakeet) SetModel(id string) {
 	}
 	p.modelID = id
 	p.load()
+}
+
+// Transcribe decodes a WAV file to PCM and runs one batch inference, satisfying
+// the same direct-transcribe interface as the cloud providers so the file path
+// (-transcribe) has a single shape. Local decode accepts WAV only and ignores
+// hints (greedy decode has no biasing).
+func (p *Parakeet) Transcribe(audioData []byte, format, lang, _ string) (*Result, error) {
+	if format != "wav" {
+		return nil, fmt.Errorf("local transcription supports WAV files only (got %s)", format)
+	}
+	pcm, err := audio.WAVToPCM(audioData)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read WAV: %w", err)
+	}
+	sess, err := p.NewSession(context.Background(), SessionConfig{Language: lang})
+	if err != nil {
+		return nil, err
+	}
+	sess.Feed(pcm)
+	sr, err := sess.Close()
+	if err != nil {
+		return nil, err
+	}
+	res := &Result{Text: sr.Text}
+	if sr.Batch != nil {
+		res.InferenceMs = sr.Batch.InferenceMs
+		res.Duration = sr.Batch.AudioLengthS
+	}
+	return res, nil
 }
 
 func (p *Parakeet) NewSession(_ context.Context, cfg SessionConfig) (Session, error) {
@@ -235,11 +264,16 @@ func (s *pcmSession) Close() (SessionResult, error) {
 	audioSec := float64(n) / float64(encoder.SampleRate)
 	rawKB := float64(len(raw)) / 1024
 
+	var audioData []byte
+	if saveLastAudio {
+		audioData = audio.PCMToWAV(raw)
+	}
+
 	sr := SessionResult{
 		Text:        text,
 		HasText:     !noSpeech,
 		NoSpeech:    noSpeech,
-		AudioData:   audio.PCMToWAV(raw),
+		AudioData:   audioData,
 		AudioFormat: "wav",
 		Batch: &BatchStats{
 			AudioLengthS: audioSec,

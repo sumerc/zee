@@ -148,7 +148,7 @@ type CaptureDevice interface {
 // --- Feedback tones (record start/end, error, denied) ---
 //
 // Playback shares the OS audio device with capture — on darwin the same malgo
-// context and lifecycle lock (see capture_other.go). This file owns the
+// context and lifecycle lock (see capture_darwin.go). This file owns the
 // platform-neutral half: the public API, the enable guard, and tone synthesis.
 // Each platform file provides exactly two backend hooks, initSound() and
 // playOne(sound), so the guard logic lives here once instead of per platform.

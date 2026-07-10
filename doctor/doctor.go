@@ -68,7 +68,7 @@ func printLocalModels() {
 		if localmodel.Present(m) {
 			state = "present"
 		}
-		fmt.Printf("  %-34s %5d MB  %s\n", m.Label, m.SizeBytes>>20, state)
+		fmt.Printf("  %-34s %8s  %s\n", m.Label, m.HumanSize(), state)
 	}
 }
 

@@ -97,17 +97,17 @@ func addDeviceItem(parent *systray.MenuItem, idx int, name string, checked bool)
 	label := deviceDisplayName(name)
 	item := parent.AddSubMenuItemCheckbox(label, label, checked)
 	item.Click(func() {
-		deviceMu.Lock()
+		trayMu.Lock()
 		currentName := ""
 		if idx < len(deviceNames) {
 			currentName = deviceNames[idx]
 		}
 		cb := deviceCb
-		deviceMu.Unlock()
+		trayMu.Unlock()
 		if cb != nil && currentName != "" {
 			cb(currentName)
 		}
-		deviceMu.Lock()
+		trayMu.Lock()
 		if mDefaultDevice != nil {
 			mDefaultDevice.Uncheck()
 		}
@@ -117,7 +117,7 @@ func addDeviceItem(parent *systray.MenuItem, idx int, name string, checked bool)
 		if idx < len(deviceItems) {
 			deviceItems[idx].Check()
 		}
-		deviceMu.Unlock()
+		trayMu.Unlock()
 	})
 	return item
 }
@@ -128,8 +128,8 @@ func RefreshDevices(names []string, selected string) {
 	}
 	<-deviceReady
 
-	deviceMu.Lock()
-	defer deviceMu.Unlock()
+	trayMu.Lock()
+	defer trayMu.Unlock()
 
 	deviceNames = names
 	deviceSel = selected
@@ -176,7 +176,10 @@ func onReady() {
 
 	mRecord = systray.AddMenuItem("○ Start Recording (Shift+Control+Space)", "Start or stop recording")
 	mRecord.Click(func() {
-		if recording {
+		trayMu.Lock()
+		rec := recording
+		trayMu.Unlock()
+		if rec {
 			if stopFn != nil {
 				stopFn()
 			}
@@ -239,7 +242,10 @@ func onReady() {
 			go editHintsCb()
 		}
 	})
-	if !hintsEnabled {
+	trayMu.Lock()
+	he := hintsEnabled
+	trayMu.Unlock()
+	if !he {
 		mEditHints.Disable()
 	}
 
@@ -248,30 +254,30 @@ func onReady() {
 
 	mDevices = mSettings.AddSubMenuItem("Microphone", "Select input device")
 
-	deviceMu.Lock()
+	trayMu.Lock()
 	mDefaultDevice = mDevices.AddSubMenuItemCheckbox("System Default", "Use system default device", deviceSel == "")
 	mDefaultDevice.Click(func() {
-		deviceMu.Lock()
+		trayMu.Lock()
 		cb := deviceCb
-		deviceMu.Unlock()
+		trayMu.Unlock()
 		if cb != nil {
 			cb("")
 		}
-		deviceMu.Lock()
+		trayMu.Lock()
 		for _, it := range deviceItems {
 			it.Uncheck()
 		}
 		mDefaultDevice.Check()
-		deviceMu.Unlock()
+		trayMu.Unlock()
 	})
 	deviceItems = make([]*systray.MenuItem, 0, len(deviceNames))
 	for i, name := range deviceNames {
 		item := addDeviceItem(mDevices, i, name, name == deviceSel)
 		deviceItems = append(deviceItems, item)
 	}
-	deviceMu.Unlock()
+	trayMu.Unlock()
 
-	modelMu.Lock()
+	trayMu.Lock()
 	if len(models) > 0 {
 		mBackend = mSettings.AddSubMenuItem("Model", "Select transcription model")
 		modelItems = make([]*systray.MenuItem, len(models))
@@ -301,10 +307,10 @@ func onReady() {
 					item.Disable()
 				}
 				item.Click(func() {
-					modelMu.Lock()
+					trayMu.Lock()
 					mm := models[idx]
 					cb := modelCb
-					modelMu.Unlock()
+					trayMu.Unlock()
 					// Ready → switch; NeedsDownload → fetch. The handler (main)
 					// dispatches and drives checkmarks via SetActiveModel.
 					if cb == nil || (mm.State != ModelReady && mm.State != ModelNeedsDownload) {
@@ -317,7 +323,7 @@ func onReady() {
 			i = j
 		}
 	}
-	modelMu.Unlock()
+	trayMu.Unlock()
 
 	// Build a fixed item per known language (systray can't add items after
 	// CreateMenu). refreshLanguageMenu then shows only the active model's set.
@@ -354,14 +360,14 @@ func updateCopyLastTitle(title string) {
 // updateModelItem re-renders one model entry (title, checkmark, enabled) from
 // its current state. Called on download progress and on model switch.
 func updateModelItem(idx int) {
-	modelMu.Lock()
+	trayMu.Lock()
 	if idx < 0 || idx >= len(modelItems) || idx >= len(models) {
-		modelMu.Unlock()
+		trayMu.Unlock()
 		return
 	}
 	m := models[idx]
 	it := modelItems[idx]
-	modelMu.Unlock()
+	trayMu.Unlock()
 	if it == nil {
 		return
 	}
@@ -380,16 +386,24 @@ func updateModelItem(idx int) {
 
 func addLangEntry(code, label string) {
 	idx := len(langEntries)
-	item := mLanguage.AddSubMenuItemCheckbox(label, label, code == langCode)
+	trayMu.Lock()
+	checked := code == langCode
+	trayMu.Unlock()
+	item := mLanguage.AddSubMenuItemCheckbox(label, label, checked)
 	item.Click(func() {
+		// langEntries is built once in onReady and never mutated after, so it's
+		// safe to read here without the lock; only langCode/langIntent need it.
 		for _, e := range langEntries {
 			e.item.Uncheck()
 		}
 		langEntries[idx].item.Check()
+		trayMu.Lock()
 		langCode = langEntries[idx].code
 		langIntent = langCode // a user click is a real choice — remember it
-		if langCb != nil {
-			langCb(langCode, true)
+		cb, code := langCb, langCode
+		trayMu.Unlock()
+		if cb != nil {
+			cb(code, true)
 		}
 		updateStatus()
 	})
@@ -403,22 +417,27 @@ func refreshLanguageMenu() {
 	if mLanguage == nil {
 		return
 	}
+	// Derive the effective language from the user's intent every refresh. The
+	// fallback (when the model can't offer the intent) is applied to the
+	// transcriber but never persisted, so switching back to a capable model
+	// restores the intent. Field access is done under the lock; the systray
+	// updates and the callback run outside it.
+	trayMu.Lock()
 	want := make(map[string]bool, len(languages))
 	for _, l := range languages {
 		want[l.Code] = true
 	}
-	// Derive the effective language from the user's intent every refresh. The
-	// fallback (when the model can't offer the intent) is applied to the
-	// transcriber but never persisted, so switching back to a capable model
-	// restores the intent.
 	langCode = effectiveLang(langIntent, languages)
-	if langCb != nil {
-		langCb(langCode, false)
+	cb, code := langCb, langCode
+	trayMu.Unlock()
+
+	if cb != nil {
+		cb(code, false)
 	}
 	for _, e := range langEntries {
 		if want[e.code] {
 			e.item.Show()
-			if e.code == langCode {
+			if e.code == code {
 				e.item.Check()
 			} else {
 				e.item.Uncheck()
