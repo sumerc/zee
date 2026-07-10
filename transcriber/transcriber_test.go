@@ -3,10 +3,45 @@ package transcriber
 import (
 	"encoding/binary"
 	"net/http"
+	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 	"zee/encoder"
 )
+
+// TestParakeetModelsMethodMatchesFunc pins the delegation: the (*Parakeet).Models
+// method and the package ParakeetModels function must return identical lists so
+// the tray and a loaded provider can never disagree on the model set.
+func TestParakeetModelsMethodMatchesFunc(t *testing.T) {
+	p := &Parakeet{}
+	if got, want := p.Models(), ParakeetModels(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Parakeet.Models() = %v, want %v (must delegate to ParakeetModels)", got, want)
+	}
+}
+
+// TestNewErrorListsEveryProvider guards the message main.go now surfaces verbatim:
+// with no engine available, New()'s error must name every cloud key plus the
+// offline hint, so a fresh user is told all their options. Deterministic where no
+// provider is available (CI: parakeet not compiled in, keys empty); skipped when a
+// local model or key makes New() succeed on a dev machine.
+func TestNewErrorListsEveryProvider(t *testing.T) {
+	os.Unsetenv("ZEE_FAKE_TEXT")
+	for _, k := range []string{"DEEPGRAM_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "ELEVENLABS_API_KEY"} {
+		t.Setenv(k, "")
+	}
+
+	_, err := New()
+	if err == nil {
+		t.Skip("a provider is available on this machine; cannot exercise the no-engine path")
+	}
+	for _, want := range []string{"DEEPGRAM_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "ELEVENLABS_API_KEY", "offline"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("New() error %q missing %q", err.Error(), want)
+		}
+	}
+}
 
 func TestNetworkMetricsSum(t *testing.T) {
 	m := &NetworkMetrics{

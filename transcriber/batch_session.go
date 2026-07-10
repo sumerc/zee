@@ -133,7 +133,7 @@ func (bs *batchSession) Close() (SessionResult, error) {
 		},
 		Metrics: bs.formatMetrics(rawSize, encodedSize, compressionPct, audioDuration, result),
 	}
-	sr.captureMemStats()
+	sr.captureRSS()
 	return sr, nil
 }
 

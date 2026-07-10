@@ -27,6 +27,16 @@ else
 	echo "warning: $SCRIPT_DIR/Zee.icns not found, DMG will have no app icon" >&2
 fi
 
+# Ship the license + third-party attribution with the app (MIT requires the
+# notices in distributions; the models are CC-BY-4.0 and need attribution).
+for doc in LICENSE THIRD_PARTY_LICENSES; do
+	if [ -f "$SCRIPT_DIR/../$doc" ]; then
+		cp "$SCRIPT_DIR/../$doc" "$APP/Contents/Resources/$doc"
+	else
+		echo "warning: $doc not found, not shipped in DMG" >&2
+	fi
+done
+
 codesign --force --sign - --identifier com.zee.app "$APP"
 
 ln -s /Applications "$STAGING/Applications"

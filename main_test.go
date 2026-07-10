@@ -1,10 +1,155 @@
 package main
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"zee/audio"
+	"zee/encoder"
 	"zee/hotkey"
+	"zee/transcriber"
 )
+
+// TestRecordSessionsBlocksDuringInference verifies the guard's missing half:
+// isRecording must stay true for the WHOLE record+transcribe cycle, not just
+// while recording. It drives the real recordSessions loop with a fake capture
+// and a fake transcriber whose "inference" takes 800ms, then checks isRecording
+// is still set mid-inference. Combined with TestListenHotkey_StopsTrayRecording
+// (a press while isRecording is true starts no new session), this proves a
+// hotkey press during inference is blocked.
+func TestRecordSessionsBlocksDuringInference(t *testing.T) {
+	audio.DisableBeep()
+	isRecording.Store(false)
+
+	fake := transcriber.NewFake("hello", nil)
+	fake.SetDelay(800 * time.Millisecond) // simulated inference window
+	activeTranscriber = fake
+
+	ctx, err := audio.NewFakeContext("test/data/short.wav", false)
+	if err != nil {
+		t.Fatalf("fake audio context: %v", err)
+	}
+	capture, err := ctx.NewCapture(nil, audio.CaptureConfig{
+		SampleRate: encoder.SampleRate, Channels: encoder.Channels,
+	})
+	if err != nil {
+		t.Fatalf("fake capture: %v", err)
+	}
+	defer capture.Close()
+
+	var cycles int32
+	afterRecordCycle = func() { atomic.AddInt32(&cycles, 1) }
+	defer func() { afterRecordCycle = nil }()
+
+	sessions := make(chan recSession, 1)
+	loopDone := make(chan struct{})
+	go func() { recordSessions(func() audio.CaptureDevice { return capture }, sessions); close(loopDone) }()
+
+	// Start a recording, let it capture briefly, then stop it (as a keyup would)
+	// so the 800ms "inference" begins.
+	sessions <- recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}}
+	time.Sleep(150 * time.Millisecond)
+	requestStop()
+
+	// Mid-inference: the guard must still be engaged, and isTranscribing (which
+	// drives the blue icon + denied beep) must be set.
+	time.Sleep(250 * time.Millisecond)
+	if !isRecording.Load() {
+		t.Fatal("isRecording cleared during inference — a re-record would NOT be blocked")
+	}
+	if !isTranscribing.Load() {
+		t.Fatal("isTranscribing not set during inference — no blue icon / denied beep")
+	}
+
+	// Wait out the cycle, confirm both flags were released after inference.
+	deadline := time.Now().Add(3 * time.Second)
+	for atomic.LoadInt32(&cycles) < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("record cycle never completed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if isRecording.Load() || isTranscribing.Load() {
+		t.Fatal("isRecording/isTranscribing still set after inference completed")
+	}
+
+	// Terminate the loop cleanly so it doesn't leak into other tests.
+	close(sessions)
+	<-loopDone
+}
+
+// TestRecordSessionsPicksUpDeviceSwitch reproduces the "Start auto-releases"
+// bug: when the selected mic is unplugged mid-run, the device monitor swaps the
+// capture device to system default, but recordSessions kept using a frozen
+// reference to the old (now-gone) device — so every recording aborted with
+// "device reinit failed: No device". recordSessions must read the current
+// device (via getCapture) each iteration. With the old by-value behavior the
+// post-swap session still uses device A and this test fails.
+func TestRecordSessionsPicksUpDeviceSwitch(t *testing.T) {
+	audio.DisableBeep()
+	isRecording.Store(false)
+
+	activeTranscriber = transcriber.NewFake("hello", nil)
+
+	ctx, err := audio.NewFakeContext("test/data/short.wav", false)
+	if err != nil {
+		t.Fatalf("fake audio context: %v", err)
+	}
+	capA, _ := ctx.NewNamedCapture("A")
+	capB, _ := ctx.NewNamedCapture("B")
+	fa := capA.(*audio.FakeCapture)
+	fb := capB.(*audio.FakeCapture)
+
+	var mu sync.Mutex
+	current := capA
+	getCapture := func() audio.CaptureDevice {
+		mu.Lock()
+		defer mu.Unlock()
+		return current
+	}
+
+	var cycles int32
+	afterRecordCycle = func() { atomic.AddInt32(&cycles, 1) }
+	defer func() { afterRecordCycle = nil }()
+
+	sessions := make(chan recSession, 1)
+	loopDone := make(chan struct{})
+	go func() { recordSessions(getCapture, sessions); close(loopDone) }()
+
+	runSession := func() {
+		want := atomic.LoadInt32(&cycles) + 1
+		sessions <- recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}}
+		time.Sleep(120 * time.Millisecond)
+		requestStop()
+		deadline := time.Now().Add(3 * time.Second)
+		for atomic.LoadInt32(&cycles) < want {
+			if time.Now().After(deadline) {
+				t.Fatalf("record cycle %d never completed", want)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	runSession() // session 1 → device A
+
+	mu.Lock() // mic unplugged: monitor swapped to device B
+	current = capB
+	mu.Unlock()
+
+	runSession() // session 2 → must be device B, not the stale A
+
+	close(sessions)
+	<-loopDone
+
+	if fb.Starts.Load() == 0 {
+		t.Fatal("device switch ignored: the session after the swap did not use the new device")
+	}
+	if fa.Starts.Load() != 1 {
+		t.Fatalf("stale device A was used %d times, want 1 (only the pre-swap session)", fa.Starts.Load())
+	}
+}
 
 func TestListenHotkey_TrayStopNoStaleSignal(t *testing.T) {
 	hk := hotkey.NewFake()
@@ -76,5 +221,62 @@ func TestListenHotkey_StopsTrayRecording(t *testing.T) {
 	case <-sessions:
 		t.Fatal("hotkey started a new session while recording was active")
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestTryStartSessionDeniesDuringCycle pins the shared record-request guard: a
+// request while a cycle is active (recording OR still transcribing — both keep
+// isRecording set) is denied and enqueues nothing. Both the hotkey and the tray
+// "Start Recording" button route through tryStartSession, so this closes the bug
+// where a tray click during inference queued an unattended recording.
+func TestTryStartSessionDeniesDuringCycle(t *testing.T) {
+	isRecording.Store(true)
+	defer isRecording.Store(false)
+
+	sessions := make(chan recSession, 1)
+	if sc := tryStartSession(sessions); sc != nil {
+		t.Fatal("tryStartSession should deny (return nil) while a cycle is active")
+	}
+	select {
+	case <-sessions:
+		t.Fatal("no session should be enqueued while a cycle is active")
+	default:
+	}
+}
+
+// TestTryStartSessionEnqueuesWhenIdle verifies the happy path: idle → a session
+// is enqueued and its SilenceClose handle returned.
+func TestTryStartSessionEnqueuesWhenIdle(t *testing.T) {
+	isRecording.Store(false)
+
+	sessions := make(chan recSession, 1)
+	sc := tryStartSession(sessions)
+	if sc == nil {
+		t.Fatal("tryStartSession should return a handle when idle")
+	}
+	select {
+	case <-sessions:
+	default:
+		t.Fatal("tryStartSession should enqueue a session when idle")
+	}
+}
+
+// TestApplyPendingSwitchRunsOnceAtCycleEnd pins the deferred-switch mechanism a
+// model switch requested mid-cycle rides on: recordSessions calls
+// applyPendingSwitch at cycle end, which runs the deferred swap exactly once
+// (when no session is in flight, so the freed model can't be one in use).
+func TestApplyPendingSwitchRunsOnceAtCycleEnd(t *testing.T) {
+	var ran int32
+	pendingMu.Lock()
+	pendingSwitch = func() { atomic.AddInt32(&ran, 1) }
+	pendingMu.Unlock()
+
+	applyPendingSwitch()
+	if atomic.LoadInt32(&ran) != 1 {
+		t.Fatalf("deferred switch ran %d times, want 1", ran)
+	}
+	applyPendingSwitch() // nothing pending now — must be a no-op
+	if atomic.LoadInt32(&ran) != 1 {
+		t.Fatalf("deferred switch ran again after being cleared (%d)", ran)
 	}
 }

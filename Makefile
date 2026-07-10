@@ -1,9 +1,53 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app parakeet-lib download-models manifest model-release
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
-build:
-	go build -ldflags="-X main.version=$(VERSION)" -o zee
+# Local STT (Parakeet) is a darwin/arm64-only cgo feature. On that host we build
+# the static parakeet.cpp + ggml archives first and stamp the macOS deploy
+# target; everywhere else the no-cgo stub is compiled and these are no-ops.
+MACOS_MIN     := 11.0
+PARAKEET_DIR  := third_party/parakeet.cpp
+PARAKEET_LIB  := $(PARAKEET_DIR)/build-release/libparakeet.a
+HOST          := $(shell go env GOOS)/$(shell go env GOARCH)
+ifeq ($(HOST),darwin/arm64)
+CGO_ENV := MACOSX_DEPLOYMENT_TARGET=$(MACOS_MIN) CGO_CFLAGS=-mmacosx-version-min=$(MACOS_MIN) CGO_LDFLAGS=-mmacosx-version-min=$(MACOS_MIN)
+endif
+
+build: parakeet-lib download-models
+	$(CGO_ENV) go build -ldflags="-X main.version=$(VERSION)" -o zee
+
+# Fetch the mandatory (PreFetch) local models into the dev folder from the
+# pinned models-<Version> GitHub release. Reuses the localmodel registry +
+# downloader (single source of truth) and is a per-file no-op when present.
+download-models:
+	go run ./cmd/localmodels download
+
+# Regenerate localmodel/manifest.txt (the bash-readable projection of the
+# registry that install.sh reads) from localmodel.go. Commit the result;
+# TestManifestUpToDate fails if it drifts.
+manifest:
+	go run ./cmd/localmodels manifest > localmodel/manifest.txt
+	@echo "==> localmodel/manifest.txt regenerated — commit it"
+
+# Configure once (submodule init + cmake, which auto-applies the in-tree ggml
+# patches), then always `cmake --build` so source changes recompile incrementally
+# and relink — a no-op when nothing changed. After a submodule bump, delete
+# build-release to force a reconfigure (re-applies the patch to the new ggml).
+parakeet-lib:
+	@if [ "$(HOST)" != "darwin/arm64" ]; then exit 0; fi; \
+	if [ ! -f $(PARAKEET_DIR)/CMakeLists.txt ]; then \
+	  echo "==> initializing parakeet.cpp submodule (first checkout)"; \
+	  git submodule update --init --recursive $(PARAKEET_DIR); \
+	fi; \
+	if [ ! -d $(PARAKEET_DIR)/build-release ]; then \
+	  echo "==> configuring parakeet.cpp (one-time)"; \
+	  cmake -S $(PARAKEET_DIR) -B $(PARAKEET_DIR)/build-release \
+	    -DBUILD_SHARED_LIBS=OFF -DPARAKEET_SHARED=OFF -DPARAKEET_BUILD_CLI=OFF \
+	    -DPARAKEET_GGML_METAL=OFF -DGGML_NATIVE=OFF \
+	    -DCMAKE_OSX_DEPLOYMENT_TARGET=$(MACOS_MIN) \
+	    -DCMAKE_C_FLAGS="-mcpu=apple-m1" -DCMAKE_CXX_FLAGS="-mcpu=apple-m1"; \
+	fi && \
+	cmake --build $(PARAKEET_DIR)/build-release -j
 
 build-linux-amd64:
 	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-amd64
@@ -11,24 +55,24 @@ build-linux-amd64:
 build-linux-arm64:
 	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-arm64
 
-test:
-	go test -race -v ./...
+test: parakeet-lib
+	$(CGO_ENV) go test -race -v ./...
 
-integration-test:
+integration-test: parakeet-lib
 	@test -n "$(WAV)" || (echo "Usage: make integration-test WAV=file.wav" && exit 1)
 	@if [ -f .env ]; then export $$(grep -v '^#' .env | xargs); fi; \
 	test -n "$$GROQ_API_KEY" || (echo "Error: GROQ_API_KEY not set (create .env or export it)" && exit 1); \
-	go run test/integration_test.go $(WAV)
+	$(CGO_ENV) go run test/integration_test.go $(WAV)
 
 benchmark: build
 	@test -n "$(WAV)" || (echo "Usage: make benchmark WAV=file.wav [RUNS=5]" && exit 1)
 	@if [ -f .env ]; then export $$(grep -v '^#' .env | xargs); fi; \
 	./zee -benchmark $(WAV) -runs $(or $(RUNS),3)
 
-test-integration:
+test-integration: parakeet-lib
 	@tmp=$$(mktemp -d) && \
-	go build -o "$$tmp/zee-test-bin" . && \
-	ZEE_TEST_BIN="$$tmp/zee-test-bin" go test -race -tags integration -v -timeout 120s -count=1 ./test/ ; \
+	$(CGO_ENV) go build -o "$$tmp/zee-test-bin" . && \
+	ZEE_TEST_BIN="$$tmp/zee-test-bin" $(CGO_ENV) go test -race -tags integration -v -timeout 600s -count=1 ./test/ ; \
 	status=$$? ; rm -rf "$$tmp" ; exit $$status
 
 icns:
@@ -51,6 +95,36 @@ bump-version:
 	sed -i '' '/^## Unreleased/r /tmp/zee-changelog-entry' CHANGELOG.md; \
 	rm -f /tmp/zee-changelog-entry; \
 	echo "CHANGELOG.md updated — review and edit as needed"
+
+# Publish the offline Parakeet GGUF models as an immutable, never-"latest"
+# GitHub release. Prereq: each .gguf's entry (Filename + SHA256) already exists
+# in localmodel.go. Copy the ggufs into a folder, then:
+#   make model-release MODELS_DIR=./out MODELS_TAG=models-v2
+# It regenerates the manifest, verifies the local ggufs against the registry's
+# SHA256s, and uploads them with --latest=false so the app-release "latest"
+# pointer is never hijacked. install.sh reads localmodel/manifest.txt (from main)
+# for filenames + hashes + prefetch flags — nothing is hardcoded there. Adopting
+# the models is a separate commit: localmodel.go + the regenerated manifest.txt
+# (+ Version / install.sh MODELS_TAG if the tag changed).
+model-release: manifest
+	@test -n "$(MODELS_TAG)" || (echo "usage: make model-release MODELS_DIR=./dir MODELS_TAG=models-vN" && exit 1)
+	@test -d "$(MODELS_DIR)" || (echo "ERROR: MODELS_DIR '$(MODELS_DIR)' not found" && exit 1)
+	@ls "$(MODELS_DIR)"/*.gguf >/dev/null 2>&1 || (echo "ERROR: no .gguf files in $(MODELS_DIR)" && exit 1)
+	@case "$(MODELS_TAG)" in models-*) ;; *) echo "ERROR: MODELS_TAG must start with 'models-'" && exit 1;; esac
+	@echo "==> verifying $(MODELS_DIR) ggufs against the localmodel registry..."
+	@cd "$(MODELS_DIR)" && for f in *.gguf; do \
+	  want=$$(awk -v f="$$f" '$$1==f {print $$2}' "$(CURDIR)/localmodel/manifest.txt"); \
+	  test -n "$$want" || { echo "ERROR: $$f is not in localmodel.go — add its entry first" && exit 1; }; \
+	  got=$$(shasum -a 256 "$$f" | awk '{print $$1}'); \
+	  test "$$want" = "$$got" || { echo "ERROR: $$f sha mismatch (registry $$want, file $$got)" && exit 1; }; \
+	  echo "  ok $$f"; \
+	done
+	gh release create "$(MODELS_TAG)" --repo sumerc/zee --latest=false \
+	  --title "Parakeet $(MODELS_TAG)" \
+	  --notes "GGUF models for zee local STT. Derived from NVIDIA NeMo Parakeet (CC-BY-4.0)." \
+	  "$(MODELS_DIR)"/*.gguf
+	@echo "==> published $(MODELS_TAG) (not marked latest)."
+	@echo "==> commit: localmodel.go + localmodel/manifest.txt (+ install.sh MODELS_TAG if bumped)."
 
 release:
 	@branch=$$(git rev-parse --abbrev-ref HEAD); \

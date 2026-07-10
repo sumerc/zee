@@ -1,12 +1,20 @@
 package transcriber
 
-import "runtime"
+import (
+	"os"
 
-func (r *SessionResult) captureMemStats() {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	r.MemoryAllocMB = float64(m.Alloc) / 1024 / 1024
-	r.MemoryPeakMB = float64(m.TotalAlloc) / 1024 / 1024
+	"github.com/shirou/gopsutil/v4/process"
+)
+
+// captureRSS records the process resident set size (from gopsutil, not Go's
+// heap) — it includes cgo/mmap memory like the loaded model, so it's the one
+// memory figure that's meaningful across every provider, local or remote.
+func (r *SessionResult) captureRSS() {
+	if p, err := process.NewProcess(int32(os.Getpid())); err == nil {
+		if mi, err := p.MemoryInfo(); err == nil {
+			r.ProcessRSSMB = float64(mi.RSS) / 1024 / 1024
+		}
+	}
 }
 
 type SessionConfig struct {
@@ -46,17 +54,16 @@ type StreamStats struct {
 }
 
 type SessionResult struct {
-	Text          string
-	HasText       bool
-	NoSpeech      bool
-	RateLimit     string       // "remaining/limit" or empty
-	MemoryAllocMB float64
-	MemoryPeakMB  float64
-	Batch         *BatchStats  // non-nil for batch sessions
-	Stream        *StreamStats // non-nil for stream sessions
-	Metrics       []string     // pre-formatted metric lines
-	AudioData     []byte       // exact bytes sent to the model
-	AudioFormat   string       // "mp3", "flac", or "wav"
+	Text         string
+	HasText      bool
+	NoSpeech     bool
+	RateLimit    string       // "remaining/limit" or empty
+	ProcessRSSMB float64      // resident set size (incl. cgo/mmap), all providers
+	Batch        *BatchStats  // non-nil for batch sessions
+	Stream       *StreamStats // non-nil for stream sessions
+	Metrics      []string     // pre-formatted metric lines
+	AudioData    []byte       // exact bytes sent to the model
+	AudioFormat  string       // "mp3", "flac", or "wav"
 }
 
 type Session interface {

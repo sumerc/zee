@@ -3,6 +3,7 @@ package audio
 import (
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 	"zee/encoder"
 )
@@ -35,10 +36,20 @@ func (f *FakeContext) NewCapture(_ *DeviceInfo, _ CaptureConfig) (CaptureDevice,
 	return &FakeCapture{pcm: f.pcm, realtime: f.realtime, audioDone: make(chan struct{})}, nil
 }
 
+// NewNamedCapture is like NewCapture but tags the device with a name, so tests
+// can tell two fake devices apart (e.g. to verify a device switch took effect).
+func (f *FakeContext) NewNamedCapture(name string) (CaptureDevice, error) {
+	return &FakeCapture{pcm: f.pcm, realtime: f.realtime, audioDone: make(chan struct{}), name: name}, nil
+}
+
 type FakeCapture struct {
 	pcm       []byte
 	realtime  bool
 	audioDone chan struct{}
+	name      string
+
+	// Starts counts Start() calls; tests read it to see which device was used.
+	Starts atomic.Int32
 
 	mu       sync.Mutex
 	cb       DataCallback
@@ -60,7 +71,12 @@ func (f *FakeCapture) ClearCallback() {
 	f.mu.Unlock()
 }
 
-func (f *FakeCapture) DeviceName() string { return "fake" }
+func (f *FakeCapture) DeviceName() string {
+	if f.name != "" {
+		return f.name
+	}
+	return "fake"
+}
 
 func (f *FakeCapture) feedChunk(cb DataCallback, pos, chunkBytes int) int {
 	end := min(pos+chunkBytes, len(f.pcm))
@@ -71,6 +87,7 @@ func (f *FakeCapture) feedChunk(cb DataCallback, pos, chunkBytes int) int {
 }
 
 func (f *FakeCapture) Start() error {
+	f.Starts.Add(1)
 	f.stopCh = make(chan struct{})
 	f.feedDone = make(chan struct{})
 	// audioDone is NOT recreated here -- callers may already be waiting on it.

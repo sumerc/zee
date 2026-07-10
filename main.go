@@ -18,9 +18,8 @@ import (
 
 	"zee/alert"
 	"zee/audio"
-	"zee/config"
-	"zee/beep"
 	"zee/clipboard"
+	"zee/config"
 	"zee/doctor"
 	"zee/encoder"
 	"zee/hotkey"
@@ -62,6 +61,17 @@ var (
 	lastRec   *savedRecording
 )
 
+func trayModelState(s transcriber.ModelStatus) tray.ModelState {
+	switch {
+	case s.Ready:
+		return tray.ModelReady
+	case s.Downloadable:
+		return tray.ModelNeedsDownload
+	default:
+		return tray.ModelUnavailable
+	}
+}
+
 func modelSupportsStream(tr transcriber.Transcriber) bool {
 	id := tr.GetModel()
 	for _, m := range tr.Models() {
@@ -88,8 +98,20 @@ type recordingConfig struct {
 
 var configMu sync.Mutex
 
+// captureMu guards the live captureDevice, plus selectedDevice and
+// preferredDevice, which the device-monitor goroutine and the tray device
+// callback hot-swap on connect/disconnect while recordSessions reads the capture
+// device for each new recording.
+var captureMu sync.Mutex
+
 var trayRecordChan = make(chan struct{}, 1)
 var isRecording atomic.Bool
+
+// isTranscribing is true while a recording has stopped but its transcription is
+// still running. isRecording stays true across this phase too (so a re-press is
+// blocked); isTranscribing distinguishes "stop the live recording" from "denied,
+// transcription in progress" for the hotkey feedback.
+var isTranscribing atomic.Bool
 
 var (
 	stopMu   sync.Mutex
@@ -107,14 +129,15 @@ func resetStop() <-chan struct{} {
 	return ch
 }
 
-// requestStop stops the active recording (safe to call from any goroutine, multiple times).
+// requestStop stops the active recording (safe to call from any goroutine,
+// multiple times). The Once/channel are touched under stopMu so this can't race
+// with resetStop resetting them for the next session; close() is non-blocking
+// and never re-enters stopMu, so holding it here is safe.
 func requestStop() {
 	stopMu.Lock()
-	once := &stopOnce
-	ch := stopCh
-	stopMu.Unlock()
-	if ch != nil {
-		once.Do(func() { close(ch) })
+	defer stopMu.Unlock()
+	if stopCh != nil {
+		stopOnce.Do(func() { close(stopCh) })
 	}
 }
 
@@ -170,7 +193,9 @@ func run() {
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
-	transcribeFlag := flag.String("transcribe", "", "Transcribe an audio file and exit")
+	transcribeFlag := flag.String("transcribe", "", "Transcribe audio file(s) and exit; extra files may follow as positional args (one transcript printed per line)")
+	providerFlag := flag.String("provider", "", "Transcription provider (e.g. parakeet, groq); overrides saved config")
+	modelFlag := flag.String("model", "", "Model ID for the selected provider; overrides saved config")
 	flag.Parse()
 
 	// Resolve log directory early
@@ -223,7 +248,9 @@ func run() {
 	cfg := config.Get()
 	flagSet := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
-	if !flagSet["lang"] && cfg.Language != "" {
+	if !flagSet["lang"] {
+		// Apply the saved language even when empty — "" is Auto-detect, a real
+		// choice, not "unset". A never-configured config yields "en" via defaults.
 		*langFlag = cfg.Language
 	}
 	if !flagSet["device"] && cfg.Device != "" {
@@ -245,25 +272,34 @@ func run() {
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
 	}
 
+	// CLI -provider/-model override the saved provider/model (also lets the
+	// integration test pick a specific local model).
+	if flagSet["provider"] {
+		cfg.Provider = *providerFlag
+	}
+	if flagSet["model"] {
+		cfg.Model = *modelFlag
+	}
+
 	// Restore saved provider/model or fall back to auto-detection
 	if cfg.Provider != "" {
-		for _, p := range transcriber.Providers() {
-			if p.Name == cfg.Provider {
-				if key := os.Getenv(p.EnvKey); key != "" {
-					activeTranscriber = p.NewFn(key)
-					if cfg.Model != "" {
-						activeTranscriber.SetModel(cfg.Model)
-					}
-				}
-				break
+		if p, ok := providerByName(cfg.Provider); ok && p.Available() {
+			activeTranscriber = p.New()
+			if cfg.Model != "" {
+				activeTranscriber.SetModel(cfg.Model)
 			}
+		}
+		// An explicit -provider that didn't resolve is a hard error (don't
+		// silently fall back to a different engine under the test's feet).
+		if activeTranscriber == nil && flagSet["provider"] {
+			fatal("Provider %q is not available", *providerFlag)
 		}
 	}
 	if activeTranscriber == nil {
 		var initErr error
 		activeTranscriber, initErr = transcriber.New()
 		if initErr != nil {
-			fatal("No API key set.\n\nSet GROQ_API_KEY, OPENAI_API_KEY, or DEEPGRAM_API_KEY.")
+			fatal("%v", initErr)
 		}
 	}
 	streamEnabled = modelSupportsStream(activeTranscriber)
@@ -307,7 +343,9 @@ func run() {
 	}
 
 	if *transcribeFlag != "" {
-		runTranscribeFile(*transcribeFlag)
+		// First file is the flag value; any remaining positionals are extra
+		// files transcribed in the same process (the model loads once).
+		runTranscribeFiles(append([]string{*transcribeFlag}, flag.Args()...))
 		return
 	}
 
@@ -360,7 +398,12 @@ func run() {
 
 	tray.OnCopyLast(clip.CopyLast)
 	tray.OnRecord(
-		func() { select { case trayRecordChan <- struct{}{}: default: } },
+		func() {
+			select {
+			case trayRecordChan <- struct{}{}:
+			default:
+			}
+		},
 		func() { requestStop() },
 	)
 	// preferredDevice remembers the user's choice so we can auto-reconnect
@@ -374,8 +417,10 @@ func run() {
 		for i := range devices {
 			names[i] = devices[i].Name
 		}
-			tray.SetDevices(names, preferredDevice, func(name string) {
+		tray.SetDevices(names, preferredDevice, func(name string) {
+			captureMu.Lock()
 			preferredDevice = name
+			captureMu.Unlock()
 			config.Update(func(s *config.Settings) { s.Device = name })
 			if name == "" {
 				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
@@ -389,59 +434,113 @@ func run() {
 	var trayModels []tray.Model
 	modelIndex := map[string]transcriber.ModelInfo{}
 	for _, p := range transcriber.Providers() {
-		key := os.Getenv(p.EnvKey)
 		for _, m := range p.Models {
+			st := p.Status(m.ID)
 			trayModels = append(trayModels, tray.Model{
 				Provider:      p.Name,
 				ProviderLabel: p.Label,
 				ModelID:       m.ID,
 				Label:         m.Label,
-				HasKey:        key != "",
+				State:         trayModelState(st),
+				Detail:        st.Detail,
 				Active:        activeTranscriber.Name() == p.Name && activeTranscriber.GetModel() == m.ID,
 			})
 			modelIndex[p.Name+":"+m.ID] = m
 		}
 	}
 
-	tray.SetLanguages(transcriber.AllLanguages())
+	tray.SetLanguages(activeTranscriber.SupportedLanguages())
 
-	tray.SetModels(trayModels, func(provider, model string) {
+	// applySwitch makes (provider, model) active, reusing the current instance
+	// when the provider is unchanged so we don't reload a local model twice. On a
+	// provider change it frees the outgoing model — Parakeet holds C/ggml memory
+	// (255 MB–1.4 GB) the GC can't reclaim, so dropping it without Close leaks.
+	// It must run only when no record/inference cycle is active (guaranteed by
+	// switchModel), so the freed model can't be one an in-flight session uses.
+	applySwitch := func(p transcriber.ProviderInfo, model string) {
 		configMu.Lock()
-		defer configMu.Unlock()
-
-		currentLang := activeTranscriber.GetLanguage()
-
-		var newTr transcriber.Transcriber
-		for _, p := range transcriber.Providers() {
-			if p.Name == provider {
-				if key := os.Getenv(p.EnvKey); key != "" {
-					newTr = p.NewFn(key)
-				}
-				break
-			}
+		var outgoing transcriber.Transcriber
+		if activeTranscriber.Name() != p.Name {
+			outgoing = activeTranscriber
+			newTr := p.New()
+			newTr.SetLanguage(activeTranscriber.GetLanguage())
+			activeTranscriber = newTr
 		}
-		if newTr == nil {
-			return
-		}
-		newTr.SetLanguage(currentLang)
-		newTr.SetModel(model)
-
-		activeTranscriber = newTr
-		streamEnabled = modelIndex[provider+":"+model].Stream
+		activeTranscriber.SetModel(model) // local: blocks here during gguf load
+		streamEnabled = modelIndex[p.Name+":"+model].Stream
 		if !streamEnabled {
 			activeFormat = *formatFlag
 		}
+		langs := activeTranscriber.SupportedLanguages()
+		local := transcriber.IsLocal(activeTranscriber)
+		configMu.Unlock()
 
-		config.Update(func(s *config.Settings) { s.Provider = provider; s.Model = model })
-		tray.SetLanguages(newTr.SupportedLanguages())
+		// Only Parakeet has a provider-level Close (frees the gguf); cloud
+		// providers don't implement it and are skipped.
+		if c, ok := outgoing.(interface{ Close() }); ok {
+			c.Close()
+		}
+
+		config.Update(func(s *config.Settings) { s.Provider = p.Name; s.Model = model })
+		tray.SetLanguages(langs)
+		tray.SetHintsEnabled(!local)
+		tray.SetActiveModel(p.Name, model)
+	}
+
+	// switchModel applies the swap immediately when idle, or defers it to the end
+	// of the current record/inference cycle when one is active — so neither the
+	// gguf reload nor the Close of the outgoing model can free a ctx an in-flight
+	// session is using. The tray menu and the download-complete goroutine both
+	// funnel through here.
+	switchModel := func(p transcriber.ProviderInfo, model string) {
+		if isRecording.Load() {
+			pendingMu.Lock()
+			pendingSwitch = func() { applySwitch(p, model) }
+			pendingMu.Unlock()
+			return
+		}
+		applySwitch(p, model)
+	}
+
+	tray.SetModels(trayModels, func(provider, model string) {
+		p, ok := providerByName(provider)
+		if !ok {
+			return
+		}
+		st := p.Status(model)
+		switch {
+		case st.Ready:
+			switchModel(p, model)
+		case st.Downloadable:
+			// Async: a model download takes minutes; show progress in the menu.
+			go func() {
+				tray.UpdateModelState(provider, model, tray.ModelDownloading, "0%")
+				err := p.Download(model, func(f float64) {
+					tray.UpdateModelState(provider, model, tray.ModelDownloading, fmt.Sprintf("%.0f%%", f*100))
+				})
+				if err != nil {
+					log.Errorf("model download: %v", err)
+					tray.SetError("Download failed: " + err.Error())
+					tray.UpdateModelState(provider, model, tray.ModelNeedsDownload, st.Detail)
+					return
+				}
+				tray.UpdateModelState(provider, model, tray.ModelReady, "")
+				switchModel(p, model)
+			}()
+		}
 	})
 
-	tray.SetLanguage(*langFlag, func(code string) {
+	tray.SetLanguage(*langFlag, func(code string, persist bool) {
 		configMu.Lock()
 		activeTranscriber.SetLanguage(code)
 		configMu.Unlock()
-		config.Update(func(s *config.Settings) { s.Language = code })
+		// Only a real user choice persists. A model-constraint fallback applies
+		// to the transcriber but must not overwrite the saved preference.
+		if persist {
+			config.Update(func(s *config.Settings) { s.Language = code })
+		}
 	})
+	tray.SetHintsEnabled(!transcriber.IsLocal(activeTranscriber))
 	tray.SetLogin(login.Enabled())
 	tray.SetVersion(version)
 	tray.OnSaveAudio(saveLastRecording)
@@ -490,18 +589,24 @@ func run() {
 				continue
 			}
 			last = names
+			// Snapshot the device state under captureMu, then release before the
+			// switch calls (which re-lock it). preferredDevice is also written by
+			// the tray callback on another thread, so both are read under the lock.
+			captureMu.Lock()
 			selName := ""
 			if selectedDevice != nil {
 				selName = selectedDevice.Name
 			}
+			pref := preferredDevice
+			captureMu.Unlock()
 			if selName != "" && !slices.Contains(names, selName) {
 				log.Info("device_disconnected: " + selName)
 				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
 				selName = ""
-			} else if selName == "" && preferredDevice != "" && slices.Contains(names, preferredDevice) {
-				log.Info("device_reconnected: " + preferredDevice)
-				switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, preferredDevice)
-				selName = preferredDevice
+			} else if selName == "" && pref != "" && slices.Contains(names, pref) {
+				log.Info("device_reconnected: " + pref)
+				switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, pref)
+				selName = pref
 			}
 			tray.RefreshDevices(names, selName)
 		}
@@ -535,7 +640,7 @@ func run() {
 		gracefulShutdown()
 	}()
 
-	go beep.Init()
+	go audio.InitBeep()
 
 	hk := hotkey.New()
 	if err := hk.Register(); err != nil {
@@ -544,32 +649,95 @@ func run() {
 	}
 	defer hk.Unregister()
 
-	logRecordDevice := func() {
-		log.Info("recording_device: " + captureDevice.DeviceName())
-	}
-
 	sessions := make(chan recSession, 1)
 	go listenHotkey(hk, longPressDuration(), sessions)
 
 	go func() {
 		for range trayRecordChan {
-			sessions <- recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}}
+			tryStartSession(sessions)
 		}
 	}()
 
+	recordSessions(func() audio.CaptureDevice {
+		captureMu.Lock()
+		defer captureMu.Unlock()
+		return captureDevice
+	}, sessions)
+}
+
+// afterRecordCycle, when non-nil, is called by recordSessions at the end of each
+// record+transcribe cycle. Test-only hook (lets the harness know a cycle ended).
+var afterRecordCycle func()
+
+// pendingSwitch holds a model switch deferred because it was requested during a
+// record/inference cycle; applyPendingSwitch runs it at cycle end, when no
+// session is in flight (see switchModel). pendingMu guards it across the tray and
+// download goroutines and the record loop.
+var (
+	pendingMu     sync.Mutex
+	pendingSwitch func()
+)
+
+func applyPendingSwitch() {
+	pendingMu.Lock()
+	fn := pendingSwitch
+	pendingSwitch = nil
+	pendingMu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// tryStartSession enqueues a fresh recording session unless a cycle is already
+// active (recording OR still transcribing) — in which case it denies audibly,
+// the same guard the hotkey uses. Returns the SilenceClose handle when it
+// started a session, nil when it denied. The hotkey and the tray "Start
+// Recording" button both funnel through here, so neither can queue an
+// unattended recording that fires the instant inference ends.
+func tryStartSession(sessions chan<- recSession) *atomic.Bool {
+	if isRecording.Load() {
+		go audio.PlayDenied()
+		return nil
+	}
+	sc := &atomic.Bool{}
+	sessions <- recSession{Stop: resetStop(), SilenceClose: sc}
+	return sc
+}
+
+// recordSessions is the core record→transcribe loop, shared by the live app and
+// tests. isRecording stays true for the WHOLE cycle — recording AND inference —
+// so listenHotkey blocks a new recording while a transcription is still running
+// (handleRecording returns a `done` channel that closes when inference ends).
+//
+// getCapture is called fresh each iteration (not captured once) so a device
+// hot-swap — e.g. the mic being unplugged and the monitor switching to system
+// default — is picked up on the next recording instead of reusing a stale,
+// now-invalid device.
+func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSession) {
 	for sess := range sessions {
+		capture := getCapture()
 		log.Info("recording_start")
-		logRecordDevice()
+		log.Info("recording_device: " + capture.DeviceName())
 		isRecording.Store(true)
 		tray.SetRecording(true)
-		go beep.PlayStart()
+		go audio.PlayStart()
 
-		_, err := handleRecording(captureDevice, sess)
-		isRecording.Store(false)
-		tray.SetRecording(false)
+		done, err := handleRecording(capture, sess)
 		if err != nil {
 			log.Errorf("recording error: %v", err)
 			tray.SetError(err.Error())
+		}
+		if done != nil {
+			isTranscribing.Store(true)
+			tray.SetTranscribing(true) // blue status dot while inference runs
+			<-done                     // hold isRecording too — blocks re-record
+			isTranscribing.Store(false)
+		}
+		isRecording.Store(false)
+		tray.SetRecording(false)
+		applyPendingSwitch() // apply any model switch deferred during this cycle
+		if afterRecordCycle != nil {
+			afterRecordCycle()
 		}
 	}
 }
@@ -599,11 +767,18 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 			<-hk.Keydown()
 			if isRecording.Load() {
 				<-hk.Keyup()
-				requestStop()
+				if isTranscribing.Load() {
+					go audio.PlayDenied() // ignored: transcription still in progress
+				} else {
+					requestStop()
+				}
 				continue
 			}
-			sc := &atomic.Bool{}
-			sessions <- recSession{Stop: resetStop(), SilenceClose: sc}
+			sc := tryStartSession(sessions)
+			if sc == nil {
+				<-hk.Keyup() // denied (a cycle began between the guard above and here)
+				continue
+			}
 			timer := time.NewTimer(longPress)
 			select {
 			case <-timer.C:
@@ -611,7 +786,12 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 				requestStop()
 				st = idle
 			case <-hk.Keyup():
-				if !timer.Stop() { select { case <-timer.C: default: } }
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
 				sc.Store(true)
 				st = toggleRecording
 			}
@@ -645,6 +825,8 @@ func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, cap
 		name = newDevice.Name
 	}
 	log.Info("device_switch: " + name)
+	captureMu.Lock()
+	defer captureMu.Unlock()
 	(*captureDevice).Close()
 	newCapture, err := ctx.NewCapture(newDevice, captureConfig)
 	if err != nil {
@@ -768,8 +950,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 			TLSTimeMs:        bs.TLSTimeMs,
 			TTFBMs:           bs.TTFBMs,
 			TotalTimeMs:      bs.TotalTimeMs,
-			MemoryAllocMB:    result.MemoryAllocMB,
-			MemoryPeakMB:     result.MemoryPeakMB,
+			ProcessRSSMB:     result.ProcessRSSMB,
 			InferenceMs:      bs.InferenceMs,
 		}
 		transcriptionsMu.Lock()
@@ -792,6 +973,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 			RecvMessages: ss.RecvMessages,
 			RecvFinal:    ss.RecvFinal,
 			CommitEvents: ss.CommitEvents,
+			ProcessRSSMB: result.ProcessRSSMB,
 		})
 	}
 
@@ -856,14 +1038,44 @@ func saveLastRecording() {
 	alert.Info("Saved to " + dir)
 }
 
-func runTranscribeFile(audioFile string) {
+// directTranscriber transcribes encoded audio bytes in one call. Every provider
+// implements it — cloud providers POST the bytes; Parakeet decodes WAV → PCM and
+// runs a local batch inference — so the file path has a single shape.
+type directTranscriber interface {
+	Transcribe(audio []byte, format, lang, hints string) (*transcriber.Result, error)
+}
+
+// providerByName finds a registered provider by its Name.
+func providerByName(name string) (transcriber.ProviderInfo, bool) {
+	for _, p := range transcriber.Providers() {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return transcriber.ProviderInfo{}, false
+}
+
+// runTranscribeFiles transcribes one or more files with the already-loaded
+// engine — the model is loaded once at startup and reused across files — and
+// prints one transcript per line, in input order.
+func runTranscribeFiles(files []string) {
+	for _, f := range files {
+		text, err := transcribeFile(f)
+		if err != nil {
+			fatal("%s: %v", f, err)
+		}
+		fmt.Println(text)
+	}
+}
+
+func transcribeFile(audioFile string) (string, error) {
 	data, err := os.ReadFile(audioFile)
 	if err != nil {
-		fatal("Error reading file: %v", err)
+		return "", err
 	}
 
 	ext := filepath.Ext(audioFile)
-	format := "mp3"
+	var format string
 	switch ext {
 	case ".flac":
 		format = "flac"
@@ -872,24 +1084,18 @@ func runTranscribeFile(audioFile string) {
 	case ".mp3":
 		format = "mp3"
 	default:
-		fatal("Unsupported audio format: %s", ext)
-	}
-
-	type directTranscriber interface {
-		Transcribe(audio []byte, format, lang, hints string) (*transcriber.Result, error)
+		return "", fmt.Errorf("unsupported audio format %q", ext)
 	}
 
 	dt, ok := activeTranscriber.(directTranscriber)
 	if !ok {
-		fatal("Provider %q does not support direct file transcription", activeTranscriber.Name())
+		return "", fmt.Errorf("provider %q cannot transcribe files", activeTranscriber.Name())
 	}
-
 	result, err := dt.Transcribe(data, format, activeTranscriber.GetLanguage(), config.GetHints())
 	if err != nil {
-		fatal("Transcription error: %v", err)
+		return "", err
 	}
-
-	fmt.Println(result.Text)
+	return result.Text, nil
 }
 
 func runBenchmark(wavFile string, runs int) {

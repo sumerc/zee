@@ -11,15 +11,15 @@ import (
 )
 
 type NetworkMetrics struct {
-	DNS        time.Duration
-	ConnWait   time.Duration
-	TCP        time.Duration
-	TLS        time.Duration
-	ReqHeaders time.Duration
-	ReqBody    time.Duration
-	TTFB       time.Duration
-	Download   time.Duration
-	Total      time.Duration
+	DNS         time.Duration
+	ConnWait    time.Duration
+	TCP         time.Duration
+	TLS         time.Duration
+	ReqHeaders  time.Duration
+	ReqBody     time.Duration
+	TTFB        time.Duration
+	Download    time.Duration
+	Total       time.Duration
 	ConnReused  bool
 	TLSProtocol string
 }
@@ -122,6 +122,18 @@ func langsFromCodes(codes []string) []Language {
 	return langs
 }
 
+// AllLanguages returns every known language (Auto-detect first, then the rest
+// sorted alphabetically). The tray uses this as the fixed universe of language
+// menu items; SetLanguages then shows only the active model's subset.
+func AllLanguages() []Language {
+	codes := make([]string, 0, len(langLabels))
+	for c := range langLabels {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	return langsFromCodes(codes)
+}
+
 type baseTranscriber struct {
 	client *TracedClient
 	apiURL string
@@ -142,16 +154,6 @@ func (b *baseTranscriber) GetLanguage() string {
 	return b.lang
 }
 
-// AllLanguages returns every known language, sorted alphabetically.
-func AllLanguages() []Language {
-	codes := make([]string, 0, len(langLabels))
-	for c := range langLabels {
-		codes = append(codes, c)
-	}
-	sort.Strings(codes)
-	return langsFromCodes(codes)
-}
-
 func (b *baseTranscriber) Models() []ModelInfo { return nil }
 func (b *baseTranscriber) SetModel(m string)   { b.model = m }
 func (b *baseTranscriber) GetModel() string    { return b.model }
@@ -165,24 +167,58 @@ func modelLanguages(models []ModelInfo, current string) []Language {
 	return nil
 }
 
+// ModelStatus describes whether one model is usable now, and if not whether the
+// user can make it usable. Cloud providers are binary (Ready when the key is
+// present, else not Downloadable → Unavailable); the local provider adds the
+// downloadable middle ground.
+type ModelStatus struct {
+	Ready        bool
+	Downloadable bool   // missing but the user can fetch it (local only)
+	Detail       string // human-readable size when downloadable & missing
+}
+
+// ProviderInfo is a uniform descriptor for every backend — cloud or local. No
+// provider is special-cased: New() and the tray treat them all through these
+// fields. Download is nil for providers that have nothing to fetch (cloud).
 type ProviderInfo struct {
-	Name   string
-	Label  string
-	EnvKey string
-	Models []ModelInfo
-	NewFn  func(string) Transcriber
+	Name      string
+	Label     string
+	Models    []ModelInfo
+	Available func() bool        // at least one model usable right now
+	New       func() Transcriber // keyless: closes over the key / model dir
+	Status    func(modelID string) ModelStatus
+	Download  func(modelID string, progress func(fraction float64)) error
+}
+
+// cloudProvider builds a key-gated ProviderInfo. Availability is "key present";
+// every model shares that status and nothing is downloadable.
+func cloudProvider(name, label, envKey string, models []ModelInfo, mk func(string) Transcriber) ProviderInfo {
+	hasKey := func() bool { return os.Getenv(envKey) != "" }
+	return ProviderInfo{
+		Name:      name,
+		Label:     label,
+		Models:    models,
+		Available: hasKey,
+		New:       func() Transcriber { return mk(os.Getenv(envKey)) },
+		Status:    func(string) ModelStatus { return ModelStatus{Ready: hasKey()} },
+	}
 }
 
 func Providers() []ProviderInfo {
 	return []ProviderInfo{
-		{"deepgram", "Deepgram", "DEEPGRAM_API_KEY", DeepgramModels, func(k string) Transcriber { return NewDeepgram(k) }},
-		{"openai", "OpenAI", "OPENAI_API_KEY", OpenAIModels, func(k string) Transcriber { return NewOpenAI(k) }},
-		{"groq", "Groq", "GROQ_API_KEY", GroqModels, func(k string) Transcriber { return NewGroq(k) }},
-		{"mistral", "Mistral", "MISTRAL_API_KEY", MistralModels, func(k string) Transcriber { return NewMistral(k) }},
-		{"elevenlabs", "ElevenLabs", "ELEVENLABS_API_KEY", ElevenLabsModels, func(k string) Transcriber { return NewElevenLabs(k) }},
+		// Local is first so it's the default on a fresh machine even when cloud
+		// keys are set; cloud is opt-in via the tray (the choice persists).
+		parakeetProvider(),
+		cloudProvider("deepgram", "Deepgram", "DEEPGRAM_API_KEY", DeepgramModels, func(k string) Transcriber { return NewDeepgram(k) }),
+		cloudProvider("openai", "OpenAI", "OPENAI_API_KEY", OpenAIModels, func(k string) Transcriber { return NewOpenAI(k) }),
+		cloudProvider("groq", "Groq", "GROQ_API_KEY", GroqModels, func(k string) Transcriber { return NewGroq(k) }),
+		cloudProvider("mistral", "Mistral", "MISTRAL_API_KEY", MistralModels, func(k string) Transcriber { return NewMistral(k) }),
+		cloudProvider("elevenlabs", "ElevenLabs", "ELEVENLABS_API_KEY", ElevenLabsModels, func(k string) Transcriber { return NewElevenLabs(k) }),
 	}
 }
 
+// New returns the default transcriber: the local model when available (even if
+// cloud keys are set), else the first cloud provider with a key.
 func New() (Transcriber, error) {
 	if fakeText, ok := os.LookupEnv("ZEE_FAKE_TEXT"); ok {
 		var fakeErr error
@@ -193,10 +229,10 @@ func New() (Transcriber, error) {
 	}
 
 	for _, p := range Providers() {
-		if key := os.Getenv(p.EnvKey); key != "" {
-			return p.NewFn(key), nil
+		if p.Available() {
+			return p.New(), nil
 		}
 	}
 
-	return nil, fmt.Errorf("set DEEPGRAM_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, or ELEVENLABS_API_KEY environment variable")
+	return nil, fmt.Errorf("set DEEPGRAM_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, or ELEVENLABS_API_KEY (or install on Apple Silicon to run offline)")
 }

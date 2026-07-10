@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"zee/audio"
-	"zee/beep"
 	"zee/clipboard"
 	"zee/encoder"
 	"zee/hotkey"
@@ -18,7 +17,7 @@ import (
 )
 
 func runTestMode(wavPath string) {
-	beep.Disable()
+	audio.DisableBeep()
 
 	if err := log.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not init logging: %v\n", err)

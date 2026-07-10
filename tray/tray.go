@@ -7,12 +7,23 @@ import (
 	"zee/transcriber"
 )
 
+// ModelState drives how a model entry renders in the menu.
+type ModelState int
+
+const (
+	ModelReady         ModelState = iota // selectable now
+	ModelNeedsDownload                   // missing, user can fetch it (local)
+	ModelDownloading                     // fetch in progress (shows %)
+	ModelUnavailable                     // can't be used (e.g. cloud, no key)
+)
+
 type Model struct {
-	Provider      string // e.g. "groq", "openai", "deepgram"
+	Provider      string // e.g. "groq", "openai", "parakeet"
 	ProviderLabel string // e.g. "Groq"
 	ModelID       string // e.g. "whisper-large-v3-turbo"
 	Label         string // model display name
-	HasKey        bool
+	State         ModelState
+	Detail        string // size when NeedsDownload, percent when Downloading
 	Active        bool
 }
 
@@ -24,10 +35,15 @@ var (
 	recordFn   func()
 	stopFn     func()
 
+	// trayMu guards all mutable tray state below (recording/warning, the device
+	// list, the model list, the language fields, the hints toggle). It is held
+	// only around field reads/writes — never across a systray update or a
+	// callback, both of which re-enter these accessors and would deadlock.
+	trayMu sync.Mutex
+
 	recording bool
 	warning   bool
 
-	deviceMu    sync.Mutex
 	deviceNames []string
 	deviceSel   string
 	deviceCb    func(string)
@@ -38,33 +54,35 @@ var (
 	loginOn bool
 	loginCb func(bool) error
 
-	modelMu  sync.Mutex
-	models   []Model
-	modelCb  func(provider, model string)
+	models  []Model
+	modelCb func(provider, model string)
 
 	isBTFn func(string) bool
 
-	langCode string // current language code ("" = auto-detect)
-	langCb   func(string)
+	langCode   string // effective language shown for the active model ("" = auto-detect)
+	langIntent string // user's persisted choice; survives models that can't offer it
+	langCb     func(code string, persist bool)
 
 	appVersion    string
-	checkUpdateCb  func()
-	saveAudioCb    func()
-	editHintsCb    func()
+	checkUpdateCb func()
+	saveAudioCb   func()
+	editHintsCb   func()
 )
 
 var languages []transcriber.Language // set via SetLanguages
 
-func OnCopyLast(fn func())            { copyLastFn = fn }
-func OnRecord(start, stop func())     { recordFn = start; stopFn = stop }
-func SetAutoPaste(on bool)            { autoPasteOn = on }
-func OnAutoPaste(fn func(bool))       { autoPasteCb = fn }
-func SetLogin(on bool)                { loginOn = on }
-func OnLogin(fn func(bool) error)     { loginCb = fn }
+func OnCopyLast(fn func())        { copyLastFn = fn }
+func OnRecord(start, stop func()) { recordFn = start; stopFn = stop }
+func SetAutoPaste(on bool)        { autoPasteOn = on }
+func OnAutoPaste(fn func(bool))   { autoPasteCb = fn }
+func SetLogin(on bool)            { loginOn = on }
+func OnLogin(fn func(bool) error) { loginCb = fn }
 
 func SetRecording(rec bool) {
+	trayMu.Lock()
 	recording = rec
 	warning = false
+	trayMu.Unlock()
 	updateRecordingIcon(rec)
 	if rec {
 		disableDevices()
@@ -76,11 +94,20 @@ func SetRecording(rec bool) {
 }
 
 func SetWarning(on bool) {
+	trayMu.Lock()
 	if !recording {
+		trayMu.Unlock()
 		return
 	}
 	warning = on
+	trayMu.Unlock()
 	updateWarningIcon(on)
+}
+
+// SetTranscribing shows the "transcription in progress" icon (a blue status
+// dot). The icon returns to idle on the next SetRecording(false).
+func SetTranscribing(on bool) {
+	updateTranscribingIcon(on)
 }
 
 func SetError(msg string) {
@@ -96,39 +123,131 @@ func Quit() {
 }
 
 func SetDevices(names []string, selected string, onSwitch func(name string)) {
-	deviceMu.Lock()
+	trayMu.Lock()
 	deviceNames = names
 	deviceSel = selected
 	if onSwitch != nil {
 		deviceCb = onSwitch
 	}
-	deviceMu.Unlock()
+	trayMu.Unlock()
 }
 
 func SetModels(m []Model, onSwitch func(provider, model string)) {
-	modelMu.Lock()
+	trayMu.Lock()
 	models = m
 	modelCb = onSwitch
-	modelMu.Unlock()
+	trayMu.Unlock()
+}
+
+// UpdateModelState re-renders a single model entry (used while a local model
+// downloads, and when it becomes ready). Safe to call from any goroutine.
+func UpdateModelState(provider, modelID string, state ModelState, detail string) {
+	trayMu.Lock()
+	idx := -1
+	for i := range models {
+		if models[i].Provider == provider && models[i].ModelID == modelID {
+			models[i].State = state
+			models[i].Detail = detail
+			idx = i
+			break
+		}
+	}
+	trayMu.Unlock()
+	if idx >= 0 {
+		updateModelItem(idx)
+	}
+}
+
+// SetActiveModel marks one model active (checked) and the rest inactive,
+// re-rendering only the entries that changed. Called by the app after a
+// successful model switch.
+func SetActiveModel(provider, modelID string) {
+	trayMu.Lock()
+	var changed []int
+	for i := range models {
+		want := models[i].Provider == provider && models[i].ModelID == modelID
+		if models[i].Active != want {
+			models[i].Active = want
+			changed = append(changed, i)
+		}
+	}
+	trayMu.Unlock()
+	for _, i := range changed {
+		updateModelItem(i)
+	}
+	updateStatus()
+}
+
+// modelTitle is the menu label for a model given its state.
+func modelTitle(m Model) string {
+	switch m.State {
+	case ModelNeedsDownload:
+		if m.Detail != "" {
+			return m.Label + " — download " + m.Detail
+		}
+		return m.Label + " — download"
+	case ModelDownloading:
+		if m.Detail != "" {
+			return m.Label + " — downloading " + m.Detail
+		}
+		return m.Label + " — downloading…"
+	default:
+		return m.Label
+	}
 }
 
 func SetLastRecording(dur time.Duration, totalMs float64) {
 	updateCopyLastTitle(fmt.Sprintf("Copy Last Recorded Text (%.1fs | %dms)", dur.Seconds(), int(totalMs)))
 }
 
+// hintsEnabled gates the "Edit Hints…" item: local providers ignore hints
+// (greedy decode has no biasing), so the item is greyed out when local is active.
+var hintsEnabled = true
+
+// SetHintsEnabled greys out / restores the "Edit Hints…" menu item. Safe to
+// call before Init (the state is applied when the menu is built).
+func SetHintsEnabled(on bool) {
+	trayMu.Lock()
+	hintsEnabled = on
+	trayMu.Unlock()
+	setHintsEnabled(on)
+}
+
 func SetVersion(v string)     { appVersion = v }
 func OnCheckUpdate(fn func()) { checkUpdateCb = fn }
-func OnSaveAudio(fn func())  { saveAudioCb = fn }
-func OnEditHints(fn func())  { editHintsCb = fn }
+func OnSaveAudio(fn func())   { saveAudioCb = fn }
+func OnEditHints(fn func())   { editHintsCb = fn }
 
-func SetLanguage(code string, onSwitch func(string)) {
+func SetLanguage(code string, onSwitch func(code string, persist bool)) {
+	trayMu.Lock()
 	langCode = code
+	langIntent = code
 	langCb = onSwitch
+	trayMu.Unlock()
 }
 
 func SetLanguages(langs []transcriber.Language) {
+	trayMu.Lock()
 	languages = langs
+	trayMu.Unlock()
 	refreshLanguageMenu()
+}
+
+// effectiveLang picks the language to actually use for a model that offers
+// `langs`, given the user's intended choice. Intent wins when the model can
+// offer it; otherwise it falls back to the model's first language (Auto-detect
+// for multilingual models, English for English-only ones). The intent itself is
+// never mutated here, so switching back to a capable model restores it.
+func effectiveLang(intent string, langs []transcriber.Language) string {
+	for _, l := range langs {
+		if l.Code == intent {
+			return intent
+		}
+	}
+	if len(langs) > 0 {
+		return langs[0].Code
+	}
+	return ""
 }
 
 func SetBTCheck(fn func(string) bool) {
@@ -136,7 +255,7 @@ func SetBTCheck(fn func(string) bool) {
 }
 
 func statusText() string {
-	modelMu.Lock()
+	trayMu.Lock()
 	var provider, model string
 	for _, m := range models {
 		if m.Active {
@@ -145,7 +264,6 @@ func statusText() string {
 			break
 		}
 	}
-	modelMu.Unlock()
 	lang := "Auto"
 	if langCode != "" {
 		lang = langCode
@@ -154,6 +272,7 @@ func statusText() string {
 	if appVersion != "" && appVersion != "dev" {
 		ver = " · " + appVersion
 	}
+	trayMu.Unlock()
 	if provider == "" {
 		return "𝘻𝘦𝘦"
 	}

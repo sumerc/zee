@@ -2,25 +2,27 @@ version: 2
 
 before:
   hooks:
+    # Init the parakeet.cpp submodule and build its static archives before the
+    # arm64 cgo build links them (darwin/arm64 only; no-op elsewhere).
+    - git submodule update --init --recursive
+    - make parakeet-lib
     - packaging/mkicns.sh packaging/appicon.png
 
 builds:
   - id: zee
     env:
       - CGO_ENABLED=1
+      # Stamp the macOS 11.0 deploy target so the binary runs on every supported
+      # Mac (matches the -mcpu=apple-m1 / deploy target the archives were built with).
+      - CGO_CFLAGS=-mmacosx-version-min=11.0
+      - CGO_LDFLAGS=-mmacosx-version-min=11.0
+      - MACOSX_DEPLOYMENT_TARGET=11.0
     goos:
       - darwin
     goarch:
-      - amd64
-      - arm64
+      - arm64 # Apple Silicon only — local STT (parakeet.cpp) is arm64-only
     ldflags:
       - -s -w -X main.version={{ .Version }}
-
-universal_binaries:
-  - id: zee-universal
-    ids:
-      - zee
-    replace: false
 
 archives:
   - builds:

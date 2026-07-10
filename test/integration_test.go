@@ -3,16 +3,20 @@
 package test_test
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"zee/clipboard"
+	"zee/localmodel"
 )
 
 var testBinary string
@@ -286,5 +290,162 @@ func TestClipboardRestoreOnError(t *testing.T) {
 	}
 	if strings.TrimSpace(clip) != sentinel {
 		t.Errorf("clipboard not restored on error: got %q, want %q", strings.TrimSpace(clip), sentinel)
+	}
+}
+
+// --- Local model (Parakeet) tests ---
+//
+// End-to-end check that the on-device models transcribe their own languages:
+// the default English 110m, and the multilingual v3 across English, French and
+// Russian (auto-detect). Audio fixtures are committed WAVs synthesized with
+// macOS `say` so the expected transcript is known. Each case self-skips when
+// its gguf isn't downloaded (run `make download-models`), so the suite stays
+// green on machines/CI without the local models.
+
+// localModelsDir is the dev gguf location relative to the test working dir
+// (<repo>/test): models live at <repo>/models/parakeet/<Version>.
+func localModelsDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "models", "parakeet", localmodel.Version))
+	if err != nil {
+		t.Fatalf("resolve models dir: %v", err)
+	}
+	return dir
+}
+
+// transcribeFiles runs `zee -transcribe` over one or more files in a SINGLE
+// process (the model is loaded once and reused across files) and returns the
+// per-file transcripts — one per stdout line, in input order. Skips if the
+// model's gguf isn't present.
+func transcribeFiles(t *testing.T, modelID, lang string, files ...string) []string {
+	t.Helper()
+	m, ok := localmodel.ByID(modelID)
+	if !ok {
+		t.Fatalf("unknown local model %q", modelID)
+	}
+	modelsDir := localModelsDir(t)
+	if fi, err := os.Stat(filepath.Join(modelsDir, m.Filename)); err != nil || fi.Size() != m.SizeBytes {
+		t.Skipf("model %q not downloaded (run: make download-models)", modelID)
+	}
+
+	// Flags must precede the positional files: Go's flag parser stops at the
+	// first non-flag arg, so -transcribe and the files come last.
+	args := append([]string{"-logpath", t.TempDir(), "-provider", "parakeet",
+		"-model", modelID, "-lang", lang, "-transcribe"}, files...)
+	cmd := exec.Command(testBinary, args...)
+	cmd.Env = append(os.Environ(), "ZEE_MODELS_DIR="+modelsDir)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+
+	start := time.Now()
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("transcribe %v failed: %v\nstderr: %s", files, err, stderr.String())
+	}
+	t.Logf("%s: %d file(s) in %s", modelID, len(files), time.Since(start).Round(time.Millisecond))
+
+	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
+	if len(lines) != len(files) {
+		t.Fatalf("expected %d transcripts, got %d:\n%s", len(files), len(lines), stdout.String())
+	}
+	return lines
+}
+
+// assertTranscript checks the transcript matches the expected text by normalized
+// token overlap (TTS+ASR drifts slightly, so we don't require an exact match).
+func assertTranscript(t *testing.T, got, want string) {
+	t.Helper()
+	g, w := normalizeText(got), normalizeText(want)
+	if o := tokenOverlap(g, w); o < 0.8 {
+		t.Errorf("token overlap %.2f below 0.8\n got:  %q\n want: %q", o, g, w)
+	}
+}
+
+// normalizeText lowercases and collapses everything but letters/digits to single
+// spaces, so punctuation and casing don't fail the comparison.
+func normalizeText(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune(' ')
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// tokenOverlap is the fraction of want's tokens present in got (multiset). TTS+
+// ASR can drift slightly, so we assert a high overlap rather than exact match.
+func tokenOverlap(got, want string) float64 {
+	w := strings.Fields(want)
+	if len(w) == 0 {
+		return 0
+	}
+	have := map[string]int{}
+	for _, tok := range strings.Fields(got) {
+		have[tok]++
+	}
+	hits := 0
+	for _, tok := range w {
+		if have[tok] > 0 {
+			have[tok]--
+			hits++
+		}
+	}
+	return float64(hits) / float64(len(w))
+}
+
+func TestLocalParakeetModels(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("local Parakeet transcription is darwin/arm64 only")
+	}
+
+	const wantEN = "The quick brown fox jumps."
+
+	t.Run("english-110m", func(t *testing.T) {
+		got := transcribeFiles(t, "parakeet-110m-en", "en", "data/en.wav")
+		assertTranscript(t, got[0], wantEN)
+	})
+
+	// One process, one v3 load, three languages (auto-detect).
+	t.Run("v3-multilingual", func(t *testing.T) {
+		got := transcribeFiles(t, "parakeet-v3-multi", "",
+			"data/en.wav", "data/fr.wav", "data/ru.wav")
+		assertTranscript(t, got[0], wantEN)
+		assertTranscript(t, got[1], "Je m'appelle Thomas Dupont.")
+		assertTranscript(t, got[2], "Меня зовут Милена Иванова.")
+	})
+}
+
+// TestLocalModelDiagnostics checks that a local-model transcription emits the
+// same diagnostics/metrics record as the cloud path. We assert on the presence
+// of stable markers (provider, and a few metric keys) rather than parsing the
+// line, so the log format can evolve without breaking the test. The recording
+// path (-test) is what logs metrics; -transcribe is a quiet one-shot.
+func TestLocalModelDiagnostics(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("local Parakeet transcription is darwin/arm64 only")
+	}
+	const modelID = "parakeet-v3-multi"
+	m, ok := localmodel.ByID(modelID)
+	if !ok {
+		t.Fatalf("unknown local model %q", modelID)
+	}
+	modelsDir := localModelsDir(t)
+	if fi, err := os.Stat(filepath.Join(modelsDir, m.Filename)); err != nil || fi.Size() != m.SizeBytes {
+		t.Skipf("model %q not downloaded (run: make download-models)", modelID)
+	}
+
+	// Flags must precede the positional WAV: Go's flag parsing stops at the
+	// first non-flag argument. runZeeOpts already orders them correctly.
+	logDir := runZeeOpts(t, cmds("KEYDOWN", "KEYUP", "WAIT", "SLEEP 500", "QUIT"),
+		runOpts{env: []string{"ZEE_MODELS_DIR=" + modelsDir}},
+		"-provider", "parakeet", "-model", modelID, "-lang", "", "-test", "data/fr.wav")
+
+	diag := readLog(t, logDir, "diagnostics_log.txt")
+	for _, marker := range []string{"transcription", "provider=parakeet", "inference_ms", "rss_mb", "audio_s"} {
+		if !strings.Contains(diag, marker) {
+			t.Errorf("diagnostics missing %q marker\n--- diagnostics ---\n%s", marker, diag)
+		}
 	}
 }
