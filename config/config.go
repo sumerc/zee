@@ -11,11 +11,20 @@ import (
 	"zee/log"
 )
 
+// Hotkey is the saved push-to-talk combination. Key is the platform-native
+// keycode; an empty Hotkey (no Mods) means "use the built-in default".
+type Hotkey struct {
+	Mods  []string `json:"mods"`
+	Key   int      `json:"key"`
+	Label string   `json:"label"`
+}
+
 type Settings struct {
 	Language  string `json:"language"`
 	Device    string `json:"device"`
 	Provider  string `json:"provider"`
 	Model     string `json:"model"`
+	Hotkey    Hotkey `json:"hotkey"`
 	AutoPaste bool   `json:"auto_paste"`
 	AutoStart bool   `json:"auto_start"`
 }
@@ -37,6 +46,20 @@ func SetDir(d string) { dir = d }
 func Dir() string {
 	if dir != "" {
 		return dir
+	}
+	// ZEE_CONFIG_DIR overrides the location entirely (integration tests seed a
+	// credentials.json / config.json there; mirrors ZEE_MODELS_DIR, ZEE_LOG_PATH).
+	if d := os.Getenv("ZEE_CONFIG_DIR"); d != "" {
+		return d
+	}
+	// Dev builds keep all state next to the binary (<exe dir>/.zee) so a working
+	// copy is fully self-contained and never collides with the installed app's
+	// per-user config. Mirrors localmodel.Dir()'s dev/app split. The installed
+	// .app falls through to the OS-standard per-user location below.
+	if !IsAppBundle() {
+		if exe, err := os.Executable(); err == nil {
+			return filepath.Join(filepath.Dir(exe), ".zee")
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -62,6 +85,10 @@ func Dir() string {
 func settingsPath() string {
 	return filepath.Join(Dir(), settingsFile)
 }
+
+// SettingsPath is the on-disk config.json path (for the tray "Edit Settings…"
+// item to open in an editor).
+func SettingsPath() string { return settingsPath() }
 
 // IsAppBundle reports whether this binary is the installed Zee.app rather than a
 // local dev build, keyed off the executable path (not cwd). It's the single

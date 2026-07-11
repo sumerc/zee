@@ -20,11 +20,11 @@ import (
 	"zee/audio"
 	"zee/clipboard"
 	"zee/config"
-	"zee/doctor"
 	"zee/encoder"
 	"zee/hotkey"
 	"zee/log"
 	"zee/login"
+	"zee/setup"
 	"zee/shutdown"
 	"zee/transcriber"
 	"zee/tray"
@@ -182,11 +182,10 @@ func run() {
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
 	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
-	setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
+	setupFlag := flag.Bool("setup", false, "Run the interactive setup wizard (provider, key, device, permissions, hotkey) and exit")
 	deviceFlag := flag.String("device", "", "Use named microphone device")
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
-	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
 	debugFlag := flag.Bool("debug", true, "Enable diagnostic logging (timing, errors, events)")
 	debugTranscribeFlag := flag.Bool("debug-transcribe", false, "Enable transcription text logging")
 	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
@@ -234,12 +233,16 @@ func run() {
 		os.Exit(0)
 	}
 
-	if *doctorFlag {
-		wavFile := ""
-		if len(flag.Args()) > 0 {
-			wavFile = flag.Args()[0]
-		}
-		os.Exit(doctor.Run(wavFile))
+	// Cloud provider API keys come from credentials.json (via config.APIKey),
+	// never the environment. Wire the resolver before any provider is used —
+	// including the setup wizard below, which resolves a transcriber.
+	transcriber.SetKeySource(config.APIKey)
+
+	// The setup wizard is a self-contained mode: it configures provider/key,
+	// device, permissions and hotkey, then launches the app and exits. It does
+	// its own config load and (on macOS) re-execs as the bundle for TCC.
+	if *setupFlag {
+		os.Exit(setup.Run())
 	}
 	// Load persistent settings, merge with CLI flags
 	if err := config.Load(); err != nil {
@@ -307,17 +310,6 @@ func run() {
 		activeTranscriber.SetLanguage(*langFlag)
 	}
 
-	if *setupFlag && *deviceFlag == "" {
-		ctx, err := audio.NewContext()
-		if err != nil {
-			fatal("Error initializing audio: %v", err)
-		}
-		if dev, _ := selectDevice(ctx); dev != nil {
-			*deviceFlag = dev.Name
-		}
-		ctx.Close()
-	}
-
 	if *debugFlag {
 		log.SetTranscribeEnabled(*debugTranscribeFlag)
 		if err := log.Init(); err != nil {
@@ -376,12 +368,6 @@ func run() {
 					break
 				}
 			}
-		}
-	} else if *setupFlag {
-		selectedDevice, err = selectDevice(ctx)
-		if err != nil {
-			log.Warnf("device selection failed: %v — falling back to default", err)
-			selectedDevice = nil
 		}
 	}
 
@@ -547,6 +533,10 @@ func run() {
 	tray.OnEditHints(func() {
 		exec.Command("open", config.HintsPath()).Run()
 	})
+	tray.OnEditSettings(func() {
+		exec.Command("open", "-t", config.SettingsPath()).Run()
+	})
+	tray.SetHotkeyLabel(currentHotkeyCombo(cfg).Label)
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
@@ -642,7 +632,7 @@ func run() {
 
 	go audio.InitBeep()
 
-	hk := hotkey.New()
+	hk := hotkey.New(currentHotkeyCombo(cfg))
 	if err := hk.Register(); err != nil {
 		log.Errorf("hotkey register error: %v", err)
 		fatal("Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security.", err)
@@ -740,6 +730,16 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 			afterRecordCycle()
 		}
 	}
+}
+
+// currentHotkeyCombo maps the saved config hotkey to a hotkey.Combo, falling
+// back to the built-in default when nothing is saved.
+func currentHotkeyCombo(cfg config.Settings) hotkey.Combo {
+	c := hotkey.Combo{Mods: cfg.Hotkey.Mods, Key: cfg.Hotkey.Key, Label: cfg.Hotkey.Label}
+	if c.IsZero() {
+		return hotkey.DefaultCombo()
+	}
+	return c
 }
 
 func longPressDuration() time.Duration {

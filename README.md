@@ -108,7 +108,7 @@ On first run, macOS will prompt for permissions:
 
 2. **Accessibility** — Required for global hotkey and auto-paste. System Settings → Privacy & Security → Accessibility.
 
-If permissions aren't granted, zee will fail silently or the hotkey won't register. Run with `-doctor` to diagnose permission issues.
+If permissions aren't granted, zee will fail silently or the hotkey won't register. Run `zee -setup` to (re-)grant permissions and verify everything works.
 
 ## Testing
 
@@ -125,12 +125,11 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 |------|---------|-------------|
 | `-format` | mp3@16 | Audio format: `mp3@16`, `mp3@64`, or `flac` |
 | `-autopaste` | true | Auto-paste into focused window |
-| `-setup` | false | Select microphone device |
+| `-setup` | false | Run the interactive setup wizard (provider, key, device, permissions, hotkey) and exit |
 | `-device` | (default) | Use named microphone device |
 | `-lang` | en | Language code (e.g., `en`, `es`, `fr`) |
 | `-debug` | true | Enable diagnostic logging |
 | `-debug-transcribe` | false | Enable transcription text logging |
-| `-doctor` | false | Run system diagnostics and exit |
 | `-logpath` | OS-specific | Log directory (use `./` for current dir) |
 | `-hints` | - | Vocabulary hints for transcription (comma-separated) |
 | `-transcribe` | - | Audio file to transcribe and exit |

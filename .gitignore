@@ -8,6 +8,9 @@ packaging/Zee.icns
 # Local STT models (downloaded / dev-placed ggufs — never committed)
 /models/
 
+# Dev-build state (config.json, credentials.json, samples — dev/app split)
+/.zee/
+
 # Environment
 .env
 

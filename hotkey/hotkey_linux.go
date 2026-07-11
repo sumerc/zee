@@ -9,37 +9,71 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
-	evKey      = 1
-	keyPress   = 1
-	keyRelease = 0
-	keyLCtrl   = 29
-	keyRCtrl   = 97
-	keyLShift  = 42
-	keyRShift  = 54
-	keySpace   = 57
+	evKey    = 1
+	keyPress = 1
+	keyRel   = 0
 )
 
 const inputEventSize = 24
 
+// Linux evdev scancodes for the modifier groups, by canonical name.
+var linuxMods = map[string][]uint16{
+	"ctrl":   {29, 97},   // L/R Ctrl
+	"shift":  {42, 54},   // L/R Shift
+	"option": {56, 100},  // L/R Alt
+	"cmd":    {125, 126}, // L/R Meta/Super
+}
+
+const keyEsc = 1
+
+// DefaultCombo is the built-in hotkey (Ctrl+Shift+Space); 57 is KEY_SPACE.
+func DefaultCombo() Combo {
+	return Combo{Mods: []string{"ctrl", "shift"}, Key: 57, Label: "⌃⇧Space"}
+}
+
 type linuxHotkey struct {
 	keydown chan struct{}
 	keyup   chan struct{}
-	files   []*os.File
-	stop    chan struct{}
-	once    sync.Once
+
+	mu    sync.Mutex
+	files []*os.File
+	stop  chan struct{}
+	wg    sync.WaitGroup
+	combo Combo
 }
 
-func New() Hotkey {
+func New(c Combo) Hotkey {
+	if c.IsZero() {
+		c = DefaultCombo()
+	}
 	return &linuxHotkey{
 		keydown: make(chan struct{}, 1),
 		keyup:   make(chan struct{}, 1),
+		combo:   c,
 	}
 }
 
 func (h *linuxHotkey) Register() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.startLocked()
+}
+
+func (h *linuxHotkey) startLocked() error {
+	keyCode := uint16(h.combo.Key)
+	var modGroups [][]uint16
+	for _, m := range h.combo.Mods {
+		codes, ok := linuxMods[m]
+		if !ok {
+			return fmt.Errorf("unsupported hotkey modifier %q on linux", m)
+		}
+		modGroups = append(modGroups, codes)
+	}
+
 	keyboards, err := findKeyboards()
 	if err != nil {
 		return fmt.Errorf("finding keyboards: %w", err)
@@ -49,30 +83,43 @@ func (h *linuxHotkey) Register() error {
 	}
 
 	h.stop = make(chan struct{})
-
 	for _, path := range keyboards {
 		f, err := os.Open(path)
 		if err != nil {
 			continue
 		}
 		h.files = append(h.files, f)
-		go h.readEvents(f)
+		h.wg.Add(1)
+		go h.readEvents(f, modGroups, keyCode, h.stop)
 	}
-
 	if len(h.files) == 0 {
+		h.stop = nil
 		return fmt.Errorf("could not open any keyboard device (run: sudo usermod -aG input $USER, then re-login)")
 	}
-
 	return nil
 }
 
-func (h *linuxHotkey) readEvents(f *os.File) {
+func (h *linuxHotkey) stopLocked() {
+	if h.stop != nil {
+		close(h.stop)
+		h.stop = nil
+	}
+	for _, f := range h.files {
+		f.Close()
+	}
+	h.files = nil
+	h.wg.Wait()
+}
+
+func (h *linuxHotkey) readEvents(f *os.File, modGroups [][]uint16, keyCode uint16, stop chan struct{}) {
+	defer h.wg.Done()
 	buf := make([]byte, inputEventSize*16)
-	var ctrlHeld, shiftHeld, spaceHeld bool
+	held := make([]bool, len(modGroups))
+	keyHeld := false
 
 	for {
 		select {
-		case <-h.stop:
+		case <-stop:
 			return
 		default:
 		}
@@ -86,55 +133,225 @@ func (h *linuxHotkey) readEvents(f *os.File) {
 			evType := binary.LittleEndian.Uint16(buf[i+16:])
 			evCode := binary.LittleEndian.Uint16(buf[i+18:])
 			evValue := int32(binary.LittleEndian.Uint32(buf[i+20:]))
-
 			if evType != evKey {
 				continue
 			}
-
 			pressed := evValue == keyPress
-			released := evValue == keyRelease
+			released := evValue == keyRel
 
-			switch evCode {
-			case keyLCtrl, keyRCtrl:
-				ctrlHeld = pressed || (!released && ctrlHeld)
-			case keyLShift, keyRShift:
-				shiftHeld = pressed || (!released && shiftHeld)
-			case keySpace:
-				if pressed && !spaceHeld && ctrlHeld && shiftHeld {
-					spaceHeld = true
-					select {
-					case h.keydown <- struct{}{}:
-					default:
+			for gi, codes := range modGroups {
+				for _, c := range codes {
+					if evCode == c {
+						if pressed {
+							held[gi] = true
+						} else if released {
+							held[gi] = false
+						}
 					}
-				} else if released && spaceHeld {
-					spaceHeld = false
-					select {
-					case h.keyup <- struct{}{}:
-					default:
-					}
+				}
+			}
+
+			if evCode != keyCode {
+				continue
+			}
+			allMods := true
+			for _, hh := range held {
+				if !hh {
+					allMods = false
+					break
+				}
+			}
+			if pressed && !keyHeld && allMods {
+				keyHeld = true
+				select {
+				case h.keydown <- struct{}{}:
+				default:
+				}
+			} else if released && keyHeld {
+				keyHeld = false
+				select {
+				case h.keyup <- struct{}{}:
+				default:
 				}
 			}
 		}
 	}
 }
 
+func (h *linuxHotkey) Rebind(c Combo) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !hasModifier(c.Mods) {
+		return fmt.Errorf("hotkey needs at least one modifier")
+	}
+	prev := h.combo
+	h.stopLocked()
+	h.combo = c
+	if err := h.startLocked(); err != nil {
+		h.combo = prev
+		_ = h.startLocked() // restore the previous binding
+		return err
+	}
+	return nil
+}
+
+func (h *linuxHotkey) Current() Combo {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.combo
+}
+
 func (h *linuxHotkey) Unregister() {
-	h.once.Do(func() {
-		if h.stop != nil {
-			close(h.stop)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.stopLocked()
+}
+
+func (h *linuxHotkey) Keydown() <-chan struct{} { return h.keydown }
+func (h *linuxHotkey) Keyup() <-chan struct{}   { return h.keyup }
+
+// Capture records the next modifier+key chord pressed on any keyboard.
+func (h *linuxHotkey) Capture(cancel <-chan struct{}) (Combo, error) {
+	keyboards, err := findKeyboards()
+	if err != nil || len(keyboards) == 0 {
+		return Combo{}, ErrCaptureCanceled
+	}
+	result := make(chan Combo, 1)
+	canceled := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	var files []*os.File
+	for _, path := range keyboards {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
 		}
-		for _, f := range h.files {
+		files = append(files, f)
+		go captureReader(f, result, canceled, stop)
+	}
+	defer func() {
+		close(stop)
+		for _, f := range files {
 			f.Close()
 		}
-	})
+	}()
+	if len(files) == 0 {
+		return Combo{}, ErrCaptureCanceled
+	}
+
+	select {
+	case c := <-result:
+		return c, nil
+	case <-canceled:
+		return Combo{}, ErrCaptureCanceled
+	case <-cancel:
+		return Combo{}, ErrCaptureCanceled
+	case <-time.After(captureTimeout):
+		return Combo{}, ErrCaptureCanceled
+	}
 }
 
-func (h *linuxHotkey) Keydown() <-chan struct{} {
-	return h.keydown
+func captureReader(f *os.File, result chan<- Combo, canceled chan<- struct{}, stop chan struct{}) {
+	buf := make([]byte, inputEventSize*16)
+	held := map[string]bool{}
+
+	for {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		n, err := f.Read(buf)
+		if err != nil {
+			return
+		}
+		for i := 0; i+inputEventSize <= n; i += inputEventSize {
+			evType := binary.LittleEndian.Uint16(buf[i+16:])
+			evCode := binary.LittleEndian.Uint16(buf[i+18:])
+			evValue := int32(binary.LittleEndian.Uint32(buf[i+20:]))
+			if evType != evKey {
+				continue
+			}
+			pressed := evValue == keyPress
+			released := evValue == keyRel
+
+			if name, ok := modName(evCode); ok {
+				if pressed {
+					held[name] = true
+				} else if released {
+					held[name] = false
+				}
+				continue
+			}
+			if !pressed {
+				continue
+			}
+			// A non-modifier key was pressed.
+			var mods []string
+			for _, name := range []string{"ctrl", "option", "shift", "cmd"} {
+				if held[name] {
+					mods = append(mods, name)
+				}
+			}
+			if len(mods) == 0 {
+				if evCode == keyEsc {
+					select {
+					case canceled <- struct{}{}:
+					default:
+					}
+					return
+				}
+				continue // ignore unmodified keys
+			}
+			select {
+			case result <- Combo{Mods: mods, Key: int(evCode), Label: comboLabel(mods, evCode)}:
+			default:
+			}
+			return
+		}
+	}
 }
 
-func (h *linuxHotkey) Keyup() <-chan struct{} {
-	return h.keyup
+func modName(code uint16) (string, bool) {
+	for name, codes := range linuxMods {
+		for _, c := range codes {
+			if c == code {
+				return name, true
+			}
+		}
+	}
+	return "", false
+}
+
+func comboLabel(mods []string, key uint16) string {
+	glyph := ""
+	for _, m := range []string{"ctrl", "option", "shift", "cmd"} {
+		for _, have := range mods {
+			if have == m {
+				glyph += modGlyphs[m]
+			}
+		}
+	}
+	return glyph + keyGlyph(key)
+}
+
+var modGlyphs = map[string]string{"ctrl": "⌃", "option": "⌥", "shift": "⇧", "cmd": "⌘"}
+
+func keyGlyph(code uint16) string {
+	if g, ok := linuxKeyGlyphs[code]; ok {
+		return g
+	}
+	return fmt.Sprintf("Key%d", code)
+}
+
+var linuxKeyGlyphs = map[uint16]string{
+	16: "Q", 17: "W", 18: "E", 19: "R", 20: "T", 21: "Y", 22: "U", 23: "I", 24: "O", 25: "P",
+	30: "A", 31: "S", 32: "D", 33: "F", 34: "G", 35: "H", 36: "J", 37: "K", 38: "L",
+	44: "Z", 45: "X", 46: "C", 47: "V", 48: "B", 49: "N", 50: "M",
+	2: "1", 3: "2", 4: "3", 5: "4", 6: "5", 7: "6", 8: "7", 9: "8", 10: "9", 11: "0",
+	57: "Space", 15: "Tab", 28: "Enter", 1: "Esc",
+	103: "↑", 105: "←", 106: "→", 108: "↓",
+	59: "F1", 60: "F2", 61: "F3", 62: "F4", 63: "F5", 64: "F6",
+	65: "F7", 66: "F8", 67: "F9", 68: "F10", 87: "F11", 88: "F12",
 }
 
 func findKeyboards() ([]string, error) {
@@ -142,7 +359,6 @@ func findKeyboards() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	var keyboards []string
 	for _, e := range entries {
 		if !strings.HasPrefix(e.Name(), "event") {
@@ -162,8 +378,7 @@ func isKeyboard(eventName string) bool {
 	if err != nil {
 		return false
 	}
-	caps := strings.TrimSpace(string(data))
-	return len(caps) > 10
+	return len(strings.TrimSpace(string(data))) > 10
 }
 
 func Diagnose() (string, error) {
@@ -174,7 +389,6 @@ func Diagnose() (string, error) {
 	if len(keyboards) == 0 {
 		return "", fmt.Errorf("no keyboard devices found (is user in 'input' group?)")
 	}
-
 	var opened string
 	for _, path := range keyboards {
 		f, err := os.Open(path)
@@ -187,6 +401,5 @@ func Diagnose() (string, error) {
 	if opened == "" {
 		return "", fmt.Errorf("found %d keyboard(s) but cannot open any (run: sudo usermod -aG input $USER)", len(keyboards))
 	}
-
 	return fmt.Sprintf("%d keyboard(s) found, opened %s", len(keyboards), opened), nil
 }

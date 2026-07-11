@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add an interactive `zee -setup` wizard that configures a working install end to end: transcription provider + API key, input device, auto-paste, Microphone and Accessibility permissions (prompted from the app itself so macOS attributes them to Zee), and a custom push-to-talk hotkey captured live and validated by real registration — then verifies the result. It is idempotent (re-run any time to change settings or re-grant permissions) and, on macOS, re-execs as the installed bundle so permission prompts attribute correctly. The push-to-talk hotkey is now user-configurable and persisted in `config.json`
+- Remove the `-doctor` flag; its checks are now the setup wizard's verification pass
+- `install.sh` now hands off to `zee -setup` after installing (interactive terminals only), replacing the `launchctl setenv` API-key instructions; it also quits a running instance before replacing the bundle
+- Add a tray "Settings → Edit Settings…" item that opens `config.json`, and a disabled "Hotkey: <combo>" line showing the current push-to-talk binding
+- Cloud provider API keys now live in a `credentials.json` (0600) beside `config.json`, read by the app at startup regardless of how it's launched — the `*_API_KEY` environment variables are no longer read (breaking: existing users must re-add their key). The login-item plist no longer bakes keys into its environment. Dev builds keep all state self-contained in `<binary dir>/.zee`, isolated from the installed app; `ZEE_CONFIG_DIR` overrides the config location
 - `install.sh` reads the model list (filenames, hashes, prefetch flags) from a generated `localmodel/manifest.txt` instead of a hand-copied list, making `localmodel.go` the single source of truth; a test fails the build if the manifest drifts. Renamed `cmd/modeldl` → `cmd/localmodels` with `download` and `manifest` subcommands
 - Fix data races on tray state: a single `trayMu` now guards the recording flag, model list, device list, and language fields (previously the language/recording fields had no lock while the model-switch goroutine and the systray click thread both touched them)
 - Fix a data race on the selected/preferred microphone: the device-monitor goroutine read them unlocked while the tray callback wrote them; both now go through `captureMu`

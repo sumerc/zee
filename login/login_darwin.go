@@ -57,13 +57,8 @@ func Enable() error {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
 
-	var env strings.Builder
-	for _, key := range []string{"GROQ_API_KEY", "OPENAI_API_KEY", "DEEPGRAM_API_KEY"} {
-		if v := os.Getenv(key); v != "" {
-			fmt.Fprintf(&env, "\t\t\t<key>%s</key>\n\t\t\t<string>%s</string>\n", key, xmlEscape(v))
-		}
-	}
-
+	// No EnvironmentVariables: API keys come from credentials.json, read by the
+	// app at startup regardless of how it was launched.
 	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -78,12 +73,9 @@ func Enable() error {
 	<true/>
 	<key>LimitLoadToSessionType</key>
 	<string>Aqua</string>
-	<key>EnvironmentVariables</key>
-	<dict>
-%s	</dict>
 </dict>
 </plist>
-`, plistName(), xmlEscape(exe), env.String())
+`, plistName(), xmlEscape(exe))
 
 	path, err := plistPath()
 	if err != nil {

@@ -1,0 +1,9 @@
+//go:build !darwin
+
+package setup
+
+// Non-macOS: no TCC re-exec dance and no .app bundle to launch/quit.
+
+func maybeReexec() (code int, done bool) { return 0, false }
+func launchInstalledApp()                {}
+func quitRunningApp()                    {}

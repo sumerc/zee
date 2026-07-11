@@ -94,6 +94,9 @@ MOUNT="$(hdiutil attach -nobrowse -readonly -mountrandom /tmp "${TMP}/${DMG}" \
 [[ -n "$MOUNT" && -d "$MOUNT/Zee.app" ]] || err "Zee.app not found in DMG"
 
 if [[ -d "${APP_DIR}/Zee.app" ]]; then
+  # Quit a running instance before replacing the bundle (and so the post-install
+  # wizard can register the hotkey / launch a fresh copy).
+  osascript -e 'tell application "Zee" to quit' >/dev/null 2>&1 || true
   log "Removing existing ${APP_DIR}/Zee.app"
   run_or_sudo rm -rf "${APP_DIR}/Zee.app"
 fi
@@ -107,23 +110,31 @@ run_or_sudo xattr -cr "${APP_DIR}/Zee.app"
 log "Fetching offline models (best-effort)..."
 prefetch_models || true
 
-cat <<EOF
+log "Zee ${VERSION} installed to ${APP_DIR}/Zee.app"
 
-Zee ${VERSION} installed to ${APP_DIR}/Zee.app
+# Hand off to the in-app setup wizard, which grants permissions (attributed to
+# Zee.app because it runs as the bundle), stores any cloud API key, captures a
+# hotkey, and verifies everything. Run it only with a real terminal — under
+# `curl | bash` stdin is the script, so resolve the controlling tty explicitly
+# and wire it as the app's stdio.
+TTY=""
+if [[ -e /dev/tty ]]; then
+  TTY="$(tty < /dev/tty 2>/dev/null || true)"
+  [[ "$TTY" == /dev/* ]] || TTY=""
+fi
 
-Next:
-  1. Launch Zee from Spotlight or:
-       open ${APP_DIR}/Zee.app
+if [[ -n "$TTY" ]]; then
+  log "Starting setup..."
+  open -W -a "${APP_DIR}/Zee.app" --stdin "$TTY" --stdout "$TTY" --stderr "$TTY" \
+    --args -setup || true
+else
+  cat <<EOF
 
-  2. macOS may prompt for Microphone and Accessibility.
-     Grant both, then hold Ctrl+Shift+Space to record.
+Setup was not run (no interactive terminal detected).
+Finish configuring Zee — provider + API key, permissions, and hotkey — with:
 
-On Apple Silicon, Zee works offline out of the box — no API key needed.
-For cloud providers, set a key and pick the provider from the tray menu:
-       launchctl setenv GROQ_API_KEY       your_key
-       launchctl setenv OPENAI_API_KEY     your_key
-       launchctl setenv DEEPGRAM_API_KEY   your_key
-       launchctl setenv MISTRAL_API_KEY    your_key
-       launchctl setenv ELEVENLABS_API_KEY your_key
-     (add to ~/.zshrc to persist across logins)
+    /Applications/Zee.app/Contents/MacOS/zee -setup
+
+On Apple Silicon, Zee also works offline out of the box (local model, no key).
 EOF
+fi

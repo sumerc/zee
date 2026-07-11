@@ -43,8 +43,7 @@ make benchmark WAV=file.wav RUNS=5
 - `-format <mp3@16|mp3@64|flac>` - audio format (default: mp3@16)
 - `-lang <code>` - language code for transcription (default: en, also settable from tray menu)
 - `-device <name>` - use named microphone device (also switchable from tray menu)
-- `-setup` - select microphone device interactively
-- `-doctor` - run system diagnostics and exit
+- `-setup` - run the interactive setup wizard (provider + API key, device, permissions, hotkey) and exit; absorbs the old `-doctor` verification
 - `-benchmark <wav>` - run benchmark instead of live recording
 - `-runs N` - benchmark iterations (default: 3)
 - `-logpath <path>` - log directory (default: `$ZEE_LOG_PATH` or OS-specific, use `./` for current directory)
@@ -70,7 +69,8 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - `hotkey/` - global hotkey registration (Ctrl+Shift+Space) with platform-specific backends
 - `clipboard/` - platform-specific clipboard and paste operations (Cmd+V / Ctrl+V)
 - `audio/` - platform-specific audio I/O: capture (malgo on macOS, PulseAudio on Linux) and feedback-tone playback (`PlayStart/PlayEnd/...`); on macOS both share one malgo context + a private device-lifecycle lock
-- `doctor/` - system diagnostics (`-doctor` flag)
+- `setup/` - interactive setup wizard (`-setup` flag): provider + API key, device, TCC permissions, hotkey capture, verify pass; absorbed the former `doctor/`
+- `permissions/` - macOS TCC prompting (Microphone via AVFoundation, Accessibility via `AXIsProcessTrustedWithOptions`)
 - `internal/mp3/` - vendored shine-mp3 encoder (with mono fix)
 - `device.go` - microphone picker with arrow-key navigation
 - `vad.go` - voice activity detection using WebRTC VAD with debounced speech confirmation

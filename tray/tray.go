@@ -63,10 +63,12 @@ var (
 	langIntent string // user's persisted choice; survives models that can't offer it
 	langCb     func(code string, persist bool)
 
-	appVersion    string
-	checkUpdateCb func()
-	saveAudioCb   func()
-	editHintsCb   func()
+	appVersion     string
+	checkUpdateCb  func()
+	saveAudioCb    func()
+	editHintsCb    func()
+	editSettingsCb func()
+	hotkeyLabel    string // display-only current push-to-talk combo (e.g. "⌃⇧Space")
 )
 
 var languages []transcriber.Language // set via SetLanguages
@@ -213,10 +215,16 @@ func SetHintsEnabled(on bool) {
 	setHintsEnabled(on)
 }
 
-func SetVersion(v string)     { appVersion = v }
-func OnCheckUpdate(fn func()) { checkUpdateCb = fn }
-func OnSaveAudio(fn func())   { saveAudioCb = fn }
-func OnEditHints(fn func())   { editHintsCb = fn }
+func SetVersion(v string)      { appVersion = v }
+func OnCheckUpdate(fn func())  { checkUpdateCb = fn }
+func OnSaveAudio(fn func())    { saveAudioCb = fn }
+func OnEditHints(fn func())    { editHintsCb = fn }
+func OnEditSettings(fn func()) { editSettingsCb = fn }
+
+// SetHotkeyLabel sets the display-only current push-to-talk combo shown (and
+// disabled) in the menu. Call before Init. The hotkey is changed via
+// `zee -setup`, not the tray.
+func SetHotkeyLabel(label string) { hotkeyLabel = label }
 
 func SetLanguage(code string, onSwitch func(code string, persist bool)) {
 	trayMu.Lock()

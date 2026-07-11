@@ -20,13 +20,14 @@ var (
 	deviceItems    []*systray.MenuItem
 	deviceReady    chan struct{}
 
-	mSettings   *systray.MenuItem
-	mAutoPaste  *systray.MenuItem
-	mLogin      *systray.MenuItem
-	mEditHints  *systray.MenuItem
-	mBackend    *systray.MenuItem
-	mLanguage   *systray.MenuItem
-	langEntries []struct {
+	mSettings     *systray.MenuItem
+	mAutoPaste    *systray.MenuItem
+	mLogin        *systray.MenuItem
+	mEditHints    *systray.MenuItem
+	mEditSettings *systray.MenuItem
+	mBackend      *systray.MenuItem
+	mLanguage     *systray.MenuItem
+	langEntries   []struct {
 		item *systray.MenuItem
 		code string
 	}
@@ -249,8 +250,20 @@ func onReady() {
 		mEditHints.Disable()
 	}
 
+	mEditSettings = mSettings.AddSubMenuItem("Edit Settings…", "Open config.json (changes apply on restart)")
+	mEditSettings.Click(func() {
+		if editSettingsCb != nil {
+			go editSettingsCb()
+		}
+	})
+
 	sep := mSettings.AddSubMenuItem("─────────", "")
 	sep.Disable()
+
+	if hotkeyLabel != "" {
+		mHotkey := mSettings.AddSubMenuItem("Hotkey: "+hotkeyLabel, "Change with `zee -setup`")
+		mHotkey.Disable()
+	}
 
 	mDevices = mSettings.AddSubMenuItem("Microphone", "Select input device")
 

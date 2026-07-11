@@ -5,6 +5,7 @@ package test_test
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -65,6 +66,47 @@ func cmds(parts ...string) string {
 	return strings.Join(parts, "\n") + "\n"
 }
 
+// seedCredentials writes a per-run credentials.json into a fresh config dir for
+// any *_API_KEY present in env (later entries win, matching how opts.env is
+// appended after os.Environ), and returns that dir for ZEE_CONFIG_DIR. The app
+// no longer reads keys from the environment, so this bridges CI key secrets to
+// the subprocess while isolating each run's config.
+func seedCredentials(t *testing.T, env []string) string {
+	t.Helper()
+	envToProvider := map[string]string{
+		"GROQ_API_KEY":       "groq",
+		"DEEPGRAM_API_KEY":   "deepgram",
+		"OPENAI_API_KEY":     "openai",
+		"MISTRAL_API_KEY":    "mistral",
+		"ELEVENLABS_API_KEY": "elevenlabs",
+	}
+	creds := map[string]string{}
+	for _, kv := range env {
+		i := strings.IndexByte(kv, '=')
+		if i < 0 {
+			continue
+		}
+		p, ok := envToProvider[kv[:i]]
+		if !ok {
+			continue
+		}
+		if v := kv[i+1:]; v != "" {
+			creds[p] = v
+		} else {
+			delete(creds, p)
+		}
+	}
+	dir := t.TempDir()
+	data, err := json.MarshalIndent(creds, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal credentials: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "credentials.json"), data, 0600); err != nil {
+		t.Fatalf("seed credentials: %v", err)
+	}
+	return dir
+}
+
 type runOpts struct {
 	env     []string // extra KEY=VALUE pairs
 	wantErr bool     // expect non-zero exit
@@ -83,6 +125,11 @@ func runZeeOpts(t *testing.T, stdin string, opts runOpts, args ...string) (logDi
 	cmd := exec.Command(testBinary, cmdArgs...)
 	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Env = append(os.Environ(), opts.env...)
+	// Keys come from credentials.json now, not the environment. Bridge any
+	// *_API_KEY in the effective env into a fresh per-run credentials.json (also
+	// isolating config), so CI key secrets and the "empty key" overrides still
+	// reach the subprocess with identical provider-resolution behavior.
+	cmd.Env = append(cmd.Env, "ZEE_CONFIG_DIR="+seedCredentials(t, cmd.Env))
 
 	out, err := cmd.CombinedOutput()
 	if opts.wantErr {
