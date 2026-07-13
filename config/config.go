@@ -43,12 +43,26 @@ var (
 	}
 )
 
-func SetDir(d string) { dir = d }
+// dirMu guards dir on its own lock (not mu): reload() runs under mu and calls
+// Dir() via settingsPath(), so sharing mu would deadlock.
+var dirMu sync.Mutex
+
+func SetDir(d string) {
+	dirMu.Lock()
+	dir = d
+	dirMu.Unlock()
+}
 
 func Dir() string {
-	if dir != "" {
-		return dir
+	dirMu.Lock()
+	defer dirMu.Unlock()
+	if dir == "" {
+		dir = resolveDir()
 	}
+	return dir
+}
+
+func resolveDir() string {
 	// ZEE_CONFIG_DIR overrides the location entirely (integration tests seed a
 	// credentials.json / config.json there; mirrors ZEE_MODELS_DIR, ZEE_LOG_PATH).
 	if d := os.Getenv("ZEE_CONFIG_DIR"); d != "" {
@@ -105,7 +119,6 @@ func IsAppBundle() bool {
 }
 
 func Load() error {
-	dir = Dir()
 	current = defaults
 
 	data, err := os.ReadFile(settingsPath())
@@ -140,14 +153,23 @@ func Get() Settings {
 // on disk — the live half of the tray "Edit Settings…" flow. onChange runs on
 // the watcher goroutine with the freshly loaded settings; the app's own saves
 // and content-identical rewrites are suppressed (compared against the in-memory
-// settings, so only real external edits fire).
-func Watch(onChange func(Settings)) {
+// settings, so only real external edits fire). The returned func stops the
+// watcher — the app never needs it, but tests must stop leaked pollers.
+func Watch(onChange func(Settings)) (stop func()) {
 	var lastMod time.Time
 	if fi, err := os.Stat(settingsPath()); err == nil {
 		lastMod = fi.ModTime()
 	}
+	done := make(chan struct{})
 	go func() {
-		for range time.Tick(time.Second) {
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+			}
 			fi, err := os.Stat(settingsPath())
 			if err != nil || fi.ModTime().Equal(lastMod) {
 				continue
@@ -158,6 +180,7 @@ func Watch(onChange func(Settings)) {
 			}
 		}
 	}()
+	return func() { close(done) }
 }
 
 // reload re-reads config.json into the live settings. Read + compare + swap all
@@ -193,7 +216,7 @@ func Update(fn func(*Settings)) {
 }
 
 func save(s Settings) {
-	d := dir
+	d := Dir()
 	if err := os.MkdirAll(d, 0755); err != nil {
 		log.Warnf("settings: create dir: %v", err)
 		return

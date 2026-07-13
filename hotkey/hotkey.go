@@ -3,7 +3,9 @@ package hotkey
 import (
 	"errors"
 	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // captureTimeout bounds how long Capture waits for the user to press a chord.
@@ -92,6 +94,26 @@ func (c Combo) Equal(o Combo) bool {
 	slices.Sort(a)
 	slices.Sort(b)
 	return slices.Equal(a, b)
+}
+
+// Display renders the combo for humans as "⌃ + ⇧ + Space": the compact Label
+// ("⌃⇧Space") is split into its modifier symbols and key, joined with " + ".
+// Used everywhere a combo is shown (tray, setup/doctor prose).
+func (c Combo) Display() string {
+	var parts []string
+	rest := c.Label
+	for len(rest) > 0 {
+		r, size := utf8.DecodeRuneInString(rest)
+		if !strings.ContainsRune("⌃⇧⌥⌘", r) {
+			break
+		}
+		parts = append(parts, string(r))
+		rest = rest[size:]
+	}
+	if rest != "" {
+		parts = append(parts, rest)
+	}
+	return strings.Join(parts, " + ")
 }
 
 // ErrCaptureCanceled is returned by Capture when the user cancels (Escape /

@@ -156,12 +156,13 @@ func TestWatchReloadsExternalEdits(t *testing.T) {
 	Update(func(s *Settings) { s.Language = "en" }) // create the file
 
 	ch := make(chan Settings, 4)
-	Watch(func(s Settings) {
+	stop := Watch(func(s Settings) {
 		select {
 		case ch <- s:
 		default:
 		}
 	})
+	t.Cleanup(stop)
 
 	// An external edit (what "Edit Settings…" produces) must fire the callback
 	// and swap the in-memory settings.

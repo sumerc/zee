@@ -87,6 +87,17 @@ func SetTranscribeEnabled(on bool) {
 	logMu.Unlock()
 }
 
+// maxLogSize caps each append-only log file: logging is always on, so without
+// a bound the files would grow for the life of the install. On overflow the
+// file is rotated to <name>.old (one generation kept).
+const maxLogSize = 10 << 20 // 10 MB
+
+func rotateIfLarge(path string) {
+	if st, err := os.Stat(path); err == nil && st.Size() > maxLogSize {
+		os.Rename(path, path+".old")
+	}
+}
+
 func Init() error {
 	logMu.Lock()
 	defer logMu.Unlock()
@@ -100,6 +111,7 @@ func Init() error {
 	var err error
 
 	diagPath := filepath.Join(dir, "diagnostics_log.txt")
+	rotateIfLarge(diagPath)
 	diagFile, err = os.OpenFile(diagPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -107,6 +119,7 @@ func Init() error {
 
 	if transcribeOn {
 		transcribePath := filepath.Join(dir, "transcribe_log.txt")
+		rotateIfLarge(transcribePath)
 		transcribeFile, err = os.OpenFile(transcribePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			diagFile.Close()

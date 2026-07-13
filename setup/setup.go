@@ -19,7 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"zee/audio"
 	"zee/clipboard"
@@ -770,24 +769,8 @@ func boolWord(b bool, yes, no string) string {
 	return no
 }
 
-// comboDisplay renders a combo for CLI prose as "⌃ + ⇧ + Space" — the compact
-// tray form ("⌃⇧Space") is fine in a menu but reads poorly in sentences.
-func comboDisplay(c hotkey.Combo) string {
-	var parts []string
-	rest := c.Label
-	for len(rest) > 0 {
-		r, size := utf8.DecodeRuneInString(rest)
-		if !strings.ContainsRune("⌃⇧⌥⌘", r) {
-			break
-		}
-		parts = append(parts, string(r))
-		rest = rest[size:]
-	}
-	if rest != "" {
-		parts = append(parts, rest)
-	}
-	return strings.Join(parts, " + ")
-}
+// comboDisplay renders a combo for CLI prose as "⌃ + ⇧ + Space".
+func comboDisplay(c hotkey.Combo) string { return c.Display() }
 
 // currentCombo is the saved hotkey, or the built-in default when none is saved.
 func currentCombo() hotkey.Combo {

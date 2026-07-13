@@ -198,7 +198,6 @@ func run() {
 	deviceFlag := flag.String("device", "", "Use named microphone device")
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
-	debugFlag := flag.Bool("debug", true, "Enable diagnostic logging (timing, errors, events)")
 	debugTranscribeFlag := flag.Bool("debug-transcribe", false, "Enable transcription text logging")
 	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
@@ -322,13 +321,11 @@ func run() {
 		activeTranscriber.SetLanguage(*langFlag)
 	}
 
-	if *debugFlag {
-		log.SetTranscribeEnabled(*debugTranscribeFlag)
-		if err := log.Init(); err != nil {
-			alert.Warn("Debug logging will not work.\n\n" + err.Error())
-		} else {
-			log.SessionStart(activeTranscriber.Name(), activeFormat, activeFormat)
-		}
+	log.SetTranscribeEnabled(*debugTranscribeFlag)
+	if err := log.Init(); err != nil {
+		alert.Warn("Diagnostic logging will not work.\n\n" + err.Error())
+	} else {
+		log.SessionStart(activeTranscriber.Name(), activeFormat, activeFormat)
 	}
 
 	if *testFlag {
@@ -558,7 +555,7 @@ func run() {
 		})
 		exec.Command("open", "-t", config.SettingsPath()).Run()
 	})
-	tray.SetHotkeyLabel(currentHotkeyCombo(cfg).Label)
+	tray.SetHotkeyLabel(currentHotkeyCombo(cfg).Display())
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
@@ -736,10 +733,10 @@ func run() {
 		if want := currentHotkeyCombo(s); !want.Equal(hk.Current()) {
 			if err := hk.Rebind(want); err != nil {
 				log.Errorf("settings reload: hotkey %s: %v", want.Label, err)
-				tray.SetError("Hotkey " + want.Label + " rejected — keeping " + hk.Current().Label)
+				tray.SetError("Hotkey " + want.Display() + " rejected — keeping " + hk.Current().Display())
 			} else {
 				log.Info("settings reload: hotkey → " + want.Label)
-				tray.SetHotkeyLabel(want.Label)
+				tray.SetHotkeyLabel(want.Display())
 			}
 		}
 	}

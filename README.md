@@ -128,7 +128,6 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 | `-setup` | false | Run the interactive setup wizard (provider, key, device, permissions, hotkey) and exit |
 | `-device` | (default) | Use named microphone device |
 | `-lang` | en | Language code (e.g., `en`, `es`, `fr`) |
-| `-debug` | true | Enable diagnostic logging |
 | `-debug-transcribe` | false | Enable transcription text logging |
 | `-logpath` | OS-specific | Log directory (use `./` for current dir) |
 | `-hints` | - | Vocabulary hints for transcription (comma-separated) |

@@ -38,8 +38,7 @@ make benchmark WAV=file.wav RUNS=5
 
 ## Flags
 
-- `-debug` - enable diagnostic logging (default: false)
-- `-debug-transcribe` - enable transcription text logging (requires `-debug`)
+- `-debug-transcribe` - enable transcription text logging (diagnostic logging is always on)
 - `-format <mp3@16|mp3@64|flac>` - audio format (default: mp3@16)
 - `-lang <code>` - language code for transcription (default: en, also settable from tray menu)
 - `-device <name>` - use named microphone device (also switchable from tray menu)
@@ -97,8 +96,8 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - Default location: OS-specific (macOS: `~/Library/Logs/zee/`, Linux: `~/.config/zee/logs/`, Windows: `%LOCALAPPDATA%\zee\logs\`)
 - Override with `ZEE_LOG_PATH` env var or `-logpath <path>` flag (supports relative paths, use `./` for current directory)
 - `crash_log.txt` - panic recovery (always enabled)
-- `diagnostics_log.txt` - timing metrics, errors, warnings (requires `-debug`)
-- `transcribe_log.txt` - transcription text history (requires `-debug -debug-transcribe`)
+- `diagnostics_log.txt` - timing metrics, errors, warnings (always enabled, rotated at 10 MB)
+- `transcribe_log.txt` - transcription text history (requires `-debug-transcribe`)
 
 ## Releasing
 
