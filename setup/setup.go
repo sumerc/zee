@@ -57,6 +57,14 @@ func Run() int {
 	if wantHotkey && axOK {
 		stepHotkey()
 	}
+	// A skipped or cancelled hotkey step leaves config.json's hotkey unset; seed
+	// the default so the file shows a readable combo (⌃⇧Space) instead of key:0.
+	if h := config.Get().Hotkey; h.Key == 0 && len(h.Mods) == 0 {
+		d := hotkey.DefaultCombo()
+		config.Update(func(s *config.Settings) {
+			s.Hotkey = config.Hotkey{Mods: d.Mods, Key: d.Key, Label: d.Label}
+		})
+	}
 
 	code := verify()
 	if config.Get().AutoPaste != chooseAutoPaste {

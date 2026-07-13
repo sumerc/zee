@@ -54,6 +54,7 @@ type savedRecording struct {
 	Provider    string
 	Model       string
 	Timestamp   time.Time
+	Err         string
 }
 
 var (
@@ -534,7 +535,15 @@ func run() {
 		exec.Command("open", config.HintsPath()).Run()
 	})
 	tray.OnEditSettings(func() {
-		config.EnsureSaved() // config.json may not exist yet; open needs a file
+		// Materialize an unset hotkey as the active default so the opened file
+		// shows a readable combo (⌃⇧Space) instead of "key": 0 / empty label.
+		// config.Update also creates config.json if it's missing — open needs a file.
+		config.Update(func(s *config.Settings) {
+			if len(s.Hotkey.Mods) == 0 && s.Hotkey.Key == 0 {
+				d := hotkey.DefaultCombo()
+				s.Hotkey = config.Hotkey{Mods: d.Mods, Key: d.Key, Label: d.Label}
+			}
+		})
 		exec.Command("open", "-t", config.SettingsPath()).Run()
 	})
 	tray.SetHotkeyLabel(currentHotkeyCombo(cfg).Label)
@@ -643,6 +652,94 @@ func run() {
 	sessions := make(chan recSession, 1)
 	go listenHotkey(hk, longPressDuration(), sessions)
 
+	// Live-reload external config.json edits (tray "Edit Settings…"), applying
+	// each changed field through the same path its tray callback uses. A reload
+	// landing mid record/inference cycle is deferred to cycle end, like model
+	// switches. The watcher itself suppresses the app's own saves.
+	applyCfg := func(s config.Settings) {
+		configMu.Lock()
+		curProv, curModel := activeTranscriber.Name(), activeTranscriber.GetModel()
+		configMu.Unlock()
+		if s.Provider != "" && s.Model != "" && (s.Provider != curProv || s.Model != curModel) {
+			// Only a ready model is applied — a file edit must not trigger a download.
+			if p, ok := providerByName(s.Provider); ok && p.Status(s.Model).Ready {
+				switchModel(p, s.Model)
+			} else {
+				log.Warnf("settings reload: %s/%s not available, keeping %s/%s", s.Provider, s.Model, curProv, curModel)
+			}
+		}
+
+		tray.SelectLanguage(s.Language)
+
+		captureMu.Lock()
+		pref := preferredDevice
+		captureMu.Unlock()
+		if s.Device != pref {
+			captureMu.Lock()
+			preferredDevice = s.Device
+			captureMu.Unlock()
+			if s.Device == "" {
+				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
+			} else {
+				switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, s.Device)
+			}
+			if devices, err := ctx.Devices(); err == nil {
+				names := make([]string, len(devices))
+				for i := range devices {
+					names[i] = devices[i].Name
+				}
+				captureMu.Lock()
+				sel := ""
+				if selectedDevice != nil {
+					sel = selectedDevice.Name
+				}
+				captureMu.Unlock()
+				tray.RefreshDevices(names, sel)
+			}
+		}
+
+		configMu.Lock()
+		apChanged := autoPaste != s.AutoPaste
+		autoPaste = s.AutoPaste
+		configMu.Unlock()
+		if apChanged {
+			tray.SetAutoPaste(s.AutoPaste)
+		}
+
+		if s.AutoStart != login.Enabled() {
+			var err error
+			if s.AutoStart {
+				err = login.Enable()
+			} else {
+				err = login.Disable()
+			}
+			if err != nil {
+				log.Errorf("settings reload: login toggle: %v", err)
+			} else {
+				tray.SetLogin(s.AutoStart)
+			}
+		}
+
+		if want := currentHotkeyCombo(s); !want.Equal(hk.Current()) {
+			if err := hk.Rebind(want); err != nil {
+				log.Errorf("settings reload: hotkey %s: %v", want.Label, err)
+				tray.SetError("Hotkey " + want.Label + " rejected — keeping " + hk.Current().Label)
+			} else {
+				log.Info("settings reload: hotkey → " + want.Label)
+				tray.SetHotkeyLabel(want.Label)
+			}
+		}
+	}
+	config.Watch(func(s config.Settings) {
+		if isRecording.Load() {
+			pendingMu.Lock()
+			pendingReload = func() { applyCfg(s) }
+			pendingMu.Unlock()
+			return
+		}
+		applyCfg(s)
+	})
+
 	go func() {
 		for range trayRecordChan {
 			tryStartSession(sessions)
@@ -667,15 +764,19 @@ var afterRecordCycle func()
 var (
 	pendingMu     sync.Mutex
 	pendingSwitch func()
+	pendingReload func() // config-file reload deferred for the same reason
 )
 
 func applyPendingSwitch() {
 	pendingMu.Lock()
-	fn := pendingSwitch
-	pendingSwitch = nil
+	fn, rl := pendingSwitch, pendingReload
+	pendingSwitch, pendingReload = nil, nil
 	pendingMu.Unlock()
 	if fn != nil {
 		fn()
+	}
+	if rl != nil {
+		rl() // after the switch: the reload carries the newest file state
 	}
 }
 
@@ -917,6 +1018,12 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	if closeErr != nil {
 		log.Errorf("transcription error: %v", closeErr)
 		tray.SetError(closeErr.Error())
+		// Auto-save the failed recording so it can be recovered/retried; uses
+		// the same save path (and "Saved to samples" notice) as the tray button.
+		if len(result.AudioData) > 0 {
+			setLastRecording(result, cfg, closeErr.Error())
+			go saveLastRecording()
+		}
 	}
 
 	if closeErr == nil && !cfg.stream && result.HasText && cfg.autoPaste && !skipPaste {
@@ -990,18 +1097,27 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 		tray.SetLastRecording(recDur, totalMs)
 	}
 
-	if len(result.AudioData) > 0 {
-		lastRecMu.Lock()
-		lastRec = &savedRecording{
-			AudioData:   result.AudioData,
-			AudioFormat: result.AudioFormat,
-			Text:        result.Text,
-			Provider:    cfg.tr.Name(),
-			Model:       cfg.tr.GetModel(),
-			Timestamp:   time.Now(),
-		}
-		lastRecMu.Unlock()
+	setLastRecording(result, cfg, "")
+}
+
+// setLastRecording stashes the just-finished recording (audio + metadata) so the
+// tray "Save Last Recording" button and the auto-save-on-error path can persist
+// it. errStr is the transcription error, if any ("" on success).
+func setLastRecording(result transcriber.SessionResult, cfg recordingConfig, errStr string) {
+	if len(result.AudioData) == 0 {
+		return
 	}
+	lastRecMu.Lock()
+	lastRec = &savedRecording{
+		AudioData:   result.AudioData,
+		AudioFormat: result.AudioFormat,
+		Text:        result.Text,
+		Provider:    cfg.tr.Name(),
+		Model:       cfg.tr.GetModel(),
+		Timestamp:   time.Now(),
+		Err:         errStr,
+	}
+	lastRecMu.Unlock()
 }
 
 func saveLastRecording() {
@@ -1032,6 +1148,7 @@ func saveLastRecording() {
 		"model":     rec.Model,
 		"format":    rec.AudioFormat,
 		"text":      rec.Text,
+		"error":     rec.Err,
 		"timestamp": rec.Timestamp.Format(time.RFC3339),
 	})
 	os.WriteFile(filepath.Join(dir, "info.json"), info, 0644)

@@ -75,10 +75,24 @@ var languages []transcriber.Language // set via SetLanguages
 
 func OnCopyLast(fn func())        { copyLastFn = fn }
 func OnRecord(start, stop func()) { recordFn = start; stopFn = stop }
-func SetAutoPaste(on bool)        { autoPasteOn = on }
 func OnAutoPaste(fn func(bool))   { autoPasteCb = fn }
-func SetLogin(on bool)            { loginOn = on }
 func OnLogin(fn func(bool) error) { loginCb = fn }
+
+// SetAutoPaste / SetLogin set the checkbox state; before Init they seed the
+// menu build, after Init (config-file reload) they re-render the item.
+func SetAutoPaste(on bool) {
+	trayMu.Lock()
+	autoPasteOn = on
+	trayMu.Unlock()
+	updateAutoPasteItem(on)
+}
+
+func SetLogin(on bool) {
+	trayMu.Lock()
+	loginOn = on
+	trayMu.Unlock()
+	updateLoginItem(on)
+}
 
 func SetRecording(rec bool) {
 	trayMu.Lock()
@@ -222,9 +236,45 @@ func OnEditHints(fn func())    { editHintsCb = fn }
 func OnEditSettings(fn func()) { editSettingsCb = fn }
 
 // SetHotkeyLabel sets the display-only current push-to-talk combo shown (and
-// disabled) in the menu. Call before Init. The hotkey is changed via
-// `zee -setup`, not the tray.
-func SetHotkeyLabel(label string) { hotkeyLabel = label }
+// disabled) in the menu, and the combo hint on the Start/Stop Recording item.
+// Before Init it seeds the menu build; after Init (config-file reload) it
+// re-renders both items.
+func SetHotkeyLabel(label string) {
+	trayMu.Lock()
+	hotkeyLabel = label
+	trayMu.Unlock()
+	updateHotkeyDisplay()
+}
+
+// recordTitle is the Start/Stop Recording menu label, with the current
+// push-to-talk combo as a hint.
+func recordTitle(rec bool) string {
+	trayMu.Lock()
+	label := hotkeyLabel
+	trayMu.Unlock()
+	title := "○ Start Recording"
+	if rec {
+		title = "● Stop Recording"
+	}
+	if label != "" {
+		title += " (" + label + ")"
+	}
+	return title
+}
+
+// SelectLanguage changes the user's language intent from outside the menu
+// (config-file reload) and re-renders the checkmarks; the effective language
+// reaches the transcriber through the usual callback (persist=false — the
+// value came from the file, writing it back would be an echo).
+func SelectLanguage(code string) {
+	trayMu.Lock()
+	same := langIntent == code
+	langIntent = code
+	trayMu.Unlock()
+	if !same {
+		refreshLanguageMenu()
+	}
+}
 
 func SetLanguage(code string, onSwitch func(code string, persist bool)) {
 	trayMu.Lock()

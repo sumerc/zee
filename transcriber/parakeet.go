@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,12 +13,6 @@ import (
 	"zee/internal/parakeet"
 	"zee/localmodel"
 )
-
-// saveLastAudio mirrors the ZEE_SAVE_LAST_AUDIO tray feature: only then does the
-// local path retain a WAV copy of the recording. Cloud paths keep the encoded
-// bytes they sent regardless; local decode has none, so the copy is pure
-// overhead on the common path.
-var saveLastAudio = os.Getenv("ZEE_SAVE_LAST_AUDIO") != ""
 
 // Parakeet is the offline, on-device provider. It wraps one loaded GGUF model
 // (decision #2: a single shared ctx; push-to-talk is serial) and swaps the
@@ -252,10 +245,12 @@ func (s *pcmSession) Close() (SessionResult, error) {
 		f32[i] = float32(int16(binary.LittleEndian.Uint16(raw[i*2:]))) / 32768.0
 	}
 
+	audioData := audio.PCMToWAV(raw)
+
 	start := time.Now()
 	text, err := s.ctx.Transcribe(f32, s.decoder)
 	if err != nil {
-		return SessionResult{}, err
+		return SessionResult{AudioData: audioData, AudioFormat: "wav"}, err
 	}
 	inferenceMs := float64(time.Since(start).Microseconds()) / 1000
 
@@ -263,11 +258,6 @@ func (s *pcmSession) Close() (SessionResult, error) {
 	noSpeech := text == ""
 	audioSec := float64(n) / float64(encoder.SampleRate)
 	rawKB := float64(len(raw)) / 1024
-
-	var audioData []byte
-	if saveLastAudio {
-		audioData = audio.PCMToWAV(raw)
-	}
 
 	sr := SessionResult{
 		Text:        text,

@@ -52,3 +52,17 @@ func TestFakeRebindAndCapture(t *testing.T) {
 		t.Fatalf("Capture = (%v, %v), want (%q, nil)", got, err, want.Label)
 	}
 }
+
+func TestComboEqual(t *testing.T) {
+	a := Combo{Mods: []string{"ctrl", "shift"}, Key: 49, Label: "⌃⇧Space"}
+	b := Combo{Mods: []string{"shift", "ctrl"}, Key: 49, Label: "whatever"} // order + label ignored
+	if !a.Equal(b) {
+		t.Fatal("same chord with reordered mods should be equal")
+	}
+	if a.Equal(Combo{Mods: []string{"ctrl", "shift"}, Key: 50}) {
+		t.Fatal("different key should not be equal")
+	}
+	if a.Equal(Combo{Mods: []string{"ctrl"}, Key: 49}) {
+		t.Fatal("different mods should not be equal")
+	}
+}

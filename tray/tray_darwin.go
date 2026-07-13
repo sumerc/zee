@@ -3,8 +3,6 @@
 package tray
 
 import (
-	"os"
-
 	"github.com/energye/systray"
 	"golang.design/x/hotkey/mainthread"
 
@@ -23,6 +21,7 @@ var (
 	mSettings     *systray.MenuItem
 	mAutoPaste    *systray.MenuItem
 	mLogin        *systray.MenuItem
+	mHotkey       *systray.MenuItem
 	mEditHints    *systray.MenuItem
 	mEditSettings *systray.MenuItem
 	mBackend      *systray.MenuItem
@@ -51,14 +50,47 @@ func Init() <-chan struct{} {
 func updateRecordingIcon(rec bool) {
 	if rec {
 		systray.SetIcon(iconRecHi)
-		if mRecord != nil {
-			mRecord.SetTitle("● Stop Recording (Shift+Control+Space)")
-		}
 	} else {
 		systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
-		if mRecord != nil {
-			mRecord.SetTitle("○ Start Recording (Shift+Control+Space)")
-		}
+	}
+	if mRecord != nil {
+		mRecord.SetTitle(recordTitle(rec))
+	}
+}
+
+func updateAutoPasteItem(on bool) {
+	if mAutoPaste == nil {
+		return
+	}
+	if on {
+		mAutoPaste.Check()
+	} else {
+		mAutoPaste.Uncheck()
+	}
+}
+
+func updateLoginItem(on bool) {
+	if mLogin == nil {
+		return
+	}
+	if on {
+		mLogin.Check()
+	} else {
+		mLogin.Uncheck()
+	}
+}
+
+// updateHotkeyDisplay re-renders the two items that show the combo: the
+// disabled "Hotkey: …" label and the Start/Stop Recording hint.
+func updateHotkeyDisplay() {
+	trayMu.Lock()
+	label, rec := hotkeyLabel, recording
+	trayMu.Unlock()
+	if mHotkey != nil {
+		mHotkey.SetTitle("Hotkey: " + label)
+	}
+	if mRecord != nil {
+		mRecord.SetTitle(recordTitle(rec))
 	}
 }
 
@@ -175,7 +207,7 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	mRecord = systray.AddMenuItem("○ Start Recording (Shift+Control+Space)", "Start or stop recording")
+	mRecord = systray.AddMenuItem(recordTitle(false), "Start or stop recording")
 	mRecord.Click(func() {
 		trayMu.Lock()
 		rec := recording
@@ -199,14 +231,12 @@ func onReady() {
 		}
 	})
 
-	if os.Getenv("ZEE_SAVE_LAST_AUDIO") != "" {
-		mSave := systray.AddMenuItem("Save Last Recording", "Save last audio + metadata to disk")
-		mSave.Click(func() {
-			if saveAudioCb != nil {
-				go saveAudioCb()
-			}
-		})
-	}
+	mSave := systray.AddMenuItem("Save Last Recording", "Save last audio + metadata to disk")
+	mSave.Click(func() {
+		if saveAudioCb != nil {
+			go saveAudioCb()
+		}
+	})
 
 	mSettings = systray.AddMenuItem("Settings", "Settings")
 
@@ -250,7 +280,7 @@ func onReady() {
 		mEditHints.Disable()
 	}
 
-	mEditSettings = mSettings.AddSubMenuItem("Edit Settings…", "Open config.json (changes apply on restart)")
+	mEditSettings = mSettings.AddSubMenuItem("Edit Settings…", "Open config.json (changes apply live)")
 	mEditSettings.Click(func() {
 		if editSettingsCb != nil {
 			go editSettingsCb()
@@ -260,8 +290,11 @@ func onReady() {
 	sep := mSettings.AddSubMenuItem("─────────", "")
 	sep.Disable()
 
-	if hotkeyLabel != "" {
-		mHotkey := mSettings.AddSubMenuItem("Hotkey: "+hotkeyLabel, "Change with `zee -setup`")
+	trayMu.Lock()
+	hl := hotkeyLabel
+	trayMu.Unlock()
+	if hl != "" {
+		mHotkey = mSettings.AddSubMenuItem("Hotkey: "+hl, "Change via Settings → Edit Settings…")
 		mHotkey.Disable()
 	}
 

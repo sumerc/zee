@@ -96,7 +96,7 @@ func (bs *batchSession) Close() (SessionResult, error) {
 
 	result, err := bs.transcribe(audioData, apiFormat, bs.cfg.Language, bs.cfg.Hints)
 	if err != nil {
-		return SessionResult{}, err
+		return SessionResult{AudioData: audioData, AudioFormat: apiFormat}, err
 	}
 
 	text := strings.TrimSpace(result.Text)

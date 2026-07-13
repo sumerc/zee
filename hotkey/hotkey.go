@@ -2,6 +2,7 @@ package hotkey
 
 import (
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -36,6 +37,19 @@ type Combo struct {
 
 // IsZero reports whether c is unset (e.g. a config with no saved hotkey).
 func (c Combo) IsZero() bool { return len(c.Mods) == 0 && c.Key == 0 }
+
+// Equal reports whether two combos bind the same chord. Modifier order is
+// ignored (a hand-edited config may list mods in any order); Label is display
+// only and not compared.
+func (c Combo) Equal(o Combo) bool {
+	if c.Key != o.Key || len(c.Mods) != len(o.Mods) {
+		return false
+	}
+	a, b := slices.Clone(c.Mods), slices.Clone(o.Mods)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
+}
 
 // ErrCaptureCanceled is returned by Capture when the user cancels (Escape /
 // cancel signal) or no chord is recorded before the timeout.

@@ -73,9 +73,9 @@ func WAVToPCM(b []byte) ([]byte, error) {
 // Use case: the live local-transcriber (Parakeet) path. API providers encode
 // captured audio to mp3/flac, but Parakeet consumes raw PCM and never encodes,
 // so to hand back a real, saveable file in SessionResult.AudioData it gets
-// wrapped here. That's what the "Save Last Recording" feature
-// (ZEE_SAVE_LAST_AUDIO, main.go) writes to disk. Unlike WAVToPCM, this is on
-// the hot path, not test-only.
+// wrapped here. That's what the "Save Last Recording" feature (and the
+// auto-save-on-error path in main.go) writes to disk. Unlike WAVToPCM, this is
+// on the hot path, not test-only.
 func PCMToWAV(pcm []byte) []byte {
 	const sampleRate, channels, bits = 16000, 1, 16
 	byteRate := sampleRate * channels * bits / 8

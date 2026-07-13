@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"zee/log"
 )
@@ -134,18 +136,51 @@ func Get() Settings {
 	return s
 }
 
-// EnsureSaved writes config.json (creating its directory) if it does not already
-// exist, so external tools — the tray "Edit Settings…" item — always have a file
-// to open. config.Load never creates the file, so a fresh install has none until
-// the first setting changes.
-func EnsureSaved() {
-	if _, err := os.Stat(settingsPath()); err == nil {
-		return
+// Watch polls config.json once per second and reloads it when the file changes
+// on disk — the live half of the tray "Edit Settings…" flow. onChange runs on
+// the watcher goroutine with the freshly loaded settings; the app's own saves
+// and content-identical rewrites are suppressed (compared against the in-memory
+// settings, so only real external edits fire).
+func Watch(onChange func(Settings)) {
+	var lastMod time.Time
+	if fi, err := os.Stat(settingsPath()); err == nil {
+		lastMod = fi.ModTime()
 	}
+	go func() {
+		for range time.Tick(time.Second) {
+			fi, err := os.Stat(settingsPath())
+			if err != nil || fi.ModTime().Equal(lastMod) {
+				continue
+			}
+			lastMod = fi.ModTime()
+			if s, changed := reload(); changed {
+				onChange(s)
+			}
+		}
+	}()
+}
+
+// reload re-reads config.json into the live settings. Read + compare + swap all
+// happen under the lock, serialized with Update, so a concurrent save can't be
+// overwritten by stale file contents. Reports whether anything changed.
+func reload() (Settings, bool) {
 	mu.Lock()
-	s := current
-	mu.Unlock()
-	save(s)
+	defer mu.Unlock()
+	data, err := os.ReadFile(settingsPath())
+	if err != nil {
+		log.Warnf("settings: reload: %v", err)
+		return current, false
+	}
+	s := defaults
+	if err := json.Unmarshal(data, &s); err != nil {
+		log.Warnf("settings: reload: corrupt config.json ignored: %v", err)
+		return current, false
+	}
+	if reflect.DeepEqual(s, current) {
+		return current, false
+	}
+	current = s
+	return s, true
 }
 
 func Update(fn func(*Settings)) {
