@@ -594,15 +594,19 @@ func stepProviders(r *results) {
 			ensureModel(p, defaultLocalModelID())
 			continue
 		}
-		promptAPIKey(p)
-		if config.HasAPIKey(p.Name) {
+		changed := promptAPIKey(p)
+		// A key that already earned its tick this run and wasn't changed needs
+		// no re-test — re-verifying the same key would just waste a round-trip.
+		if config.HasAPIKey(p.Name) && (changed || !tested[p.Name]) {
 			tested[p.Name] = testProvider(p, r.testPCM)
 		}
 	}
 	chooseActiveProvider()
 }
 
-func promptAPIKey(p transcriber.ProviderInfo) {
+// promptAPIKey reports whether the stored key changed (Enter keeps the
+// existing one and changes nothing).
+func promptAPIKey(p transcriber.ProviderInfo) bool {
 	has := config.HasAPIKey(p.Name)
 	prompt := fmt.Sprintf("  %s API key: ", p.Label)
 	if has {
@@ -613,13 +617,14 @@ func promptAPIKey(p transcriber.ProviderInfo) {
 		if !has {
 			fmt.Printf("  No key entered — %s stays unconfigured.\n", p.Label)
 		}
-		return
+		return false
 	}
 	if err := config.SetAPIKey(p.Name, key); err != nil {
 		fmt.Printf("  Could not save key: %v\n", err)
-		return
+		return false
 	}
 	fmt.Printf("  Saved %s key.\n", p.Label)
+	return true
 }
 
 // testProvider sends real audio (the mic-test recording, or a second of

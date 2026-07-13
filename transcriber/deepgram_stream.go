@@ -59,6 +59,13 @@ func (d *Deepgram) startStream(ctx context.Context, cfg streamSessionConfig) (ra
 	}
 	if cfg.Language != "" {
 		q.Set("language", cfg.Language)
+	} else {
+		// The tray never offers Auto-detect for Deepgram (see nova3Langs), but
+		// "" can still arrive from stale configs or headless flags. Omitting
+		// the param silently means English-only — non-English speech comes
+		// back as empty finals ("no speech") — so send nova-3's multilingual
+		// mode as the least-wrong interpretation.
+		q.Set("language", "multi")
 	}
 	if cfg.Hints != "" {
 		for _, term := range strings.Split(cfg.Hints, ",") {

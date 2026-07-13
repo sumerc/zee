@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"zee/clipboard"
+	"zee/log"
 )
 
 type clipboardSession struct {
@@ -20,9 +21,16 @@ var clip clipboardSession
 
 func (c *clipboardSession) PasteText(text string) {
 	c.mu.Lock()
-	clipboard.Copy(text)
-	clipboard.Paste()
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	// Log failures — a broken paste (revoked Accessibility, pbcopy error) is
+	// otherwise indistinguishable from "no text" for the user.
+	if err := clipboard.Copy(text); err != nil {
+		log.Warnf("paste: clipboard copy failed: %v", err)
+		return
+	}
+	if err := clipboard.Paste(); err != nil {
+		log.Warnf("paste: keystroke failed (Accessibility?): %v", err)
+	}
 }
 
 func (c *clipboardSession) SaveCurrent() string {

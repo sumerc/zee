@@ -110,8 +110,13 @@ var langLabels = map[string]string{
 }
 
 func langsFromCodes(codes []string) []Language {
-	langs := make([]Language, 0, len(codes)+1)
-	langs = append(langs, Language{"", "Auto-detect"})
+	return append([]Language{{"", "Auto-detect"}}, plainLangsFromCodes(codes)...)
+}
+
+// plainLangsFromCodes builds a language list without the Auto-detect entry,
+// for providers that cannot honor it (see nova3Langs).
+func plainLangsFromCodes(codes []string) []Language {
+	langs := make([]Language, 0, len(codes))
 	for _, c := range codes {
 		label := langLabels[c]
 		if label == "" {
