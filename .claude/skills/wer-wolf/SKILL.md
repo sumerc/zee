@@ -24,7 +24,7 @@ Before running, verify:
   lsof -c zee 2>/dev/null | awk '$4=="txt" && $NF ~ /zee$/ {print $NF; exit}'
   ```
   Fall back to `/Users/supo/Desktop/p/zee/zee` if no process. If neither exists, ask the user where the binary is.
-- **Samples directory** exists and has at least one `2026-*` subdir. If empty, tell the user to enable `ZEE_SAVE_LAST_AUDIO=1` and capture some recordings first.
+- **Samples directory** exists and has at least one `2026-*` subdir. If empty, tell the user to capture some recordings first (the tray's "Save Last Recording" saves the last clip; failed transcriptions are auto-saved).
 - **API keys**. Print which of `GROQ_API_KEY`, `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `ELEVENLABS_API_KEY` are set; the script auto-skips providers whose key is missing. Deepgram is skipped entirely (its only model `nova-3` is streaming, not compatible with batch `-transcribe`).
 - **Tray app warning**. Tell the user not to interact with the running tray app's menu during the run — it caches `config.json` in memory and will overwrite the file on the next menu interaction. Backup is restored at the end either way, but mid-run interference can corrupt results.
 

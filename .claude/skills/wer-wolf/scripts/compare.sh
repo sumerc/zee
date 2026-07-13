@@ -89,7 +89,7 @@ if [ -n "${SAMPLE:-}" ]; then
 fi
 
 if [ "${#SAMPLE_DIRS[@]}" -eq 0 ]; then
-  echo "No samples found under $SAMPLES — enable ZEE_SAVE_LAST_AUDIO=1 and record some clips first." >&2
+  echo "No samples found under $SAMPLES — record some clips first (tray → Save Last Recording)." >&2
   exit 1
 fi
 

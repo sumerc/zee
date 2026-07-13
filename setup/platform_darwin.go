@@ -10,7 +10,10 @@ import "C"
 import (
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"zee/config"
 )
@@ -33,6 +36,10 @@ func maybeReexec() (code int, done bool) {
 	if tty == "" || app == "" {
 		return 0, false // no controlling tty or not a resolvable bundle: run in place
 	}
+	// A running tray instance must die BEFORE the `open`: LaunchServices would
+	// otherwise just activate it (ignoring --args) and -W would block on the
+	// tray instead of the wizard.
+	quitRunningApp()
 	cmd := exec.Command("open", "-W", "-a", app,
 		"--stdin", tty, "--stdout", tty, "--stderr", tty,
 		"--args", "-setup")
@@ -43,19 +50,51 @@ func maybeReexec() (code int, done bool) {
 	return 0, true
 }
 
-// launchInstalledApp starts the tray app after setup completes (installed bundle
-// only). open -a with no args launches or activates the normal (no -setup) app.
-func launchInstalledApp() {
-	if app := appBundlePath(); app != "" {
-		exec.Command("open", "-a", app).Start()
+// launchInstalledApp starts the tray app after setup completes (installed
+// bundle only; reports whether it launched). -n forces a new instance:
+// without it, LaunchServices sees the still-running wizard (same bundle) and
+// merely activates it, so no tray would ever start.
+func launchInstalledApp() bool {
+	app := appBundlePath()
+	if app == "" {
+		return false
+	}
+	return exec.Command("open", "-n", "-a", app).Start() == nil
+}
+
+// quitRunningApp terminates other running zee processes (tray instances) so
+// they don't hold the global hotkey during the wizard's tests and can't be
+// mistaken for the fresh post-setup launch. It kills by pid rather than an
+// AppleScript "tell application Zee to quit": once the wizard itself runs as a
+// second Zee.app instance the AppleEvent target is ambiguous (it can hit the
+// wizard, which has no AppleEvent handler). SIGTERM is graceful — the app's
+// signal handler runs its normal shutdown path.
+func quitRunningApp() {
+	out, err := exec.Command("pgrep", "-x", "zee").Output()
+	if err != nil {
+		return // no zee processes
+	}
+	var victims []int
+	self := os.Getpid()
+	for _, f := range strings.Fields(string(out)) {
+		if pid, err := strconv.Atoi(f); err == nil && pid != self {
+			syscall.Kill(pid, syscall.SIGTERM)
+			victims = append(victims, pid)
+		}
+	}
+	// Wait briefly so the global hotkey is actually released before our tests.
+	for i := 0; i < 20 && anyAlive(victims); i++ {
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-// quitRunningApp best-effort quits an already-running Zee tray instance so it
-// doesn't hold the global hotkey while the wizard tests registration, and so the
-// post-setup launch starts fresh.
-func quitRunningApp() {
-	exec.Command("osascript", "-e", `tell application "Zee" to quit`).Run()
+func anyAlive(pids []int) bool {
+	for _, p := range pids {
+		if syscall.Kill(p, 0) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func ttyName() string {

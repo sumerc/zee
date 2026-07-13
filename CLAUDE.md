@@ -50,8 +50,7 @@ make benchmark WAV=file.wav RUNS=5
 - `-hints <words>` - comma-separated vocabulary hints (overrides `hints.txt`)
 - `-transcribe <file>` - transcribe an audio file (mp3/flac/wav) and exit
 
-**Environment variables:**
-- `ZEE_SAVE_LAST_AUDIO=1` - enables "Save Last Recording" tray button (saves audio + metadata to `config/samples/`)
+The tray's "Save Last Recording" persists the last clip (audio + `info.json`) to `<config>/samples/`; a failed transcription auto-saves there too, with the error recorded in `info.json`.
 
 ## Architecture
 

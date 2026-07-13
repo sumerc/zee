@@ -145,7 +145,6 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 | `ZEE_PPROF` | pprof server address (e.g., `:6060`) |
 | `ZEE_CRASH=1` | Trigger synthetic crash for crash-log testing |
 | `ZEE_LONGPRESS_DURATION` | Hybrid hotkey long-press threshold (e.g., `350ms`) |
-| `ZEE_SAVE_LAST_AUDIO=1` | Enable tray action to save the last recording sample |
 
 ## About
 

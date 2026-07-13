@@ -44,17 +44,15 @@ MODELS_BASE="https://github.com/${REPO}/releases/download/${MODELS_TAG}"
 MODELS_DIR="${HOME}/Library/Application Support/zee/models"
 MANIFEST_URL="https://raw.githubusercontent.com/${REPO}/main/localmodel/manifest.txt"
 
-# Best-effort: pre-download the offline models so Apple Silicon works with no
-# API key on first launch. Never fails the install — the in-app downloader
-# recovers anything missing.
+# Pre-download the offline models before touching /Applications: they are part
+# of the product promise (works offline, no key), not opt-in — so a failure
+# aborts the install cleanly, before anything was changed. Re-runs are cheap:
+# models already on disk pass the checksum and are skipped.
 prefetch_models() {
-  [[ "$(uname -m)" == "arm64" ]] || return 0
-  mkdir -p "$MODELS_DIR" 2>/dev/null || return 0
+  mkdir -p "$MODELS_DIR" || err "cannot create ${MODELS_DIR}"
   local manifest f sum dest
-  manifest="$(curl -fsSL "$MANIFEST_URL" 2>/dev/null)" || {
-    log "Model manifest unavailable — the app will fetch models on first launch"
-    return 0
-  }
+  manifest="$(curl -fsSL "$MANIFEST_URL")" \
+    || err "model manifest unavailable: ${MANIFEST_URL}"
   # Each prefetch=true row: download the gguf from the release, verify its sha.
   while read -r f sum; do
     [[ -n "$f" ]] || continue
@@ -62,17 +60,18 @@ prefetch_models() {
     if [[ -f "$dest" ]] && shasum -a 256 "$dest" | grep -q "$sum"; then
       log "Model ${f} already present"; continue
     fi
-    log "Downloading model ${f} (best-effort)..."
-    if curl -fL --progress-bar "${MODELS_BASE}/${f}" -o "${dest}.part" \
-       && shasum -a 256 "${dest}.part" | grep -q "$sum"; then
-      mv -f "${dest}.part" "$dest"
-      log "Model ${f} OK"
-    else
-      log "Model ${f} unavailable — the app will fetch it on first launch"
-      rm -f "${dest}.part"
-    fi
+    log "Downloading model ${f}..."
+    curl -fL --progress-bar "${MODELS_BASE}/${f}" -o "${dest}.part" \
+      || { rm -f "${dest}.part"; err "model download failed: ${MODELS_BASE}/${f}"; }
+    shasum -a 256 "${dest}.part" | grep -q "$sum" \
+      || { rm -f "${dest}.part"; err "checksum mismatch for model ${f}"; }
+    mv -f "${dest}.part" "$dest"
+    log "Model ${f} OK"
   done < <(awk '!/^#/ && $3=="true" {print $1, $2}' <<<"$manifest")
 }
+
+log "Fetching offline models..."
+prefetch_models
 
 log "Downloading ${DMG}..."
 curl -fL --progress-bar "${BASE}/${DMG}" -o "${TMP}/${DMG}" \
@@ -107,9 +106,6 @@ run_or_sudo cp -R "$MOUNT/Zee.app" "${APP_DIR}/"
 log "Clearing quarantine attribute..."
 run_or_sudo xattr -cr "${APP_DIR}/Zee.app"
 
-log "Fetching offline models (best-effort)..."
-prefetch_models || true
-
 log "Zee ${VERSION} installed to ${APP_DIR}/Zee.app"
 
 # Hand off to the in-app setup wizard, which grants permissions (attributed to
@@ -125,8 +121,11 @@ fi
 
 if [[ -n "$TTY" ]]; then
   log "Starting setup..."
+  # `open -W` doesn't propagate the app's exit code; the wizard prints its own
+  # pass/fail summary to this terminal, so only a failure to start is ours.
   open -W -a "${APP_DIR}/Zee.app" --stdin "$TTY" --stdout "$TTY" --stderr "$TTY" \
-    --args -setup || true
+    --args -setup \
+    || log "Setup could not start — run it later with: ${APP_DIR}/Zee.app/Contents/MacOS/zee -setup"
 else
   cat <<EOF
 
