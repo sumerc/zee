@@ -1,6 +1,7 @@
 .PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app parakeet-lib download-models manifest model-release
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+# --match 'v*' keeps model-release tags (models-vN) out of the app version.
+VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo "dev")
 
 # Local STT (Parakeet) is a darwin/arm64-only cgo feature. On that host we build
 # the static parakeet.cpp + ggml archives first and stamp the macOS deploy

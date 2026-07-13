@@ -31,6 +31,7 @@
 - Free the outgoing local (Parakeet) model when switching provider, instead of leaking its 255 MB–1.4 GB of C/ggml memory for the life of the app
 - Tray "Start Recording" during inference is now denied (like the hotkey) instead of queuing an unattended recording that fired the moment inference ended; both paths share one guarded entry point
 - Fix a race in the recording stop machinery (`requestStop` touched the stop channel/Once without the lock held)
+- `install.sh` accepts `DMG_PATH=<file>` to install a locally built DMG (`make app`), running the identical flow minus download/checksum — for testing the install UX end to end before a release
 - `install.sh` refuses to install on Intel Macs (releases are Apple-Silicon-only) instead of "succeeding" with a binary that can't launch
 - Local models now resolve to an absolute directory instead of a cwd-relative path: dev builds use the versioned folder next to the binary (found from any working directory), installed apps use `<config>/models`, so a binary launched from elsewhere no longer reports downloaded models as missing (dev override via `ZEE_MODELS_DIR` unchanged)
 - Model downloads abort after 60s with no data (stalled connection) instead of wedging the tray menu at "downloading N%" until restart

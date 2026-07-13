@@ -2,6 +2,8 @@
 # Zee installer for macOS.
 # Usage: curl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash
 #        VERSION=vX.Y.Z bash install.sh
+#        DMG_PATH=./Zee-<version>.dmg bash install.sh   (dev: install a locally
+#        built DMG — `make app` — running the full flow minus download/checksum)
 set -euo pipefail
 
 REPO="sumerc/zee"
@@ -23,17 +25,23 @@ trap cleanup EXIT
 [[ "$(uname -s)" == "Darwin" ]] || err "Zee currently supports macOS only."
 [[ "$(uname -m)" == "arm64" ]] || err "Zee requires Apple Silicon (arm64) — the local engine is arm64-only, and releases ship no Intel build."
 
+# DMG_PATH installs a locally built DMG (dev flow): version resolution,
+# download, and checksum are skipped — everything else (model prefetch, quit
+# running instance, copy, quarantine clear, setup handoff) runs identically.
+DMG_PATH="${DMG_PATH:-}"
 VERSION="${VERSION:-}"
-if [[ -z "$VERSION" ]]; then
-  log "Resolving latest release..."
-  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | awk -F'"' '/"tag_name"/ {print $4; exit}')"
-  [[ -n "$VERSION" ]] || err "could not resolve latest version (GitHub API rate limit?). Set VERSION=vX.Y.Z and retry."
+if [[ -n "$DMG_PATH" ]]; then
+  [[ -f "$DMG_PATH" ]] || err "local DMG not found: ${DMG_PATH}"
+  log "Installing local DMG ${DMG_PATH}"
+else
+  if [[ -z "$VERSION" ]]; then
+    log "Resolving latest release..."
+    VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+      | awk -F'"' '/"tag_name"/ {print $4; exit}')"
+    [[ -n "$VERSION" ]] || err "could not resolve latest version (GitHub API rate limit?). Set VERSION=vX.Y.Z and retry."
+  fi
+  log "Installing Zee ${VERSION}"
 fi
-log "Installing Zee ${VERSION}"
-
-DMG="Zee-${VERSION}.dmg"
-BASE="https://github.com/${REPO}/releases/download/${VERSION}"
 
 # Offline models live under an immutable, app-version-independent release tag.
 # The registry — filenames, hashes, and which models to pre-fetch — is generated
@@ -73,21 +81,29 @@ prefetch_models() {
 log "Fetching offline models..."
 prefetch_models
 
-log "Downloading ${DMG}..."
-curl -fL --progress-bar "${BASE}/${DMG}" -o "${TMP}/${DMG}" \
-  || err "download failed: ${BASE}/${DMG}"
+if [[ -n "$DMG_PATH" ]]; then
+  DMG_FILE="$DMG_PATH"
+else
+  DMG="Zee-${VERSION}.dmg"
+  BASE="https://github.com/${REPO}/releases/download/${VERSION}"
+  DMG_FILE="${TMP}/${DMG}"
 
-log "Verifying checksum..."
-curl -fsSL "${BASE}/checksums.txt" -o "${TMP}/checksums.txt" \
-  || err "download failed: ${BASE}/checksums.txt"
-expected="$(awk -v f="${DMG}" '$2==f {print $1}' "${TMP}/checksums.txt")"
-[[ -n "$expected" ]] || err "${DMG} not found in checksums.txt"
-actual="$(shasum -a 256 "${TMP}/${DMG}" | awk '{print $1}')"
-[[ "$expected" == "$actual" ]] || err "checksum mismatch (expected $expected, got $actual)"
-log "Checksum OK"
+  log "Downloading ${DMG}..."
+  curl -fL --progress-bar "${BASE}/${DMG}" -o "$DMG_FILE" \
+    || err "download failed: ${BASE}/${DMG}"
+
+  log "Verifying checksum..."
+  curl -fsSL "${BASE}/checksums.txt" -o "${TMP}/checksums.txt" \
+    || err "download failed: ${BASE}/checksums.txt"
+  expected="$(awk -v f="${DMG}" '$2==f {print $1}' "${TMP}/checksums.txt")"
+  [[ -n "$expected" ]] || err "${DMG} not found in checksums.txt"
+  actual="$(shasum -a 256 "$DMG_FILE" | awk '{print $1}')"
+  [[ "$expected" == "$actual" ]] || err "checksum mismatch (expected $expected, got $actual)"
+  log "Checksum OK"
+fi
 
 log "Mounting DMG..."
-MOUNT="$(hdiutil attach -nobrowse -readonly -mountrandom /tmp "${TMP}/${DMG}" \
+MOUNT="$(hdiutil attach -nobrowse -readonly -mountrandom /tmp "$DMG_FILE" \
   | grep -oE '/(private/tmp|Volumes)/[^[:space:]]+' \
   | tail -1)"
 [[ -n "$MOUNT" && -d "$MOUNT/Zee.app" ]] || err "Zee.app not found in DMG"
@@ -106,7 +122,7 @@ run_or_sudo cp -R "$MOUNT/Zee.app" "${APP_DIR}/"
 log "Clearing quarantine attribute..."
 run_or_sudo xattr -cr "${APP_DIR}/Zee.app"
 
-log "Zee ${VERSION} installed to ${APP_DIR}/Zee.app"
+log "Zee ${VERSION:-(local build)} installed to ${APP_DIR}/Zee.app"
 
 # Hand off to the in-app setup wizard, which grants permissions (attributed to
 # Zee.app because it runs as the bundle), stores any cloud API key, captures a
