@@ -132,6 +132,23 @@ func runZeeOpts(t *testing.T, stdin string, opts runOpts, args ...string) (logDi
 	cmd.Env = append(cmd.Env, "ZEE_CONFIG_DIR="+seedCredentials(t, cmd.Env))
 
 	out, err := cmd.CombinedOutput()
+	// If the test later fails an assertion, the evidence (zee's own output and
+	// the diagnostics log) would vanish with the temp dir — dump both so a CI
+	// failure log is enough to diagnose what actually happened.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		t.Logf("zee args: %q", cmdArgs)
+		t.Logf("zee combined output:\n%s", out)
+		for _, f := range []string{"diagnostics_log.txt", "transcribe_log.txt"} {
+			if data, err := os.ReadFile(filepath.Join(logDir, f)); err == nil {
+				t.Logf("%s:\n%s", f, data)
+			} else {
+				t.Logf("%s: %v", f, err)
+			}
+		}
+	})
 	if opts.wantErr {
 		if err == nil {
 			t.Fatalf("expected zee to exit with error, but it succeeded\noutput: %s", out)
