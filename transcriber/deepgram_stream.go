@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"nhooyr.io/websocket"
 )
@@ -70,10 +71,31 @@ func (d *Deepgram) startStream(ctx context.Context, cfg streamSessionConfig) (ra
 	headers.Set("Authorization", "Token "+d.apiKey)
 
 	streamCtx, cancel := context.WithCancel(ctx)
-	conn, _, err := websocket.Dial(streamCtx, endpoint.String(), &websocket.DialOptions{HTTPHeader: headers})
-	if err != nil {
+	// Bound the handshake so a dead network fails in seconds — but WITHOUT a
+	// context deadline: the dial ctx stays attached to the upgraded connection,
+	// so cancelling it (deferred cancel or a fired timer) kills the live
+	// stream mid-session. Instead dial on streamCtx and time out around it;
+	// the timeout path cancels streamCtx, aborting the in-flight dial.
+	type dialResult struct {
+		conn *websocket.Conn
+		err  error
+	}
+	dialCh := make(chan dialResult, 1)
+	go func() {
+		c, _, err := websocket.Dial(streamCtx, endpoint.String(), &websocket.DialOptions{HTTPHeader: headers})
+		dialCh <- dialResult{c, err}
+	}()
+	var conn *websocket.Conn
+	select {
+	case r := <-dialCh:
+		if r.err != nil {
+			cancel()
+			return nil, r.err
+		}
+		conn = r.conn
+	case <-time.After(15 * time.Second):
 		cancel()
-		return nil, err
+		return nil, fmt.Errorf("deepgram: connect timed out after 15s")
 	}
 
 	return &deepgramStreamSession{conn: conn, ctx: streamCtx, cancel: cancel}, nil

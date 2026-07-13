@@ -1,4 +1,5 @@
-// Package setup is the interactive first-run wizard behind `zee -setup`. It
+// Package setup is the interactive first-run wizard behind `zee setup`, plus
+// the `zee doctor` health check (doctor.go). It
 // configures everything needed for a working install and proves each piece
 // works as it is configured — the microphone by recording and transcribing a
 // real utterance with the local model, the push-to-talk hotkey by requiring a
@@ -15,10 +16,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"zee/audio"
+	"zee/clipboard"
 	"zee/config"
 	"zee/encoder"
 	"zee/hotkey"
@@ -26,7 +30,43 @@ import (
 	"zee/localmodel"
 	"zee/permissions"
 	"zee/transcriber"
+
+	"golang.org/x/term"
 )
+
+// banner is ANSI-Shadow block letters; printed inset by one space, tinted
+// white on a tty and plain otherwise.
+const banner = `
+ ███████╗███████╗███████╗
+ ╚══███╔╝██╔════╝██╔════╝
+   ███╔╝ █████╗  █████╗
+  ███╔╝  ██╔══╝  ██╔══╝
+ ███████╗███████╗███████╗
+ ╚══════╝╚══════╝╚══════╝
+`
+
+func printBanner() {
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		fmt.Print("\x1b[37m" + banner + "\x1b[0m\n")
+	} else {
+		fmt.Print(banner + "\n")
+	}
+}
+
+// bold wraps s in ANSI bold on a tty, plain otherwise.
+func bold(s string) string { return sgr("1", s) }
+
+// tick / cross are the pass/fail glyphs, green/red on a tty. ANSI SGR colors
+// are safe in any modern terminal; non-ttys get the bare glyph.
+func tick() string  { return sgr("32", "✓") }
+func cross() string { return sgr("31", "✗") }
+
+func sgr(code, s string) string {
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		return "\x1b[" + code + "m" + s + "\x1b[0m"
+	}
+	return s
+}
 
 // results collects what each step actually proved, for the final summary.
 type results struct {
@@ -42,16 +82,18 @@ type results struct {
 // Run executes the wizard and returns a process exit code (0 = mic granted,
 // the one hard requirement; 1 otherwise).
 func Run() int {
-	if code, done := maybeReexec(); done {
-		return code
+	// Refuse to run alongside a live tray instance: it holds the global hotkey
+	// the tests below need. The user quits it deliberately instead of us
+	// killing it. Checked before the re-exec so the message lands in the
+	// terminal; the launchd-parented child (ppid 1) skips it — in the re-exec
+	// case its terminal parent is itself a zee blocked on `open -W`, and in
+	// the install.sh case the installer already quit the tray.
+	if os.Getppid() != 1 && otherZeeRunning() {
+		fmt.Println("Zee is already running — quit it first (menu bar → Quit), then re-run `zee setup`.")
+		return 1
 	}
-	// The launchd-parented wizard (re-exec'd, or launched by install.sh) must
-	// not kill sibling zee processes: in the re-exec case its terminal parent
-	// is a zee blocked on `open -W`, and in both cases the launcher already
-	// quit the tray. Direct runs (dev binary, no-tty fallback) quit it here so
-	// no tray instance holds the global hotkey during the tests below.
-	if os.Getppid() != 1 {
-		quitRunningApp()
+	if code, done := maybeReexec("setup"); done {
+		return code
 	}
 
 	transcriber.SetKeySource(config.APIKey)
@@ -59,11 +101,9 @@ func Run() int {
 		fmt.Fprintf(os.Stderr, "warning: could not load settings: %v\n", err)
 	}
 
-	fmt.Println("Zee setup")
-	fmt.Println("=========")
-	fmt.Println("Answer a few questions; press Enter to keep the current value.")
-	fmt.Println("Everything here can be changed later: re-run `zee -setup`, or edit")
-	fmt.Println("config.json from the tray (Settings → Edit Settings…) — edits apply live.")
+	printBanner()
+	fmt.Println(bold("Everything here can be changed later: re-run `zee setup`, or edit"))
+	fmt.Println(bold("config.json from the tray (Settings → Edit Settings…) — edits apply live."))
 
 	var r results
 	stepMic(&r)
@@ -72,11 +112,8 @@ func Run() int {
 	stepProviders(&r)
 	code := summary(r)
 
-	fmt.Println()
 	if launchInstalledApp() {
 		fmt.Println("Zee is running in your menu bar.")
-	} else {
-		fmt.Println("Start Zee normally (e.g. ./zee).")
 	}
 	return code
 }
@@ -102,13 +139,13 @@ func stepMic(r *results) {
 	for {
 		pcm, err := record(4 * time.Second)
 		if err != nil {
-			fmt.Printf("  ✗ recording failed: %v\n", err)
+			fmt.Printf("  "+cross()+" recording failed: %v\n", err)
 			return
 		}
 		r.testPCM = pcm
 		text, err := transcribeLocal(p, pcm)
 		if err != nil {
-			fmt.Printf("  ✗ transcription failed: %v\n", err)
+			fmt.Printf("  "+cross()+" transcription failed: %v\n", err)
 			return
 		}
 		if text == "" {
@@ -117,7 +154,7 @@ func stepMic(r *results) {
 			fmt.Printf("  Heard: %q\n", text)
 			if askYesNo("  Is that roughly what you said?", true) {
 				r.micTested = true
-				fmt.Println("  ✓ microphone verified")
+				fmt.Println("  "+tick()+" microphone verified")
 				return
 			}
 		}
@@ -131,47 +168,91 @@ func stepMic(r *results) {
 func micPermission() bool {
 	switch permissions.MicrophoneStatus() {
 	case permissions.MicGranted:
-		fmt.Println("  ✓ permission already granted")
+		fmt.Println("  "+tick()+" permission already granted")
 		return true
 	case permissions.MicDenied:
-		fmt.Println("  ✗ previously denied — enable Zee under System Settings → Privacy & Security → Microphone")
+		fmt.Println("  " + cross() + " previously denied — opening System Settings; enable Zee under Privacy & Security → Microphone")
+		permissions.OpenMicrophoneSettings()
 		return false
 	}
 	fmt.Println("  Approve the macOS prompt to allow recording…")
 	if permissions.RequestMicrophone() == permissions.MicGranted {
-		fmt.Println("  ✓ granted")
+		fmt.Println("  "+tick()+" granted")
 		return true
 	}
-	fmt.Println("  ✗ denied — enable it later under System Settings → Privacy & Security → Microphone")
+	fmt.Println("  " + cross() + " denied — opening System Settings; enable Zee under Privacy & Security → Microphone")
+	permissions.OpenMicrophoneSettings()
 	return false
 }
 
+// chooseDevice lists every input device (plus System Default) with the active
+// one marked; Enter on the highlighted active entry keeps it, picking another
+// switches.
 func chooseDevice() {
-	cur := config.Get().Device
-	label := "system default"
-	if cur != "" {
-		label = cur
-	}
-	if !askYesNo(fmt.Sprintf("  Choose the input microphone? (current: %s)", label), false) {
-		return
-	}
 	ctx, err := audio.NewContext()
 	if err != nil {
 		fmt.Printf("  Could not open audio: %v\n", err)
 		return
 	}
 	defer ctx.Close()
-	dev, err := audio.SelectDevice(ctx)
-	if err != nil || dev == nil {
-		fmt.Println("  Keeping the current device.")
+	devices, err := ctx.Devices()
+	if err != nil {
+		fmt.Printf("  Could not list devices: %v\n", err)
 		return
 	}
-	config.Update(func(s *config.Settings) { s.Device = dev.Name })
-	fmt.Printf("  Using %s\n", dev.Name)
+
+	cur := config.Get().Device
+	start := 0
+	labels := make([]string, 0, len(devices)+1)
+	def := "System default"
+	if cur == "" {
+		def += "  [active]"
+	}
+	labels = append(labels, def)
+	for i := range devices {
+		l := devices[i].Name
+		if devices[i].Name == cur {
+			l += "  [active]"
+			start = i + 1
+		}
+		labels = append(labels, l)
+	}
+
+	idx := menu("  Microphone:", labels, start)
+	name := ""
+	if idx > 0 {
+		name = devices[idx-1].Name
+	}
+	if name != cur {
+		config.Update(func(s *config.Settings) { s.Device = name })
+	}
+	if name == "" {
+		name = "system default"
+	}
+	fmt.Printf("  Using %s\n", name)
 }
 
-// record captures d of audio from the configured device (raw 16 kHz mono PCM).
+// record captures d of audio from the configured device (raw 16 kHz mono PCM),
+// showing a countdown while it runs.
 func record(d time.Duration) ([]byte, error) {
+	fmt.Println("  Speak a short English sentence…")
+	stop := make(chan struct{})
+	go func() {
+		defer close(stop)
+		for remain := int(d.Seconds()); remain > 0; remain-- {
+			fmt.Printf("\r  ● Recording… %ds ", remain)
+			time.Sleep(time.Second)
+		}
+	}()
+	pcm, err := captureUntil(stop, d+2*time.Second)
+	fmt.Print("\r  ● Recording… done\n")
+	return pcm, err
+}
+
+// captureUntil records PCM from the configured device until stop closes (or
+// max elapses — the safety cap). Shared by the wizard's timed mic test and
+// doctor's hotkey-driven dictation.
+func captureUntil(stop <-chan struct{}, max time.Duration) ([]byte, error) {
 	ctx, err := audio.NewContext()
 	if err != nil {
 		return nil, err
@@ -206,17 +287,14 @@ func record(d time.Duration) ([]byte, error) {
 		buf = append(buf, data...)
 		mu.Unlock()
 	})
-
-	fmt.Printf("  Recording %.0fs — speak a short English sentence now", d.Seconds())
 	if err := cap.Start(); err != nil {
 		return nil, err
 	}
-	for end := time.Now().Add(d); time.Now().Before(end); {
-		time.Sleep(500 * time.Millisecond)
-		fmt.Print(".")
+	select {
+	case <-stop:
+	case <-time.After(max):
 	}
 	cap.Stop()
-	fmt.Println(" done")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -233,15 +311,15 @@ func transcribeLocal(p transcriber.ProviderInfo, pcm []byte) (string, error) {
 			c.Close()
 		}
 	}()
-	return transcribePCM(tr, pcm)
+	return transcribePCM(tr, pcm, "en")
 }
 
 // transcribePCM pushes pcm through the provider's normal session path and
 // returns the transcript — the same round-trip a real dictation makes.
-func transcribePCM(tr transcriber.Transcriber, pcm []byte) (string, error) {
+func transcribePCM(tr transcriber.Transcriber, pcm []byte, lang string) (string, error) {
 	sess, err := tr.NewSession(context.Background(), transcriber.SessionConfig{
 		Format:   "flac",
-		Language: "en",
+		Language: lang,
 	})
 	if err != nil {
 		return "", err
@@ -280,10 +358,10 @@ func ensureModel(p transcriber.ProviderInfo, modelID string) bool {
 	})
 	fmt.Println()
 	if err != nil {
-		fmt.Printf("  Download failed: %v (retry later with `zee -setup`)\n", err)
+		fmt.Printf("  Download failed: %v (retry later with `zee setup`)\n", err)
 		return false
 	}
-	fmt.Println("  ✓ model ready")
+	fmt.Println("  "+tick()+" model ready")
 	return true
 }
 
@@ -292,7 +370,7 @@ func ensureModel(p transcriber.ProviderInfo, modelID string) bool {
 func stepHotkey(r *results) {
 	fmt.Println("\nPush-to-talk hotkey (required)")
 	combo := currentCombo()
-	if askYesNo(fmt.Sprintf("  Use a custom hotkey instead of %s?", combo.Label), false) {
+	if askYesNo(fmt.Sprintf("  Use a custom hotkey instead of %s?", comboDisplay(combo)), false) {
 		// Capturing keystrokes needs the Accessibility permission (NSEvent
 		// global monitor); plain registration below does not.
 		if ensureAccessibility("capturing a custom hotkey") {
@@ -306,7 +384,7 @@ func stepHotkey(r *results) {
 			r.comboFired = true
 			break
 		} else {
-			fmt.Printf("  ✗ %s: %v\n", combo.Label, err)
+			fmt.Printf("  "+cross()+" %s: %v\n", comboDisplay(combo), err)
 		}
 		if !askYesNo("  Try a different combo?", true) || !ensureAccessibility("capturing a custom hotkey") {
 			break
@@ -322,9 +400,9 @@ func stepHotkey(r *results) {
 		s.Hotkey = config.Hotkey{Mods: combo.Mods, Key: combo.Key, Label: combo.Label}
 	})
 	if r.comboFired {
-		fmt.Printf("  ✓ hotkey %s saved\n", combo.Label)
+		fmt.Printf("  "+tick()+" hotkey %s saved\n", comboDisplay(combo))
 	} else {
-		fmt.Printf("  Saved %s unconfirmed — change it later by re-running `zee -setup`\n", combo.Label)
+		fmt.Printf("  Saved %s unconfirmed — change it later by re-running `zee setup`\n", comboDisplay(combo))
 	}
 }
 
@@ -333,15 +411,15 @@ func stepHotkey(r *results) {
 func captureCombo(cur hotkey.Combo) (hotkey.Combo, bool) {
 	hk := hotkey.New(cur)
 	for {
-		fmt.Println("  Press the modifier+key combo you want (Esc to keep the current one)…")
+		fmt.Println("  Press the modifier + key combo you want (Esc to keep the current one)…")
 		c, err := hk.Capture(nil)
 		if err != nil {
-			fmt.Printf("  Kept %s.\n", cur.Label)
+			fmt.Printf("  Kept %s.\n", comboDisplay(cur))
 			return hotkey.Combo{}, false
 		}
 		test := hotkey.New(c)
 		if err := test.Register(); err != nil {
-			fmt.Printf("  ✗ %s can't be used: %v\n", c.Label, err)
+			fmt.Printf("  "+cross()+" %s can't be used: %v\n", comboDisplay(c), err)
 			if askYesNo("  Try another combo?", true) {
 				continue
 			}
@@ -361,14 +439,14 @@ func fireTest(c hotkey.Combo) error {
 		return err
 	}
 	defer hk.Unregister()
-	fmt.Printf("  Press %s once to confirm it fires…\n", c.Label)
+	fmt.Printf("  Press %s once to confirm it fires…\n", comboDisplay(c))
 	select {
 	case <-hk.Keydown():
 		select {
 		case <-hk.Keyup():
 		case <-time.After(3 * time.Second):
 		}
-		fmt.Println("  ✓ fired")
+		fmt.Println("  "+tick()+" fired")
 		return nil
 	case <-time.After(20 * time.Second):
 		return fmt.Errorf("no event within 20s — the combo may be reserved by the system")
@@ -377,37 +455,87 @@ func fireTest(c hotkey.Combo) error {
 
 // --- Auto-paste + Accessibility ---
 
+// stepAutoPaste asks for auto-paste and, when wanted, makes it provably work
+// before setup moves on: the Accessibility grant is required, and then a real
+// synthesized paste must land (pasteTest). The user can back out — auto-paste
+// is then turned off, because it cannot work without the permission.
 func stepAutoPaste(r *results) {
-	r.autoPaste = askYesNo("\nAuto-paste transcribed text into the focused app?", config.Get().AutoPaste)
-	config.Update(func(s *config.Settings) { s.AutoPaste = r.autoPaste })
-	if r.autoPaste {
-		fmt.Println("  Auto-paste needs the Accessibility permission.")
-		r.axGranted = ensureAccessibility("auto-paste")
-	} else {
+	r.autoPaste = askYesNo("Will you use auto-paste? (types each transcription into the focused app)", config.Get().AutoPaste)
+	if !r.autoPaste {
 		r.axGranted = permissions.HasAccessibility()
 		fmt.Println("  Enable it later any time from the tray → Settings → Auto-paste.")
+		config.Update(func(s *config.Settings) { s.AutoPaste = false })
+		return
+	}
+	fmt.Println("  Auto-paste needs the Accessibility permission (required).")
+	for {
+		if ensureAccessibility("auto-paste") && pasteTest() {
+			r.axGranted = true
+			config.Update(func(s *config.Settings) { s.AutoPaste = true })
+			return
+		}
+		if askYesNo("  Auto-paste verification failed — try again?", true) {
+			continue
+		}
+		fmt.Println("  Auto-paste disabled; grant Accessibility and re-enable it from the tray.")
+		r.autoPaste = false
+		config.Update(func(s *config.Settings) { s.AutoPaste = false })
+		return
 	}
 }
 
-// ensureAccessibility prompts for the Accessibility permission and polls until
-// macOS actually reports this binary as trusted (the grant is per-signature;
-// the poll is the "is it really respected?" check), or times out.
+// pasteTest proves a synthesized paste actually works — Accessibility being
+// granted is not the same thing. It puts a token on the clipboard, sends the
+// paste keystroke at the focused app (this terminal), and checks that the
+// token arrives on our own stdin.
+func pasteTest() bool {
+	if err := clipboard.Init(); err != nil {
+		fmt.Printf("  %s paste init: %v\n", cross(), err)
+		return false
+	}
+	prev, _ := clipboard.Read()
+	const token = "zee-paste-test"
+	if err := clipboard.Copy(token + "\n"); err != nil {
+		fmt.Printf("  %s clipboard write: %v\n", cross(), err)
+		return false
+	}
+	fmt.Println("  Verifying paste — the test text should type itself below:")
+	fmt.Print("  ")
+	clipboard.Paste()
+	got := readLineTimeout(5 * time.Second)
+	if prev != "" {
+		clipboard.Copy(prev) // restore what the user had
+	}
+	if strings.Contains(got, token) {
+		fmt.Println("  " + tick() + " paste works")
+		return true
+	}
+	fmt.Println()
+	fmt.Println("  " + cross() + " pasted text did not arrive")
+	return false
+}
+
+// ensureAccessibility prompts for the Accessibility permission, opens the
+// System Settings pane at the right page, and polls until macOS actually
+// reports this binary as trusted (the grant is per-signature; the poll is the
+// "is it really respected?" check), or times out.
 func ensureAccessibility(reason string) bool {
 	if permissions.HasAccessibility() {
 		return true
 	}
 	fmt.Printf("  Accessibility permission is needed for %s.\n", reason)
-	fmt.Println("  A prompt is opening — enable Zee under Privacy & Security → Accessibility, then return here.")
+	fmt.Println("  Opening System Settings — enable Zee under Privacy & Security → Accessibility, then return here.")
 	permissions.RequestAccessibility()
+	permissions.OpenAccessibilitySettings()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		if permissions.HasAccessibility() {
-			fmt.Println("  ✓ granted")
+			fmt.Println("  "+tick()+" granted")
 			return true
 		}
 		time.Sleep(time.Second)
 	}
-	fmt.Println("  ✗ not granted (timed out) — enable it later and re-run `zee -setup`")
+	fmt.Println("  "+cross()+" not granted (timed out) — enable it later and re-run `zee setup`")
 	return false
 }
 
@@ -416,8 +544,18 @@ func ensureAccessibility(reason string) bool {
 func stepProviders(r *results) {
 	fmt.Println("\nTranscription providers")
 	fmt.Println("  Configure as many as you like — each key is tested with real audio and")
-	fmt.Println("  stored in credentials.json. Add or change keys later by re-running `zee -setup`.")
+	fmt.Println("  stored in credentials.json. Add or change keys later by re-running `zee setup`.")
 	providers := transcriber.Providers()
+	// tested marks providers proven with real audio this run: the tick in the
+	// menu means "verified", not merely "configured". Parakeet earned its tick
+	// in the mic step; every cloud key already on disk is verified right here,
+	// before the menu shows, so the ticks reflect reality from the start.
+	tested := map[string]bool{"parakeet": r.micTested}
+	for _, p := range providers {
+		if p.Name != "parakeet" && config.HasAPIKey(p.Name) {
+			tested[p.Name] = testProvider(p, r.testPCM)
+		}
+	}
 	for {
 		cur := config.Get().Provider
 		start := len(providers) // "Done"
@@ -425,12 +563,16 @@ func stepProviders(r *results) {
 		for i, p := range providers {
 			label := p.Label
 			switch {
+			case tested[p.Name] && p.Available():
+				label += " " + tick() // verified this run; says it all
 			case p.Name == "parakeet" && p.Available():
 				label += " — offline, ready"
 			case p.Name == "parakeet":
 				label += " — offline, no key needed"
 			case config.HasAPIKey(p.Name):
-				label += " — key set ✓"
+				label += " — key set"
+			default:
+				label += " — key not set"
 			}
 			if p.Name == cur {
 				label += "  [active]"
@@ -454,7 +596,7 @@ func stepProviders(r *results) {
 		}
 		promptAPIKey(p)
 		if config.HasAPIKey(p.Name) {
-			testProvider(p, r.testPCM)
+			tested[p.Name] = testProvider(p, r.testPCM)
 		}
 	}
 	chooseActiveProvider()
@@ -482,21 +624,25 @@ func promptAPIKey(p transcriber.ProviderInfo) {
 
 // testProvider sends real audio (the mic-test recording, or a second of
 // silence) through the provider's normal session path — the only proof the
-// stored key actually authenticates.
-func testProvider(p transcriber.ProviderInfo, pcm []byte) {
+// stored key actually authenticates. Always in English: the sample was
+// recorded against the English-only local model, and every cloud provider
+// supports English. Reports whether the key verified.
+func testProvider(p transcriber.ProviderInfo, pcm []byte) bool {
 	if len(pcm) == 0 {
 		pcm = make([]byte, encoder.SampleRate*2) // 1s of silence still exercises auth
 	}
 	fmt.Printf("  Testing %s…", p.Label)
-	text, err := transcribePCM(p.New(), pcm)
+	text, err := transcribePCM(p.New(), pcm, "en")
 	switch {
 	case err != nil:
-		fmt.Printf(" ✗ %v\n", err)
+		fmt.Printf(" %s %v\n", cross(), err)
+		return false
 	case text == "":
-		fmt.Println(" ✓ authenticated (no speech in the sample)")
+		fmt.Println(" " + tick() + " authenticated (no speech in the sample)")
 	default:
-		fmt.Printf(" ✓ heard: %q\n", text)
+		fmt.Printf(" %s heard: %q\n", tick(), text)
 	}
+	return true
 }
 
 func chooseActiveProvider() {
@@ -507,7 +653,7 @@ func chooseActiveProvider() {
 		}
 	}
 	if len(avail) == 0 {
-		fmt.Println("  No provider configured — Zee can't transcribe until one is (re-run `zee -setup`).")
+		fmt.Println("  No provider configured — Zee can't transcribe until one is (re-run `zee setup`).")
 		return
 	}
 	cur := config.Get().Provider
@@ -559,12 +705,12 @@ func summary(r results) int {
 	if r.micGranted {
 		micDetail = "granted (live test skipped)"
 		if r.micTested {
-			micDetail = "recorded + transcribed ✓"
+			micDetail = "recorded + transcribed " + tick()
 		}
 	}
 	report("microphone", r.micGranted, micDetail)
 
-	report("hotkey", r.comboFired, r.combo.Label+boolWord(r.comboFired, " (fired)", " (not confirmed)"))
+	report("hotkey", r.comboFired, comboDisplay(r.combo)+boolWord(r.comboFired, " (fired)", " (not confirmed)"))
 
 	axOK := r.axGranted || !r.autoPaste
 	report("accessibility", axOK, boolWord(r.axGranted, "granted", boolWord(r.autoPaste, "missing — auto-paste won't work", "not needed")))
@@ -572,12 +718,12 @@ func summary(r results) int {
 	provOK, detail := providerReady()
 	report("provider", provOK, detail)
 
-	fmt.Println("\nChange any of this later: re-run `zee -setup`, or tray → Settings →")
+	fmt.Println("\nChange any of this later: re-run `zee setup`, or tray → Settings →")
 	fmt.Println("Edit Settings… (config.json edits apply live).")
 
 	// Mic is the only hard requirement; the rest are warnings.
 	if !r.micGranted {
-		fmt.Println("\nSetup finished with warnings above — re-run `zee -setup` any time.")
+		fmt.Println("\nSetup finished with warnings above — re-run `zee setup` any time.")
 		return 1
 	}
 	fmt.Println("\nSetup complete.")
@@ -605,9 +751,9 @@ func providerReady() (bool, string) {
 }
 
 func report(name string, ok bool, detail string) {
-	mark := "✗"
+	mark := cross()
 	if ok {
-		mark = "✓"
+		mark = tick()
 	}
 	fmt.Printf("  %s %-14s %s\n", mark, name, detail)
 }
@@ -617,6 +763,25 @@ func boolWord(b bool, yes, no string) string {
 		return yes
 	}
 	return no
+}
+
+// comboDisplay renders a combo for CLI prose as "⌃ + ⇧ + Space" — the compact
+// tray form ("⌃⇧Space") is fine in a menu but reads poorly in sentences.
+func comboDisplay(c hotkey.Combo) string {
+	var parts []string
+	rest := c.Label
+	for len(rest) > 0 {
+		r, size := utf8.DecodeRuneInString(rest)
+		if !strings.ContainsRune("⌃⇧⌥⌘", r) {
+			break
+		}
+		parts = append(parts, string(r))
+		rest = rest[size:]
+	}
+	if rest != "" {
+		parts = append(parts, rest)
+	}
+	return strings.Join(parts, " + ")
 }
 
 // currentCombo is the saved hotkey, or the built-in default when none is saved.

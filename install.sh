@@ -121,18 +121,23 @@ fi
 
 if [[ -n "$TTY" ]]; then
   log "Starting setup..."
-  # `open -W` doesn't propagate the app's exit code; the wizard prints its own
-  # pass/fail summary to this terminal, so only a failure to start is ours.
-  open -W -a "${APP_DIR}/Zee.app" --stdin "$TTY" --stdout "$TTY" --stderr "$TTY" \
-    --args -setup \
-    || log "Setup could not start — run it later with: ${APP_DIR}/Zee.app/Contents/MacOS/zee -setup"
+  # Plain invocation: zee re-execs itself through `open` for correct TCC
+  # attribution and still returns the wizard's real exit code, so a failed
+  # setup (mic denied, nothing verified) fails this installer too.
+  if "${APP_DIR}/Zee.app/Contents/MacOS/zee" setup <"$TTY" >"$TTY" 2>&1; then
+    log "Setup complete."
+  else
+    log "Zee is installed, but setup did not finish cleanly."
+    log "Fix it any time with: ${APP_DIR}/Zee.app/Contents/MacOS/zee setup"
+    exit 1
+  fi
 else
   cat <<EOF
 
 Setup was not run (no interactive terminal detected).
 Finish configuring Zee — provider + API key, permissions, and hotkey — with:
 
-    /Applications/Zee.app/Contents/MacOS/zee -setup
+    /Applications/Zee.app/Contents/MacOS/zee setup
 
 On Apple Silicon, Zee also works offline out of the box (local model, no key).
 EOF

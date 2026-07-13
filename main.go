@@ -24,6 +24,7 @@ import (
 	"zee/hotkey"
 	"zee/log"
 	"zee/login"
+	"zee/permissions"
 	"zee/setup"
 	"zee/shutdown"
 	"zee/transcriber"
@@ -159,25 +160,35 @@ func gracefulShutdown() {
 }
 
 func run() {
-	if len(os.Args) > 1 && os.Args[1] == "update" {
-		if version == "dev" {
-			fmt.Println("Dev build — cannot check for updates.")
+	// Bare subcommands, parsed before the flag set (like git/go verbs). The
+	// -setup flag below stays as an alias so install.sh and older docs keep
+	// working.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "setup":
+			os.Exit(writeStatusFile(setup.Run()))
+		case "doctor":
+			os.Exit(writeStatusFile(setup.Doctor()))
+		case "update":
+			if version == "dev" {
+				fmt.Println("Dev build — cannot check for updates.")
+				os.Exit(0)
+			}
+			fmt.Printf("zee %s — checking for updates...\n", version)
+			rel, err := update.CheckLatest(version)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				os.Exit(1)
+			}
+			if rel == nil {
+				fmt.Println("Already up to date.")
+				os.Exit(0)
+			}
+			fmt.Printf("\nUpdate available: %s → %s\n\n", version, rel.Version)
+			fmt.Println("Install:   curl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash")
+			fmt.Printf("Download:  %s\n", rel.URL)
 			os.Exit(0)
 		}
-		fmt.Printf("zee %s — checking for updates...\n", version)
-		rel, err := update.CheckLatest(version)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			os.Exit(1)
-		}
-		if rel == nil {
-			fmt.Println("Already up to date.")
-			os.Exit(0)
-		}
-		fmt.Printf("\nUpdate available: %s → %s\n\n", version, rel.Version)
-		fmt.Println("Install:   curl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash")
-		fmt.Printf("Download:  %s\n", rel.URL)
-		os.Exit(0)
 	}
 
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
@@ -349,7 +360,7 @@ func run() {
 		}
 		if !clipboard.CheckAccessibility() {
 			alert.Warn("Auto-paste requires Accessibility permission.\n\nGrant access to Zee.app (or your terminal app if running from CLI) in:\nSystem Settings → Privacy & Security → Accessibility")
-			exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").Start()
+			permissions.OpenAccessibilitySettings()
 		}
 	}
 
@@ -393,11 +404,12 @@ func run() {
 		},
 		func() { requestStop() },
 	)
-	// preferredDevice remembers the user's choice so we can auto-reconnect
-	preferredDevice := ""
-	if selectedDevice != nil {
-		preferredDevice = selectedDevice.Name
-	}
+	// preferredDevice remembers the user's choice so we can auto-reconnect.
+	// Seeded from the saved/flag name — NOT from what's currently attached —
+	// so a session started while the mic is unplugged still auto-switches to
+	// it the moment it's plugged in (capture starts on system default until
+	// then).
+	preferredDevice := *deviceFlag
 	tray.SetBTCheck(audio.IsBluetooth)
 	if devices, err := ctx.Devices(); err == nil && len(devices) > 0 {
 		names := make([]string, len(devices))
@@ -599,11 +611,12 @@ func run() {
 			}
 			pref := preferredDevice
 			captureMu.Unlock()
-			if selName != "" && !slices.Contains(names, selName) {
+			switch deviceChangeAction(names, selName, pref) {
+			case switchToDefault:
 				log.Info("device_disconnected: " + selName)
 				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
 				selName = ""
-			} else if selName == "" && pref != "" && slices.Contains(names, pref) {
+			case switchToPreferred:
 				log.Info("device_reconnected: " + pref)
 				switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, pref)
 				selName = pref
@@ -834,6 +847,21 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 	}
 }
 
+// writeStatusFile persists a subcommand's exit code to the path(s) given by
+// `-status-file <path>` arguments, then returns the code unchanged. The
+// launchd re-exec (setup.maybeReexec) injects this argument because `open -W`
+// swallows the child's exit code — the parent zee reads the file back and
+// exits with the real code, so callers like install.sh just see a normal
+// process exit.
+func writeStatusFile(code int) int {
+	for i, a := range os.Args {
+		if a == "-status-file" && i+1 < len(os.Args) {
+			os.WriteFile(os.Args[i+1], []byte(fmt.Sprintf("%d\n", code)), 0644)
+		}
+	}
+	return code
+}
+
 // currentHotkeyCombo maps the saved config hotkey to a hotkey.Combo, falling
 // back to the built-in default when nothing is saved.
 func currentHotkeyCombo(cfg config.Settings) hotkey.Combo {
@@ -845,7 +873,7 @@ func currentHotkeyCombo(cfg config.Settings) hotkey.Combo {
 }
 
 func longPressDuration() time.Duration {
-	const def = 350 * time.Millisecond
+	const def = hotkey.DefaultLongPress
 	if v := os.Getenv("ZEE_LONGPRESS_DURATION"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
@@ -856,54 +884,51 @@ func longPressDuration() time.Duration {
 }
 
 func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- recSession) {
-	type state int
-	const (
-		idle state = iota
-		toggleRecording
-	)
-
-	st := idle
 	for {
-		switch st {
-		case idle:
-			<-hk.Keydown()
-			if isRecording.Load() {
-				<-hk.Keyup()
-				if isTranscribing.Load() {
-					go audio.PlayDenied() // ignored: transcription still in progress
-				} else {
-					requestStop()
-				}
-				continue
-			}
-			sc := tryStartSession(sessions)
-			if sc == nil {
-				<-hk.Keyup() // denied (a cycle began between the guard above and here)
-				continue
-			}
-			timer := time.NewTimer(longPress)
-			select {
-			case <-timer.C:
-				<-hk.Keyup()
-				requestStop()
-				st = idle
-			case <-hk.Keyup():
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				sc.Store(true)
-				st = toggleRecording
-			}
-		case toggleRecording:
-			<-hk.Keydown()
+		<-hk.Keydown()
+		if isRecording.Load() {
 			<-hk.Keyup()
-			requestStop()
-			st = idle
+			if isTranscribing.Load() {
+				go audio.PlayDenied() // ignored: transcription still in progress
+			} else {
+				requestStop()
+			}
+			continue
 		}
+		sc := tryStartSession(sessions)
+		if sc == nil {
+			<-hk.Keyup() // denied (a cycle began between the guard above and here)
+			continue
+		}
+		// Shared press semantics (hold vs toggle) — see hotkey.WaitStop. Toggle
+		// mode arms silence auto-close the moment it is entered.
+		hotkey.WaitStop(hk, longPress, func() { sc.Store(true) })
+		requestStop()
 	}
+}
+
+// deviceAction is what a change in the attached-device list means for the
+// capture device.
+type deviceAction int
+
+const (
+	keepDevice        deviceAction = iota
+	switchToDefault                // the selected mic vanished
+	switchToPreferred              // the user's preferred mic (re)appeared
+)
+
+// deviceChangeAction decides how the capture device should react to the
+// current device list: switch away when the selected mic is gone, switch (back)
+// to the preferred one when it is attached while we're on the system default —
+// including the first time it appears after starting without it.
+func deviceChangeAction(names []string, selected, preferred string) deviceAction {
+	if selected != "" && !slices.Contains(names, selected) {
+		return switchToDefault
+	}
+	if selected == "" && preferred != "" && slices.Contains(names, preferred) {
+		return switchToPreferred
+	}
+	return keepDevice
 }
 
 func switchDeviceByName(ctx audio.Context, captureConfig audio.CaptureConfig, captureDevice *audio.CaptureDevice, selectedDevice **audio.DeviceInfo, name string) {
@@ -1018,11 +1043,18 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	if closeErr != nil {
 		log.Errorf("transcription error: %v", closeErr)
 		tray.SetError(closeErr.Error())
-		// Auto-save the failed recording so it can be recovered/retried; uses
-		// the same save path (and "Saved to samples" notice) as the tray button.
+		// Auto-save the failed recording so it can be recovered/retried, and
+		// tell the user what actually happened — an error alert, not the
+		// manual save's "Saved to" notice.
 		if len(result.AudioData) > 0 {
 			setLastRecording(result, cfg, closeErr.Error())
-			go saveLastRecording()
+			go func() {
+				msg := "Transcription failed:\n" + closeErr.Error()
+				if dir, err := persistLastRecording(); err == nil {
+					msg += "\n\nRecording saved to:\n" + dir
+				}
+				alert.Error(msg)
+			}()
 		}
 	}
 
@@ -1120,27 +1152,38 @@ func setLastRecording(result transcriber.SessionResult, cfg recordingConfig, err
 	lastRecMu.Unlock()
 }
 
+// saveLastRecording is the tray "Save Last Recording" button: persist + a
+// success notice. The auto-save-on-error path uses persistLastRecording
+// directly and shows its own error alert instead.
 func saveLastRecording() {
+	dir, err := persistLastRecording()
+	if err != nil {
+		alert.Warn(err.Error())
+		return
+	}
+	alert.Info("Saved to " + dir)
+}
+
+// persistLastRecording writes the stashed last recording (audio + info.json)
+// to a timestamped folder under samples/ and returns that folder.
+func persistLastRecording() (string, error) {
 	lastRecMu.Lock()
 	rec := lastRec
 	lastRecMu.Unlock()
 
 	if rec == nil {
-		alert.Warn("No recording to save")
-		return
+		return "", fmt.Errorf("No recording to save")
 	}
 
 	ts := rec.Timestamp.Format("2006-01-02T15-04-05")
 	dir := filepath.Join(config.Dir(), "samples", ts)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		alert.Error("Save failed: " + err.Error())
-		return
+		return "", fmt.Errorf("Save failed: %w", err)
 	}
 
 	ext := rec.AudioFormat
 	if err := os.WriteFile(filepath.Join(dir, "audio."+ext), rec.AudioData, 0644); err != nil {
-		alert.Error("Save failed: " + err.Error())
-		return
+		return "", fmt.Errorf("Save failed: %w", err)
 	}
 
 	info, _ := json.Marshal(map[string]string{
@@ -1153,7 +1196,7 @@ func saveLastRecording() {
 	})
 	os.WriteFile(filepath.Join(dir, "info.json"), info, 0644)
 
-	alert.Info("Saved to " + dir)
+	return dir, nil
 }
 
 // directTranscriber transcribes encoded audio bytes in one call. Every provider

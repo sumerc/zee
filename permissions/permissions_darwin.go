@@ -11,6 +11,22 @@ int permAXPrompt(void);
 */
 import "C"
 
+import "os/exec"
+
+// OpenAccessibilitySettings opens System Settings at Privacy & Security →
+// Accessibility. The AX prompt is one-shot — once dismissed macOS never shows
+// it again — so deep-linking the pane is the reliable way to get the toggle in
+// front of the user.
+func OpenAccessibilitySettings() {
+	exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").Start()
+}
+
+// OpenMicrophoneSettings opens System Settings at Privacy & Security →
+// Microphone (for the previously-denied case, which macOS won't re-prompt).
+func OpenMicrophoneSettings() {
+	exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone").Start()
+}
+
 // MicrophoneStatus reports the current microphone authorization without prompting.
 func MicrophoneStatus() MicStatus { return micStatusFromC(int(C.permMicStatus())) }
 

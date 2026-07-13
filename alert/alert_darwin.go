@@ -2,7 +2,10 @@
 
 package alert
 
-import "os/exec"
+import (
+	"os/exec"
+	"strings"
+)
 
 func Error(msg string) {
 	show(msg, "stop")
@@ -18,7 +21,7 @@ func Info(msg string) {
 
 func Confirm(msg, action string) bool {
 	out, err := exec.Command("osascript", "-e",
-		`display dialog "`+msg+`" with title "Zee" buttons {"Cancel", "`+action+`"} default button "`+action+`" with icon note`).Output()
+		`display dialog "`+asQuote(msg)+`" with title "Zee" buttons {"Cancel", "`+asQuote(action)+`"} default button "`+asQuote(action)+`" with icon note`).Output()
 	if err != nil {
 		return false
 	}
@@ -27,5 +30,15 @@ func Confirm(msg, action string) bool {
 
 func show(msg, icon string) {
 	exec.Command("osascript", "-e",
-		`display dialog "`+msg+`" with title "Zee" buttons {"OK"} default button "OK" with icon `+icon).Run()
+		`display dialog "`+asQuote(msg)+`" with title "Zee" buttons {"OK"} default button "OK" with icon `+icon).Run()
+}
+
+// asQuote escapes s for an AppleScript double-quoted literal. Raw quotes,
+// backslashes, or newlines in the message (error strings often contain quoted
+// URLs) are an osascript syntax error — the dialog silently never appears.
+func asQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	return s
 }

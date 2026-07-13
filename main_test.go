@@ -280,3 +280,30 @@ func TestApplyPendingSwitchRunsOnceAtCycleEnd(t *testing.T) {
 		t.Fatalf("deferred switch ran again after being cleared (%d)", ran)
 	}
 }
+
+// TestDeviceChangeAction pins the hotplug decision table — in particular the
+// regression where a session started while the preferred mic was unplugged:
+// the preference must still win the moment the device is attached.
+func TestDeviceChangeAction(t *testing.T) {
+	jabra := "Jabra EVOLVE 20 MS"
+	cases := []struct {
+		name      string
+		names     []string
+		selected  string
+		preferred string
+		want      deviceAction
+	}{
+		{"selected mic unplugged", []string{"MacBook Pro Microphone"}, jabra, jabra, switchToDefault},
+		{"preferred plugged in while on default", []string{"MacBook Pro Microphone", jabra}, "", jabra, switchToPreferred},
+		{"started without preferred, it appears later", []string{jabra}, "", jabra, switchToPreferred},
+		{"on default, no preference", []string{jabra}, "", "", keepDevice},
+		{"selected still attached", []string{"MacBook Pro Microphone", jabra}, jabra, jabra, keepDevice},
+		{"preferred absent, stay on default", []string{"MacBook Pro Microphone"}, "", jabra, keepDevice},
+	}
+	for _, c := range cases {
+		if got := deviceChangeAction(c.names, c.selected, c.preferred); got != c.want {
+			t.Errorf("%s: deviceChangeAction(%v, sel=%q, pref=%q) = %v, want %v",
+				c.name, c.names, c.selected, c.preferred, got, c.want)
+		}
+	}
+}

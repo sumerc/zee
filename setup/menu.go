@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -41,6 +42,8 @@ func menu(title string, options []string, start int) int {
 	if start < 0 || start >= len(options) {
 		start = 0
 	}
+
+	fmt.Println() // separate the question from preceding output
 
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
@@ -135,7 +138,7 @@ func askYesNo(prompt string, def bool) bool {
 	if def {
 		hint = "[Y/n]"
 	}
-	fmt.Printf("%s %s: ", prompt, hint)
+	fmt.Printf("\n%s %s: ", prompt, hint)
 	switch strings.ToLower(strings.TrimSpace(readLine())) {
 	case "":
 		return def
@@ -144,6 +147,17 @@ func askYesNo(prompt string, def bool) bool {
 	default:
 		return false
 	}
+}
+
+// readLineTimeout reads one line like readLine but gives up after d (via the
+// tty read deadline; if the fd doesn't support deadlines it blocks like
+// readLine). Returns whatever arrived — a paste with no trailing newline still
+// yields its bytes once the deadline fires.
+func readLineTimeout(d time.Duration) string {
+	if err := os.Stdin.SetReadDeadline(time.Now().Add(d)); err == nil {
+		defer os.Stdin.SetReadDeadline(time.Time{})
+	}
+	return readLine()
 }
 
 // readSecret reads a line without echoing it (for API keys). Falls back to a

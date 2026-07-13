@@ -9,6 +9,49 @@ import (
 // captureTimeout bounds how long Capture waits for the user to press a chord.
 const captureTimeout = 20 * time.Second
 
+// DefaultLongPress separates the two press styles: held longer = push-to-talk
+// (release stops), shorter = toggle (next tap stops).
+const DefaultLongPress = 350 * time.Millisecond
+
+// AwaitRecord waits (up to timeout) for the combo to start a recording and
+// returns a stop channel driven by WaitStop — the exact press semantics of
+// the app's record loop, packaged for callers with no session machinery
+// (`zee doctor`). fired is false when the combo never came.
+func AwaitRecord(hk Hotkey, longPress, timeout time.Duration) (stop <-chan struct{}, fired bool) {
+	select {
+	case <-hk.Keydown():
+	case <-time.After(timeout):
+		return nil, false
+	}
+	stopCh := make(chan struct{})
+	go func() {
+		WaitStop(hk, longPress, nil)
+		close(stopCh)
+	}()
+	return stopCh, true
+}
+
+// WaitStop implements zee's press semantics after a recording started on
+// keydown, blocking until it should stop: a press held longer than longPress
+// records until release; a shorter tap switches to toggle mode, where the
+// next tap stops. onToggle (optional) runs the moment toggle mode is entered
+// (the app uses it to arm silence auto-close). Shared by the main record loop
+// and `zee doctor`, so both behave identically.
+func WaitStop(hk Hotkey, longPress time.Duration, onToggle func()) {
+	timer := time.NewTimer(longPress)
+	defer timer.Stop()
+	select {
+	case <-timer.C: // held: stop on release
+		<-hk.Keyup()
+	case <-hk.Keyup(): // tap: toggle — stop on the next tap
+		if onToggle != nil {
+			onToggle()
+		}
+		<-hk.Keydown()
+		<-hk.Keyup()
+	}
+}
+
 // Hotkey is a global push-to-talk hotkey. Rebind swaps the active combination
 // at runtime (keeping the same Keydown/Keyup channels), and Capture records the
 // next chord the user presses so the combination can be user-configured.
