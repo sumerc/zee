@@ -534,6 +534,7 @@ func run() {
 		exec.Command("open", config.HintsPath()).Run()
 	})
 	tray.OnEditSettings(func() {
+		config.EnsureSaved() // config.json may not exist yet; open needs a file
 		exec.Command("open", "-t", config.SettingsPath()).Run()
 	})
 	tray.SetHotkeyLabel(currentHotkeyCombo(cfg).Label)

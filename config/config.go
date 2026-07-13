@@ -134,6 +134,20 @@ func Get() Settings {
 	return s
 }
 
+// EnsureSaved writes config.json (creating its directory) if it does not already
+// exist, so external tools — the tray "Edit Settings…" item — always have a file
+// to open. config.Load never creates the file, so a fresh install has none until
+// the first setting changes.
+func EnsureSaved() {
+	if _, err := os.Stat(settingsPath()); err == nil {
+		return
+	}
+	mu.Lock()
+	s := current
+	mu.Unlock()
+	save(s)
+}
+
 func Update(fn func(*Settings)) {
 	mu.Lock()
 	fn(&current)
