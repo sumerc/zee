@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Create a macOS .dmg containing Zee.app with an Applications symlink.
-# Usage: packaging/mkdmg.sh <binary> <version> <output.dmg>
+# Usage: packaging/mkdmg.sh <binary> <version> <output.dmg> [output.zip]
 
 BINARY="${1:?Usage: mkdmg.sh <binary> <version> <output.dmg>}"
 VERSION="${2:?}"
@@ -38,6 +38,10 @@ for doc in LICENSE THIRD_PARTY_LICENSES; do
 done
 
 codesign --force --sign - --identifier com.zee.app "$APP"
+
+if [[ -n "${4:-}" ]]; then
+	ditto -c -k --sequesterRsrc --keepParent "$APP" "$4"
+fi
 
 ln -s /Applications "$STAGING/Applications"
 

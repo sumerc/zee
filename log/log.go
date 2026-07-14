@@ -94,6 +94,7 @@ const maxLogSize = 10 << 20 // 10 MB
 
 func rotateIfLarge(path string) {
 	if st, err := os.Stat(path); err == nil && st.Size() > maxLogSize {
+		os.Remove(path + ".old") // Windows: Rename won't replace an existing file
 		os.Rename(path, path+".old")
 	}
 }

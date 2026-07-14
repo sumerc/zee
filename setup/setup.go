@@ -86,28 +86,35 @@ type results struct {
 	axGranted  bool
 }
 
-// Run executes the wizard and returns a process exit code (0 = mic granted,
-// the one hard requirement; 1 otherwise).
-func Run() int {
-	// Refuse to run alongside a live tray instance: it holds the global hotkey
-	// the tests below need. The user quits it deliberately instead of us
-	// killing it. Checked before the respawn so the message lands cleanly; the
-	// disclaimed child skips it — the only other zee process is its own
-	// terminal parent, waiting on it.
+// begin is the shared Run/Doctor preamble: refuse to run alongside a live
+// tray instance (it holds the global hotkey the tests need — the user quits
+// it deliberately instead of us killing it; checked before the respawn so the
+// message lands cleanly, and the disclaimed child skips it since the only
+// other zee process is its own terminal parent), respawn TCC-disclaimed if
+// needed, wire the credentials store, load settings, print the banner.
+// done=true means return code immediately (guard refused or respawn ran).
+func begin(cmd string) (code int, done bool) {
 	if !isRespawnedChild() && otherZeeRunning() {
-		fmt.Println("Zee is already running — quit it first (menu bar → Quit), then re-run `zee setup`.")
-		return 1
+		fmt.Printf("Zee is already running — quit it first (menu bar → Quit), then re-run `%s`.\n", cmd)
+		return 1, true
 	}
 	if code, done := maybeReexec(); done {
-		return code
+		return code, true
 	}
-
 	transcriber.SetKeySource(config.APIKey)
 	if err := config.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not load settings: %v\n", err)
 	}
-
 	printBanner()
+	return 0, false
+}
+
+// Run executes the wizard and returns a process exit code (0 = mic granted,
+// the one hard requirement; 1 otherwise).
+func Run() int {
+	if code, done := begin("zee setup"); done {
+		return code
+	}
 	fmt.Println(bold("Everything here can be changed later: re-run `zee setup`, or edit"))
 	fmt.Println(bold("config.json from the tray (Settings → Edit Settings…) — edits apply live."))
 
@@ -307,16 +314,20 @@ func captureUntil(stop <-chan struct{}, max time.Duration) ([]byte, error) {
 	return buf, nil
 }
 
+// closeTranscriber frees a transcriber's backing resources when it has any
+// (local models hold C memory the GC can't reclaim).
+func closeTranscriber(tr transcriber.Transcriber) {
+	if c, ok := tr.(interface{ Close() }); ok {
+		c.Close()
+	}
+}
+
 // transcribeLocal runs pcm through the local English model (loaded for the
 // test, freed right after — the gguf holds C memory the GC can't reclaim).
 func transcribeLocal(p transcriber.ProviderInfo, pcm []byte) (string, error) {
 	tr := p.New()
 	tr.SetModel(localmodel.ID110mEN)
-	defer func() {
-		if c, ok := tr.(interface{ Close() }); ok {
-			c.Close()
-		}
-	}()
+	defer closeTranscriber(tr)
 	return transcribePCM(tr, pcm, "en")
 }
 
@@ -376,7 +387,7 @@ func ensureModel(p transcriber.ProviderInfo, modelID string) bool {
 func stepHotkey(r *results) {
 	fmt.Println("\nPush-to-talk hotkey (required)")
 	combo := currentCombo()
-	if askYesNo(fmt.Sprintf("  Use a custom hotkey instead of %s?", comboDisplay(combo)), false) {
+	if askYesNo(fmt.Sprintf("  Use a custom hotkey instead of %s?", combo.Display()), false) {
 		// Capturing keystrokes needs the Accessibility permission (NSEvent
 		// global monitor); plain registration below does not.
 		if ensureAccessibility("capturing a custom hotkey") {
@@ -390,7 +401,7 @@ func stepHotkey(r *results) {
 			r.comboFired = true
 			break
 		} else {
-			fmt.Printf("  "+cross()+" %s: %v\n", comboDisplay(combo), err)
+			fmt.Printf("  "+cross()+" %s: %v\n", combo.Display(), err)
 		}
 		if !askYesNo("  Try a different combo?", true) || !ensureAccessibility("capturing a custom hotkey") {
 			break
@@ -406,9 +417,9 @@ func stepHotkey(r *results) {
 		s.Hotkey = config.Hotkey{Mods: combo.Mods, Key: combo.Key, Label: combo.Label}
 	})
 	if r.comboFired {
-		fmt.Printf("  "+tick()+" hotkey %s saved\n", comboDisplay(combo))
+		fmt.Printf("  "+tick()+" hotkey %s saved\n", combo.Display())
 	} else {
-		fmt.Printf("  Saved %s unconfirmed — change it later by re-running `zee setup`\n", comboDisplay(combo))
+		fmt.Printf("  Saved %s unconfirmed — change it later by re-running `zee setup`\n", combo.Display())
 	}
 }
 
@@ -420,12 +431,12 @@ func captureCombo(cur hotkey.Combo) (hotkey.Combo, bool) {
 		fmt.Println("  Press the modifier + key combo you want (Esc to keep the current one)…")
 		c, err := hk.Capture(nil)
 		if err != nil {
-			fmt.Printf("  Kept %s.\n", comboDisplay(cur))
+			fmt.Printf("  Kept %s.\n", cur.Display())
 			return hotkey.Combo{}, false
 		}
 		test := hotkey.New(c)
 		if err := test.Register(); err != nil {
-			fmt.Printf("  "+cross()+" %s can't be used: %v\n", comboDisplay(c), err)
+			fmt.Printf("  "+cross()+" %s can't be used: %v\n", c.Display(), err)
 			if askYesNo("  Try another combo?", true) {
 				continue
 			}
@@ -445,7 +456,7 @@ func fireTest(c hotkey.Combo) error {
 		return err
 	}
 	defer hk.Unregister()
-	fmt.Printf("  Press %s once to confirm it fires…\n", comboDisplay(c))
+	fmt.Printf("  Press %s once to confirm it fires…\n", c.Display())
 	select {
 	case <-hk.Keydown():
 		select {
@@ -509,9 +520,7 @@ func pasteTest() bool {
 	fmt.Print("  ")
 	clipboard.Paste()
 	got := readLineTimeout(5 * time.Second)
-	if prev != "" {
-		clipboard.Copy(prev) // restore what the user had
-	}
+	clipboard.Copy(prev) // restore what the user had (even if empty — don't leak the token)
 	if strings.Contains(got, token) {
 		fmt.Println("  " + tick() + " paste works")
 		return true
@@ -721,7 +730,7 @@ func summary(r results) int {
 	}
 	report("microphone", r.micGranted, micDetail)
 
-	report("hotkey", r.comboFired, comboDisplay(r.combo)+boolWord(r.comboFired, " (fired)", " (not confirmed)"))
+	report("hotkey", r.comboFired, r.combo.Display()+boolWord(r.comboFired, " (fired)", " (not confirmed)"))
 
 	axOK := r.axGranted || !r.autoPaste
 	report("accessibility", axOK, boolWord(r.axGranted, "granted", boolWord(r.autoPaste, "missing — auto-paste won't work", "not needed")))
@@ -776,8 +785,6 @@ func boolWord(b bool, yes, no string) string {
 	return no
 }
 
-// comboDisplay renders a combo for CLI prose as "⌃ + ⇧ + Space".
-func comboDisplay(c hotkey.Combo) string { return c.Display() }
 
 // currentCombo is the saved hotkey, or the built-in default when none is saved.
 func currentCombo() hotkey.Combo {

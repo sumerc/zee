@@ -68,11 +68,13 @@ func resolveDir() string {
 	if d := os.Getenv("ZEE_CONFIG_DIR"); d != "" {
 		return d
 	}
-	// Dev builds keep all state next to the binary (<exe dir>/.zee) so a working
-	// copy is fully self-contained and never collides with the installed app's
-	// per-user config. Mirrors localmodel.Dir()'s dev/app split. The installed
-	// .app falls through to the OS-standard per-user location below.
-	if !IsAppBundle() {
+	// macOS dev builds keep all state next to the binary (<exe dir>/.zee) so a
+	// working copy is fully self-contained and never collides with the installed
+	// app's per-user config. Mirrors localmodel.Dir()'s dev/app split. The
+	// installed .app falls through to the OS-standard per-user location below.
+	// Darwin-only: IsAppBundle can never be true elsewhere, and a packaged
+	// Linux binary in /usr/local/bin must not try to write /usr/local/bin/.zee.
+	if runtime.GOOS == "darwin" && !IsAppBundle() {
 		if exe, err := os.Executable(); err == nil {
 			return filepath.Join(filepath.Dir(exe), ".zee")
 		}

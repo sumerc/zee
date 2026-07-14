@@ -115,13 +115,5 @@ func TestBoolWord(t *testing.T) {
 }
 
 func comboEqual(a, b hotkey.Combo) bool {
-	if a.Key != b.Key || a.Label != b.Label || len(a.Mods) != len(b.Mods) {
-		return false
-	}
-	for i := range a.Mods {
-		if a.Mods[i] != b.Mods[i] {
-			return false
-		}
-	}
-	return true
+	return a.Equal(b) && a.Label == b.Label
 }

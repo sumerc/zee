@@ -272,8 +272,24 @@ func SelectLanguage(code string) {
 	langIntent = code
 	trayMu.Unlock()
 	if !same {
-		refreshLanguageMenu()
+		applyLanguage()
 	}
+}
+
+// applyLanguage derives the effective language from the user's intent (the
+// fallback when the model can't offer the intent is applied to the transcriber
+// but never persisted, so switching back to a capable model restores the
+// intent), delivers it to the transcriber callback, and re-renders the
+// platform menu. Platform-neutral so config-file edits work without a menu.
+func applyLanguage() {
+	trayMu.Lock()
+	langCode = effectiveLang(langIntent, languages)
+	cb, code := langCb, langCode
+	trayMu.Unlock()
+	if cb != nil {
+		cb(code, false)
+	}
+	refreshLanguageMenu()
 }
 
 func SetLanguage(code string, onSwitch func(code string, persist bool)) {
@@ -288,7 +304,7 @@ func SetLanguages(langs []transcriber.Language) {
 	trayMu.Lock()
 	languages = langs
 	trayMu.Unlock()
-	refreshLanguageMenu()
+	applyLanguage()
 }
 
 // effectiveLang picks the language to actually use for a model that offers

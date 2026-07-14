@@ -7,6 +7,13 @@
 - `install.sh` refuses upfront when a Zee instance is running ("quit it first") instead of trying to quit it via AppleScript — `tell application "Zee" to quit` would *launch* Zee if it wasn't running (to deliver the event) and trigger an Automation permission prompt, and a denied prompt left a running instance mid-`rm -rf`
 
 - Reject unknown hotkey modifier names (e.g. `"alt"` for `"option"`) instead of silently dropping them — a dropped modifier left the bare key (e.g. Space) registered as a global hotkey. Validated on both registration and live rebind
+- Hotkey validation hardened on all platforms: Linux startup registration now rejects a modifier-free combo (previously only rebind did — a hand-edited `"mods": []` bound bare Space globally), and out-of-range key codes are rejected instead of silently truncating to a different key
+- Live `language` edits in `config.json` now reach the transcriber on Linux — the callback fired only from the macOS menu-render path, a no-op off-macOS
+- Linux/Windows binaries always use the OS-standard per-user config dir — the dev "keep state next to the binary" split is now macOS-only, so a packaged `/usr/local/bin/zee` no longer tries to write `/usr/local/bin/.zee` (where saves silently failed)
+- Live config edits naming an unknown provider now log a warning instead of being silently ignored
+- Alert dialogs escape `\r` too (a raw CR broke the AppleScript literal the same way `\n` did)
+- Diagnostics log rotation works repeatedly on Windows (rename can't replace an existing `.old` there)
+- Setup's paste test restores the clipboard even when it was empty, instead of leaving the test token behind
 - A saved hotkey that can't be registered no longer bricks every launch: a non-default combo falls back to the default (`⌃⇧Space`) with a tray warning to re-bind, instead of a fatal error loop; only a failing default is fatal
 - Live config edits that set a provider without a model (what the setup wizard itself writes, and a natural hand-edit) now switch to the provider's default model instead of being silently ignored
 
@@ -28,7 +35,7 @@
 - The provider screen verifies every already-stored key with real audio as it opens, so the ✓ marks mean "authenticated now", not "a key exists"
 - Remove the `-doctor` flag; its checks are now the setup wizard's verification pass
 - Add bare subcommands `zee setup` and `zee doctor` (the `-setup` flag stays as an alias). `zee doctor` is a zero-question health check: it registers the saved hotkey, has you hold it and speak — one real push-to-talk cycle — transcribes with the configured provider, and reports hotkey/mic/accessibility/provider with an exit code; fixes belong to `zee setup`
-- `install.sh` now hands off to `zee -setup` after installing (interactive terminals only), replacing the `launchctl setenv` API-key instructions; it also quits a running instance before replacing the bundle
+- `install.sh` now hands off to `zee -setup` after installing (interactive terminals only), replacing the `launchctl setenv` API-key instructions; a running instance must be quit first (see the refusal entry above)
 - `install.sh` downloads the offline models *first* and aborts the install if they can't be fetched (previously a silent best-effort after the app copy) — the offline promise is part of the product, and a failure now leaves the system untouched instead of half-installed
 - Add a tray "Settings → Edit Settings…" item that opens `config.json`, and a disabled "Hotkey: <combo>" line showing the current push-to-talk binding
 - "Edit Settings…" now materializes an unset hotkey as the active default (`⌃⇧Space`) in `config.json`, so the opened file shows a readable combo instead of `"key": 0` / empty label

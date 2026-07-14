@@ -63,15 +63,33 @@ func (h *linuxHotkey) Register() error {
 	return h.startLocked()
 }
 
+// validateCombo rejects a combo that can't bind safely: no modifier (would
+// grab a bare key system-wide), an unrecognized modifier name, or a key code
+// the uint16 evdev cast would silently truncate. Mirrors the darwin/windows
+// backend, which validates on both Register and Rebind.
+func validateCombo(c Combo) error {
+	if !hasModifier(c.Mods) {
+		return fmt.Errorf("hotkey needs at least one modifier")
+	}
+	for _, m := range c.Mods {
+		if _, ok := linuxMods[m]; !ok {
+			return fmt.Errorf("unsupported hotkey modifier %q on linux", m)
+		}
+	}
+	if c.Key < 0 || c.Key > 0xffff {
+		return fmt.Errorf("hotkey key code %d out of range", c.Key)
+	}
+	return nil
+}
+
 func (h *linuxHotkey) startLocked() error {
+	if err := validateCombo(h.combo); err != nil {
+		return err
+	}
 	keyCode := uint16(h.combo.Key)
 	var modGroups [][]uint16
 	for _, m := range h.combo.Mods {
-		codes, ok := linuxMods[m]
-		if !ok {
-			return fmt.Errorf("unsupported hotkey modifier %q on linux", m)
-		}
-		modGroups = append(modGroups, codes)
+		modGroups = append(modGroups, linuxMods[m])
 	}
 
 	keyboards, err := findKeyboards()
@@ -181,8 +199,8 @@ func (h *linuxHotkey) readEvents(f *os.File, modGroups [][]uint16, keyCode uint1
 func (h *linuxHotkey) Rebind(c Combo) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if !hasModifier(c.Mods) {
-		return fmt.Errorf("hotkey needs at least one modifier")
+	if err := validateCombo(c); err != nil {
+		return err
 	}
 	prev := h.combo
 	h.stopLocked()

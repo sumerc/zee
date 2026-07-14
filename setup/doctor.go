@@ -2,7 +2,6 @@ package setup
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"zee/config"
@@ -19,21 +18,9 @@ import (
 // configured provider, and reports every check with an exit code (0 = all
 // healthy). Configuration problems are fixed with `zee setup`, not here.
 func Doctor() int {
-	// Same guard as setup.Run: a live tray holds the hotkey this test needs.
-	if !isRespawnedChild() && otherZeeRunning() {
-		fmt.Println("Zee is already running — quit it first (menu bar → Quit), then re-run `zee doctor`.")
-		return 1
-	}
-	if code, done := maybeReexec(); done {
+	if code, done := begin("zee doctor"); done {
 		return code
 	}
-
-	transcriber.SetKeySource(config.APIKey)
-	if err := config.Load(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not load settings: %v\n", err)
-	}
-
-	printBanner()
 	fmt.Println(bold("Doctor — checking that this binary works with the saved config."))
 
 	micOK := permissions.MicrophoneStatus() == permissions.MicGranted
@@ -54,9 +41,15 @@ func Doctor() int {
 
 	fmt.Println("\nReport")
 	report("microphone", micOK, permissions.MicrophoneStatus().String())
-	report("accessibility", axOK || !autoPaste,
-		boolWord(axOK, "granted", boolWord(autoPaste, "missing — auto-paste won't work", "not granted (not needed)")))
-	report("hotkey", fired, comboDisplay(combo)+boolWord(fired, " (fired)", " (did not fire)"))
+	axDetail := "granted"
+	switch {
+	case !axOK && autoPaste:
+		axDetail = "missing — auto-paste won't work"
+	case !axOK:
+		axDetail = "not granted (not needed)"
+	}
+	report("accessibility", axOK || !autoPaste, axDetail)
+	report("hotkey", fired, combo.Display()+boolWord(fired, " (fired)", " (did not fire)"))
 	report("provider", provOK, provLabel)
 	if autoPaste {
 		report("paste", pasteOK, boolWord(pasteOK, "verified", "did not arrive"))
@@ -97,7 +90,7 @@ func hotkeyDictation(combo hotkey.Combo) (fired bool, text string, err error) {
 	}
 	defer hk.Unregister()
 
-	fmt.Printf("\nHold %s and speak, release to stop (or tap to start / tap to stop)…\n", comboDisplay(combo))
+	fmt.Printf("\nHold %s and speak, release to stop (or tap to start / tap to stop)…\n", combo.Display())
 	// The app's own press semantics, verbatim (hotkey.AwaitRecord/WaitStop):
 	// doctor must exercise the code the tray runs, not a reimplementation.
 	stop, fired := hotkey.AwaitRecord(hk, hotkey.DefaultLongPress, 30*time.Second)
@@ -122,11 +115,7 @@ func hotkeyDictation(combo hotkey.Combo) (fired bool, text string, err error) {
 	if m := config.Get().Model; m != "" && p.Name == config.Get().Provider {
 		tr.SetModel(m)
 	}
-	defer func() {
-		if c, ok := tr.(interface{ Close() }); ok {
-			c.Close()
-		}
-	}()
+	defer closeTranscriber(tr)
 	fmt.Printf("  Transcribing with %s…\n", p.Label)
 	text, err = transcribePCM(tr, pcm, config.Get().Language)
 	return true, text, err

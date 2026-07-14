@@ -80,6 +80,7 @@ jobs:
           bin=$(find dist -name "zee" -type f | head -1)
           test -n "$bin" || { echo "arm64 binary not found"; find dist -type f; exit 1; }
           chmod +x "$bin"
-          packaging/mkdmg.sh "$bin" "$VERSION" "Zee-${VERSION}.dmg"
+          packaging/mkdmg.sh "$bin" "$VERSION" "Zee-${VERSION}.dmg" "Zee-${VERSION}.zip"
           shasum -a 256 "Zee-${VERSION}.dmg" >> dist/checksums.txt
-          gh release upload "$VERSION" "Zee-${VERSION}.dmg" dist/checksums.txt --clobber
+          shasum -a 256 "Zee-${VERSION}.zip" >> dist/checksums.txt
+          gh release upload "$VERSION" "Zee-${VERSION}.dmg" "Zee-${VERSION}.zip" dist/checksums.txt --clobber

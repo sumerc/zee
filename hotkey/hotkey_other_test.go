@@ -18,6 +18,8 @@ func TestValidateCombo(t *testing.T) {
 		{"no modifier", Combo{Mods: nil, Key: 49}, false},
 		{"unknown modifier alt", Combo{Mods: []string{"alt"}, Key: 49}, false},
 		{"one known one unknown", Combo{Mods: []string{"ctrl", "meta"}, Key: 49}, false},
+		{"key above uint8 would truncate", Combo{Mods: []string{"ctrl"}, Key: 305}, false},
+		{"negative key", Combo{Mods: []string{"ctrl"}, Key: -1}, false},
 	}
 	for _, tt := range tests {
 		err := validateCombo(tt.c)

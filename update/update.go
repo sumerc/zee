@@ -17,6 +17,16 @@ func ReleaseURL(version string) string {
 	return fmt.Sprintf("https://github.com/%s/releases/tag/%s", Repo, version)
 }
 
+func (r Release) AssetName() string { return "Zee-" + r.Version + ".zip" }
+
+func (r Release) AssetURL() string {
+	return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", Repo, r.Version, r.AssetName())
+}
+
+func (r Release) ChecksumsURL() string {
+	return fmt.Sprintf("https://github.com/%s/releases/download/%s/checksums.txt", Repo, r.Version)
+}
+
 type semver struct {
 	major, minor, patch int
 }

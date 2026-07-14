@@ -52,3 +52,16 @@ func TestReleaseNewerThan(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseURLs(t *testing.T) {
+	r := Release{Version: "v1.2.3"}
+	if got, want := r.AssetName(), "Zee-v1.2.3.zip"; got != want {
+		t.Fatalf("AssetName() = %q, want %q", got, want)
+	}
+	if got, want := r.AssetURL(), "https://github.com/sumerc/zee/releases/download/v1.2.3/Zee-v1.2.3.zip"; got != want {
+		t.Fatalf("AssetURL() = %q, want %q", got, want)
+	}
+	if got, want := r.ChecksumsURL(), "https://github.com/sumerc/zee/releases/download/v1.2.3/checksums.txt"; got != want {
+		t.Fatalf("ChecksumsURL() = %q, want %q", got, want)
+	}
+}

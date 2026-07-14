@@ -74,6 +74,14 @@ func trayModelState(s transcriber.ModelStatus) tray.ModelState {
 	}
 }
 
+func deviceNames(devices []audio.DeviceInfo) []string {
+	names := make([]string, len(devices))
+	for i := range devices {
+		names[i] = devices[i].Name
+	}
+	return names
+}
+
 func modelSupportsStream(tr transcriber.Transcriber) bool {
 	id := tr.GetModel()
 	for _, m := range tr.Models() {
@@ -185,9 +193,12 @@ func run() {
 				fmt.Println("Already up to date.")
 				os.Exit(0)
 			}
-			fmt.Printf("\nUpdate available: %s → %s\n\n", version, rel.Version)
-			fmt.Println("Install:   curl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash")
-			fmt.Printf("Download:  %s\n", rel.URL)
+			fmt.Printf("Updating %s → %s...\n", version, rel.Version)
+			if err := update.Install(*rel); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Update installed. Restarting Zee...")
 			os.Exit(0)
 		}
 	}
@@ -207,7 +218,14 @@ func run() {
 	transcribeFlag := flag.String("transcribe", "", "Transcribe audio file(s) and exit; extra files may follow as positional args (one transcript printed per line)")
 	providerFlag := flag.String("provider", "", "Transcription provider (e.g. parakeet, groq); overrides saved config")
 	modelFlag := flag.String("model", "", "Model ID for the selected provider; overrides saved config")
+	waitPIDFlag := flag.Int("wait-for-pid", 0, "Internal: wait for an older Zee process before starting")
 	flag.Parse()
+	if *waitPIDFlag > 0 {
+		if err := update.WaitForPID(*waitPIDFlag, 10*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "zee: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	// Resolve log directory early
 	logPath, err := log.ResolveDir(*logPathFlag)
@@ -407,11 +425,7 @@ func run() {
 	preferredDevice := *deviceFlag
 	tray.SetBTCheck(audio.IsBluetooth)
 	if devices, err := ctx.Devices(); err == nil && len(devices) > 0 {
-		names := make([]string, len(devices))
-		for i := range devices {
-			names[i] = devices[i].Name
-		}
-		tray.SetDevices(names, preferredDevice, func(name string) {
+		tray.SetDevices(deviceNames(devices), preferredDevice, func(name string) {
 			captureMu.Lock()
 			preferredDevice = name
 			captureMu.Unlock()
@@ -591,10 +605,7 @@ func run() {
 			if err != nil {
 				continue
 			}
-			names := make([]string, len(devices))
-			for i := range devices {
-				names[i] = devices[i].Name
-			}
+			names := deviceNames(devices)
 			if slices.Equal(last, names) {
 				continue
 			}
@@ -625,6 +636,10 @@ func run() {
 
 	tray.OnCheckUpdate(func() {
 		go func() {
+			if isRecording.Load() {
+				alert.Warn("Finish the current recording or transcription before updating.")
+				return
+			}
 			rel, err := update.CheckLatest(version)
 			if err != nil {
 				alert.Warn("Could not check for updates:\n" + err.Error())
@@ -634,10 +649,14 @@ func run() {
 				alert.Info("You're on the latest version (" + version + ")")
 				return
 			}
-			installURL := "https://github.com/" + update.Repo + "#install"
-			if alert.Confirm("Update available: "+version+" → "+rel.Version+"\n\nOne-liner install instructions:\n"+installURL, "Open Install Instructions") {
-				exec.Command("open", installURL).Start()
+			if !alert.Confirm("Update available: "+version+" → "+rel.Version+"\n\nZee will restart after installing it.", "Install and Restart") {
+				return
 			}
+			if err := update.Install(*rel); err != nil {
+				alert.Warn("Update failed:\n" + err.Error())
+				return
+			}
+			gracefulShutdown()
 		}()
 	})
 
@@ -693,6 +712,8 @@ func run() {
 		if reqProv != "" && reqModel == "" {
 			if p, ok := providerByName(reqProv); ok && len(p.Models) > 0 {
 				reqModel = p.Models[0].ID
+			} else {
+				log.Warnf("settings reload: unknown provider %q, keeping %s/%s", reqProv, curProv, curModel)
 			}
 		}
 		if reqProv != "" && reqModel != "" && (reqProv != curProv || reqModel != curModel) {
@@ -707,22 +728,17 @@ func run() {
 		tray.SelectLanguage(s.Language)
 
 		captureMu.Lock()
-		pref := preferredDevice
+		devChanged := s.Device != preferredDevice
+		preferredDevice = s.Device
 		captureMu.Unlock()
-		if s.Device != pref {
-			captureMu.Lock()
-			preferredDevice = s.Device
-			captureMu.Unlock()
+		if devChanged {
 			if s.Device == "" {
 				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
 			} else {
 				switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, s.Device)
 			}
 			if devices, err := ctx.Devices(); err == nil {
-				names := make([]string, len(devices))
-				for i := range devices {
-					names[i] = devices[i].Name
-				}
+				names := deviceNames(devices)
 				captureMu.Lock()
 				sel := ""
 				if selectedDevice != nil {
@@ -1221,18 +1237,18 @@ func persistLastRecording() (string, error) {
 	lastRecMu.Unlock()
 
 	if rec == nil {
-		return "", fmt.Errorf("No recording to save")
+		return "", fmt.Errorf("no recording to save")
 	}
 
 	ts := rec.Timestamp.Format("2006-01-02T15-04-05")
 	dir := filepath.Join(config.Dir(), "samples", ts)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("Save failed: %w", err)
+		return "", fmt.Errorf("save failed: %w", err)
 	}
 
 	ext := rec.AudioFormat
 	if err := os.WriteFile(filepath.Join(dir, "audio."+ext), rec.AudioData, 0644); err != nil {
-		return "", fmt.Errorf("Save failed: %w", err)
+		return "", fmt.Errorf("save failed: %w", err)
 	}
 
 	info, _ := json.Marshal(map[string]string{

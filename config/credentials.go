@@ -80,24 +80,18 @@ func writeCredentials(m map[string]string) error {
 		return err
 	}
 	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op after a successful rename
 
 	if err := tmp.Chmod(0600); err != nil {
 		tmp.Close()
-		os.Remove(tmpPath)
 		return err
 	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		os.Remove(tmpPath)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
 		return err
 	}
-	if err := os.Rename(tmpPath, credentialsPath()); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	return nil
+	return os.Rename(tmpPath, credentialsPath())
 }

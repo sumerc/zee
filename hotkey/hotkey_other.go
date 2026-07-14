@@ -135,8 +135,9 @@ var libMods = map[string]hotkey.Modifier{
 }
 
 // validateCombo rejects a combo that can't bind safely: no modifier (would
-// grab a bare key system-wide) or an unrecognized modifier name (dropped by
-// toLib, same bare-key hazard). Keep in sync with libMods.
+// grab a bare key system-wide), an unrecognized modifier name (dropped by
+// toLib, same bare-key hazard), or a key code toLib's uint8 cast would
+// silently truncate to a different key. Keep in sync with libMods.
 func validateCombo(c Combo) error {
 	if !hasModifier(c.Mods) {
 		return fmt.Errorf("hotkey needs at least one modifier")
@@ -145,6 +146,9 @@ func validateCombo(c Combo) error {
 		if _, ok := libMods[m]; !ok {
 			return fmt.Errorf("unknown modifier %q (use ctrl, shift, option, cmd)", m)
 		}
+	}
+	if c.Key < 0 || c.Key > 255 {
+		return fmt.Errorf("hotkey key code %d out of range (0-255)", c.Key)
 	}
 	return nil
 }

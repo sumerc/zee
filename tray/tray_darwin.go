@@ -391,7 +391,7 @@ func onReady() {
 	mQuit.Click(func() { Quit() })
 	systray.CreateMenu()
 
-	refreshLanguageMenu() // constrain the freshly-built menu to the active model
+	applyLanguage() // constrain the freshly-built menu to the active model
 
 	close(deviceReady)
 }
@@ -463,23 +463,16 @@ func refreshLanguageMenu() {
 	if mLanguage == nil {
 		return
 	}
-	// Derive the effective language from the user's intent every refresh. The
-	// fallback (when the model can't offer the intent) is applied to the
-	// transcriber but never persisted, so switching back to a capable model
-	// restores the intent. Field access is done under the lock; the systray
-	// updates and the callback run outside it.
+	// Pure render: langCode was already derived (and the transcriber notified)
+	// by applyLanguage in tray.go; this only shows the active model's set and
+	// checks the effective language.
 	trayMu.Lock()
 	want := make(map[string]bool, len(languages))
 	for _, l := range languages {
 		want[l.Code] = true
 	}
-	langCode = effectiveLang(langIntent, languages)
-	cb, code := langCb, langCode
+	code := langCode
 	trayMu.Unlock()
-
-	if cb != nil {
-		cb(code, false)
-	}
 	for _, e := range langEntries {
 		if want[e.code] {
 			e.item.Show()

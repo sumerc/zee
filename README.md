@@ -57,12 +57,21 @@ curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_arm64.
 
 ```bash
 ./zee                               # offline, on-device (no key needed)
-GROQ_API_KEY=xxx ./zee              # Groq Whisper (cloud)
-DEEPGRAM_API_KEY=xxx ./zee          # Deepgram (streaming auto-enabled when a streaming model is selected from the tray)
+./zee setup                         # add cloud providers (Groq, OpenAI, Deepgram, …), pick mic + hotkey
 ./zee -debug-transcribe             # include transcription text logs
 ```
 
 > **Note:** When running from a terminal, macOS permissions (Microphone, Accessibility) are granted to the **terminal app** (e.g. Ghostty, iTerm2, Terminal), not to zee itself.
+
+### Update
+
+Use **Check for Updates** from the tray, or run:
+
+```bash
+/Applications/Zee.app/Contents/MacOS/zee update
+```
+
+Zee verifies the release archive, replaces `Zee.app`, and restarts. Models and settings are unchanged.
 
 ### Build from source
 
@@ -79,26 +88,17 @@ The submodule, static libraries, and models are all set up automatically by `mak
 
 ## Usage
 
-On Apple Silicon, zee works offline out of the box — no key required. To use a cloud provider instead, set its key (pick the provider from the tray), then run zee:
+On Apple Silicon, zee works offline out of the box — no key required. To use a cloud provider (Groq Whisper, OpenAI, Deepgram streaming, Mistral Voxtral, ElevenLabs Scribe), run the setup wizard and paste the provider's API key when prompted:
 
 ```bash
-export GROQ_API_KEY=your_key       # batch mode (Groq Whisper)
-export OPENAI_API_KEY=your_key     # batch mode (OpenAI Whisper)
-export DEEPGRAM_API_KEY=your_key   # streaming mode (Deepgram)
-export MISTRAL_API_KEY=your_key    # batch mode (Mistral Voxtral)
-export ELEVENLABS_API_KEY=your_key # batch mode (ElevenLabs Scribe)
-zee                                # starts in menu bar, hold Ctrl+Shift+Space to record
+zee setup
 ```
 
-> **Note:** `export` only works in the current terminal session. To make API keys available to `Zee.app` when launched from Spotlight or Applications, use `launchctl`:
-> ```bash
-> launchctl setenv GROQ_API_KEY your_key
-> ```
-> Add this to your `~/.zshrc` so it runs on every login.
+Keys are stored per-provider in `credentials.json` (mode 0600) in zee's config directory — environment variables are not read. Each key is live-tested as you enter it, and you can switch providers any time from the tray.
 
-zee runs as a system tray app in the menu bar. Hold `Ctrl+Shift+Space` to record, release to transcribe. Result auto-pastes into the focused window.
+zee runs as a system tray app in the menu bar. Hold `Ctrl+Shift+Space` (the default — rebindable in `zee setup`) to record, release to transcribe. Result auto-pastes into the focused window.
 
-Use the tray menu to switch microphones, providers, and languages — or use `-setup` for initial device selection.
+Use the tray menu to switch microphones, providers, and languages.
 
 ### macOS Permissions
 
