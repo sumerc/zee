@@ -44,7 +44,15 @@ const banner = `
  ╚══════╝╚══════╝╚══════╝
 `
 
+// printBanner is skipped when -no-banner is among the args — install.sh prints
+// the same banner itself before the model downloads, and the flag survives the
+// maybeReexec hop (extras are forwarded).
 func printBanner() {
+	for _, a := range os.Args[1:] {
+		if a == "-no-banner" {
+			return
+		}
+	}
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		fmt.Print("\x1b[37m" + banner + "\x1b[0m\n")
 	} else {

@@ -35,7 +35,11 @@ func maybeReexec(mode string) (code int, done bool) {
 	if tty == "" || app == "" {
 		return 0, false // no controlling tty or not a resolvable bundle: run in place
 	}
-	args := []string{"-W", "-a", app,
+	// -n is load-bearing: exec'ing the bundle binary directly (this process)
+	// already registers as the running Zee.app instance with LaunchServices,
+	// so a plain `open` would just activate *us* — no stdio wiring — and then
+	// -W waits for our own exit: a self-deadlock. -n forces a fresh instance.
+	args := []string{"-W", "-n", "-a", app,
 		"--stdin", tty, "--stdout", tty, "--stderr", tty,
 		"--args", mode}
 	if len(os.Args) > 2 {

@@ -119,6 +119,14 @@ func runZee(t *testing.T, stdin string, args ...string) (logDir string) {
 
 func runZeeOpts(t *testing.T, stdin string, opts runOpts, args ...string) (logDir string) {
 	t.Helper()
+	logDir, _ = runZeeDirs(t, stdin, opts, args...)
+	return logDir
+}
+
+// runZeeDirs also returns the run's isolated config dir, for tests that assert
+// on config-side artifacts (samples/, credentials.json, config.json).
+func runZeeDirs(t *testing.T, stdin string, opts runOpts, args ...string) (logDir, cfgDir string) {
+	t.Helper()
 	logDir = t.TempDir()
 	cmdArgs := append([]string{"-logpath", logDir, "-debug-transcribe"}, args...)
 
@@ -129,7 +137,8 @@ func runZeeOpts(t *testing.T, stdin string, opts runOpts, args ...string) (logDi
 	// *_API_KEY in the effective env into a fresh per-run credentials.json (also
 	// isolating config), so CI key secrets and the "empty key" overrides still
 	// reach the subprocess with identical provider-resolution behavior.
-	cmd.Env = append(cmd.Env, "ZEE_CONFIG_DIR="+seedCredentials(t, cmd.Env))
+	cfgDir = seedCredentials(t, cmd.Env)
+	cmd.Env = append(cmd.Env, "ZEE_CONFIG_DIR="+cfgDir)
 
 	out, err := cmd.CombinedOutput()
 	// If the test later fails an assertion, the evidence (zee's own output and
@@ -153,12 +162,12 @@ func runZeeOpts(t *testing.T, stdin string, opts runOpts, args ...string) (logDi
 		if err == nil {
 			t.Fatalf("expected zee to exit with error, but it succeeded\noutput: %s", out)
 		}
-		return logDir
+		return logDir, cfgDir
 	}
 	if err != nil {
 		t.Fatalf("zee exited with error: %v\noutput: %s", err, out)
 	}
-	return logDir
+	return logDir, cfgDir
 }
 
 func readLog(t *testing.T, logDir, filename string) string {
@@ -255,6 +264,59 @@ func TestStreamKeyupAtBoundary(t *testing.T) {
 	logDir := runZee(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "KEYUP", "WAIT", "QUIT"),
 		"-test", "data/short.wav")
 	_ = readLog(t, logDir, "diagnostics_log.txt")
+}
+
+// --- Failure recovery: a failed transcription must auto-save the recording ---
+
+// requireSavedSample returns the single auto-saved sample under <cfg>/samples
+// and its parsed info.json. These tests use deliberately invalid API keys, so
+// they need no secrets and never reach the real provider.
+func requireSavedSample(t *testing.T, cfgDir string) (dir string, info map[string]string) {
+	t.Helper()
+	matches, _ := filepath.Glob(filepath.Join(cfgDir, "samples", "*", "info.json"))
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly 1 auto-saved sample under %s/samples, found %d", cfgDir, len(matches))
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read info.json: %v", err)
+	}
+	if err := json.Unmarshal(data, &info); err != nil {
+		t.Fatalf("parse info.json: %v", err)
+	}
+	return filepath.Dir(matches[0]), info
+}
+
+func TestBatchFailureAutoSavesSample(t *testing.T) {
+	_, cfgDir := runZeeDirs(t, cmds("KEYDOWN", "KEYUP", "WAIT", "QUIT"),
+		runOpts{env: []string{"GROQ_API_KEY=zee-invalid-key"}},
+		"-test", "data/short.wav", "-provider", "groq")
+	dir, info := requireSavedSample(t, cfgDir)
+	if info["error"] == "" {
+		t.Error("info.json error field is empty, expected the provider failure")
+	}
+	audio := filepath.Join(dir, "audio."+info["format"])
+	if st, err := os.Stat(audio); err != nil || st.Size() == 0 {
+		t.Errorf("saved audio missing or empty (%s): %v", audio, err)
+	}
+}
+
+func TestStreamFailureAutoSavesSample(t *testing.T) {
+	// The websocket handshake fails (bad key), yet the dictation audio must be
+	// retained and auto-saved as WAV — stream sessions used to lose it entirely.
+	_, cfgDir := runZeeDirs(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "SLEEP 300", "KEYUP", "WAIT", "QUIT"),
+		runOpts{env: []string{"DEEPGRAM_API_KEY=zee-invalid-key"}},
+		"-test", "data/short.wav", "-provider", "deepgram")
+	dir, info := requireSavedSample(t, cfgDir)
+	if info["error"] == "" {
+		t.Error("info.json error field is empty, expected the connect failure")
+	}
+	if info["format"] != "wav" {
+		t.Errorf("format = %q, want wav (retained stream PCM)", info["format"])
+	}
+	if st, err := os.Stat(filepath.Join(dir, "audio.wav")); err != nil || st.Size() <= 44 {
+		t.Errorf("saved audio.wav missing or no PCM beyond the header: %v", err)
+	}
 }
 
 // --- Clipboard tests ---

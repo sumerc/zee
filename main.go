@@ -1045,13 +1045,13 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 		// manual save's "Saved to" notice.
 		if len(result.AudioData) > 0 {
 			setLastRecording(result, cfg, closeErr.Error())
-			go func() {
-				msg := "Transcription failed:\n" + closeErr.Error()
-				if dir, err := persistLastRecording(); err == nil {
-					msg += "\n\nRecording saved to:\n" + dir
-				}
-				alert.Error(msg)
-			}()
+			// Persist synchronously — an immediate quit after the failure must
+			// not lose the recording; only the dialog is fire-and-forget.
+			msg := "Transcription failed:\n" + closeErr.Error()
+			if dir, err := persistLastRecording(); err == nil {
+				msg += "\n\nRecording saved to:\n" + dir
+			}
+			go alert.Error(msg)
 		}
 	}
 

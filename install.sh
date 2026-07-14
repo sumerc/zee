@@ -20,10 +20,58 @@ cleanup() {
 run_or_sudo() {
   "$@" 2>/dev/null || { log "Need sudo: $*"; sudo "$@"; }
 }
+# fetch <url> <dest> — download with a compact single-line progress display.
+# curl's --progress-bar is terminal-width and stacks lines when it wraps (and
+# draws one bar per redirect hop), so draw our own: resolve the final URL +
+# size with one HEAD, download silently in the background, and redraw a short
+# fixed-width status that can never wrap.
+fetch() {
+  local head final size cur pid
+  head="$(curl -fsIL -w 'FINAL:%{url_effective}\n' "$1")" || return 1
+  final="$(printf '%s' "$head" | sed -n 's/^FINAL://p' | tail -1)"
+  size="$(printf '%s' "$head" | awk 'tolower($1)=="content-length:"{s=$2} END{print s+0}')"
+
+  # -C -: resume a leftover partial (an interrupted run keeps its .part; the
+  # caller's checksum still gates the final file, and release assets are
+  # immutable, so continuing is always safe).
+  curl -fs -C - "$final" -o "$2" &
+  pid=$!
+  local width=20 filled bar
+  while kill -0 "$pid" 2>/dev/null; do
+    cur="$(stat -f%z "$2" 2>/dev/null || echo 0)"
+    if [[ "$size" -gt 0 ]]; then
+      filled=$((cur * width / size))
+      # '·' is multibyte — build the bar by hand (tr and printf field widths
+      # count bytes, not characters)
+      bar="$(printf '%*s' "$filled" '' | sed 's/ /·/g')$(printf '%*s' "$((width - filled))" '')"
+      printf '\r    [%s] %3d%%  %d/%d MB ' "$bar" \
+        "$((cur * 100 / size))" "$((cur / 1048576))" "$((size / 1048576))"
+    else
+      printf '\r    %d MB ' "$((cur / 1048576))"
+    fi
+    sleep 0.5
+  done
+  printf '\r\033[K'
+  wait "$pid"
+}
 trap cleanup EXIT
 
 [[ "$(uname -s)" == "Darwin" ]] || err "Zee currently supports macOS only."
 [[ "$(uname -m)" == "arm64" ]] || err "Zee requires Apple Silicon (arm64) — the local engine is arm64-only, and releases ship no Intel build."
+
+# Same ANSI-Shadow banner the setup wizard prints (which gets -no-banner from
+# us so it doesn't repeat); shown first so the install identifies itself
+# before any downloading starts.
+cat <<'BANNER'
+
+ ███████╗███████╗███████╗
+ ╚══███╔╝██╔════╝██╔════╝
+   ███╔╝ █████╗  █████╗
+  ███╔╝  ██╔══╝  ██╔══╝
+ ███████╗███████╗███████╗
+ ╚══════╝╚══════╝╚══════╝
+
+BANNER
 
 # DMG_PATH installs a locally built DMG (dev flow): version resolution,
 # download, and checksum are skipped — everything else (model prefetch, quit
@@ -69,12 +117,21 @@ prefetch_models() {
       log "Model ${f} already present"; continue
     fi
     log "Downloading model ${f}..."
-    curl -fL --progress-bar "${MODELS_BASE}/${f}" -o "${dest}.part" \
-      || { rm -f "${dest}.part"; err "model download failed: ${MODELS_BASE}/${f}"; }
-    shasum -a 256 "${dest}.part" | grep -q "$sum" \
-      || { rm -f "${dest}.part"; err "checksum mismatch for model ${f}"; }
-    mv -f "${dest}.part" "$dest"
-    log "Model ${f} OK"
+    # Attempt 1 may resume a leftover .part; if the assembled file fails the
+    # checksum (stale/corrupt partial), retry once from scratch before erring.
+    for attempt in 1 2; do
+      fetch "${MODELS_BASE}/${f}" "${dest}.part" \
+        || { rm -f "${dest}.part"; err "model download failed: ${MODELS_BASE}/${f}"; }
+      if shasum -a 256 "${dest}.part" | grep -q "$sum"; then
+        mv -f "${dest}.part" "$dest"
+        log "Model ${f} OK"
+        break
+      fi
+      rm -f "${dest}.part"
+      [[ "$attempt" -eq 1 ]] \
+        && log "Checksum mismatch for ${f} (stale partial?) — retrying from scratch..." \
+        || err "checksum mismatch for model ${f}"
+    done
   done < <(awk '!/^#/ && $3=="true" {print $1, $2}' <<<"$manifest")
 }
 
@@ -89,7 +146,7 @@ else
   DMG_FILE="${TMP}/${DMG}"
 
   log "Downloading ${DMG}..."
-  curl -fL --progress-bar "${BASE}/${DMG}" -o "$DMG_FILE" \
+  fetch "${BASE}/${DMG}" "$DMG_FILE" \
     || err "download failed: ${BASE}/${DMG}"
 
   log "Verifying checksum..."
@@ -140,7 +197,7 @@ if [[ -n "$TTY" ]]; then
   # Plain invocation: zee re-execs itself through `open` for correct TCC
   # attribution and still returns the wizard's real exit code, so a failed
   # setup (mic denied, nothing verified) fails this installer too.
-  if "${APP_DIR}/Zee.app/Contents/MacOS/zee" setup <"$TTY" >"$TTY" 2>&1; then
+  if "${APP_DIR}/Zee.app/Contents/MacOS/zee" setup -no-banner <"$TTY" >"$TTY" 2>&1; then
     log "Setup complete."
   else
     log "Zee is installed, but setup did not finish cleanly."

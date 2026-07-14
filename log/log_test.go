@@ -128,3 +128,51 @@ func TestCloseIdempotent(t *testing.T) {
 	Close()
 	Close() // should not panic
 }
+
+// TestInitRotatesOversizedLog: logging is always on, so Init must rotate an
+// over-cap diagnostics log to .old instead of appending forever.
+func TestInitRotatesOversizedLog(t *testing.T) {
+	dir := setupLogDir(t)
+
+	path := filepath.Join(dir, "diagnostics_log.txt")
+	if err := os.WriteFile(path, make([]byte, maxLogSize+1), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(); err != nil {
+		t.Fatal(err)
+	}
+	Info("fresh line")
+
+	if st, err := os.Stat(path + ".old"); err != nil || st.Size() != maxLogSize+1 {
+		t.Errorf("expected rotated .old with original size, got err=%v", err)
+	}
+	if st, err := os.Stat(path); err != nil || st.Size() > 1024 {
+		t.Errorf("expected fresh small log after rotation, size=%v err=%v", st.Size(), err)
+	}
+}
+
+// TestInitKeepsSmallLog: under the cap the file must be appended, not rotated.
+func TestInitKeepsSmallLog(t *testing.T) {
+	dir := setupLogDir(t)
+
+	path := filepath.Join(dir, "diagnostics_log.txt")
+	if err := os.WriteFile(path, []byte("existing line\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(); err != nil {
+		t.Fatal(err)
+	}
+	Info("appended line")
+	Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "existing line") || !strings.Contains(string(data), "appended line") {
+		t.Errorf("expected append below existing content, got: %q", data)
+	}
+	if _, err := os.Stat(path + ".old"); !os.IsNotExist(err) {
+		t.Error("small log must not be rotated")
+	}
+}
