@@ -40,6 +40,12 @@ func New(c Combo) Hotkey {
 func (h *xHotkey) Register() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// Validate before registering: toLib silently drops unknown modifier names,
+	// so a typo like "alt" (for "option") would otherwise register the bare key
+	// (e.g. Space) system-wide. New() built h.hk best-effort; catch it here.
+	if err := validateCombo(h.combo); err != nil {
+		return err
+	}
 	if err := h.hk.Register(); err != nil {
 		return err
 	}
@@ -76,8 +82,8 @@ func (h *xHotkey) forward(hk *hotkey.Hotkey, stop chan struct{}) {
 func (h *xHotkey) Rebind(c Combo) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if !hasModifier(c.Mods) {
-		return fmt.Errorf("hotkey needs at least one modifier")
+	if err := validateCombo(c); err != nil {
+		return err
 	}
 	mods, key := toLib(c)
 	// Register the new combo BEFORE tearing down the old one, so a rejected
@@ -126,6 +132,21 @@ var libMods = map[string]hotkey.Modifier{
 	"shift":  hotkey.ModShift,
 	"option": hotkey.ModOption,
 	"cmd":    hotkey.ModCmd,
+}
+
+// validateCombo rejects a combo that can't bind safely: no modifier (would
+// grab a bare key system-wide) or an unrecognized modifier name (dropped by
+// toLib, same bare-key hazard). Keep in sync with libMods.
+func validateCombo(c Combo) error {
+	if !hasModifier(c.Mods) {
+		return fmt.Errorf("hotkey needs at least one modifier")
+	}
+	for _, m := range c.Mods {
+		if _, ok := libMods[m]; !ok {
+			return fmt.Errorf("unknown modifier %q (use ctrl, shift, option, cmd)", m)
+		}
+	}
+	return nil
 }
 
 func toLib(c Combo) ([]hotkey.Modifier, hotkey.Key) {

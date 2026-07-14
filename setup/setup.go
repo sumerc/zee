@@ -91,15 +91,14 @@ type results struct {
 func Run() int {
 	// Refuse to run alongside a live tray instance: it holds the global hotkey
 	// the tests below need. The user quits it deliberately instead of us
-	// killing it. Checked before the re-exec so the message lands in the
-	// terminal; the launchd-parented child (ppid 1) skips it — in the re-exec
-	// case its terminal parent is itself a zee blocked on `open -W`, and in
-	// the install.sh case the installer already quit the tray.
-	if os.Getppid() != 1 && otherZeeRunning() {
+	// killing it. Checked before the respawn so the message lands cleanly; the
+	// disclaimed child skips it — the only other zee process is its own
+	// terminal parent, waiting on it.
+	if !isRespawnedChild() && otherZeeRunning() {
 		fmt.Println("Zee is already running — quit it first (menu bar → Quit), then re-run `zee setup`.")
 		return 1
 	}
-	if code, done := maybeReexec("setup"); done {
+	if code, done := maybeReexec(); done {
 		return code
 	}
 

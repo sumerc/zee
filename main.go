@@ -108,6 +108,7 @@ var captureMu sync.Mutex
 
 var trayRecordChan = make(chan struct{}, 1)
 var isRecording atomic.Bool
+var accessibilityPoll atomic.Bool
 
 // isTranscribing is true while a recording has stopped but its transcription is
 // still running. isRecording stays true across this phase too (so a re-press is
@@ -166,9 +167,9 @@ func run() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "setup":
-			os.Exit(writeStatusFile(setup.Run()))
+			os.Exit(setup.Run())
 		case "doctor":
-			os.Exit(writeStatusFile(setup.Doctor()))
+			os.Exit(setup.Doctor())
 		case "update":
 			if version == "dev" {
 				fmt.Println("Dev build — cannot check for updates.")
@@ -355,10 +356,7 @@ func run() {
 			log.Warnf("paste init failed: %v", err)
 			alert.Warn("Auto-paste will not work.\n\n" + err.Error())
 		}
-		if !clipboard.CheckAccessibility() {
-			alert.Warn("Auto-paste requires Accessibility permission.\n\nGrant access to Zee.app (or your terminal app if running from CLI) in:\nSystem Settings → Privacy & Security → Accessibility")
-			permissions.OpenAccessibilitySettings()
-		}
+		ensureAutoPasteAccessibility()
 	}
 
 	ctx, err := audio.NewContext()
@@ -563,6 +561,9 @@ func run() {
 		autoPaste = on
 		configMu.Unlock()
 		config.Update(func(s *config.Settings) { s.AutoPaste = on })
+		if on {
+			go ensureAutoPasteAccessibility()
+		}
 	})
 	tray.OnLogin(func(on bool) error {
 		var err error
@@ -655,7 +656,21 @@ func run() {
 	hk := hotkey.New(currentHotkeyCombo(cfg))
 	if err := hk.Register(); err != nil {
 		log.Errorf("hotkey register error: %v", err)
-		fatal("Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security.", err)
+		// A bad saved combo (unknown modifier, unregistrable chord) must not
+		// brick every launch. If it wasn't the default, fall back to the
+		// default and warn — the user can re-bind from Settings; only a failing
+		// default is fatal (nothing left to try).
+		def := hotkey.DefaultCombo()
+		if currentHotkeyCombo(cfg).Equal(def) {
+			fatal("Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security.", err)
+		}
+		log.Warnf("falling back to default hotkey %s", def.Label)
+		hk = hotkey.New(def)
+		if err := hk.Register(); err != nil {
+			fatal("Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security.", err)
+		}
+		tray.SetHotkeyLabel(def.Display())
+		tray.SetError("Saved hotkey couldn't be registered — using " + def.Display() + ". Re-bind it in Settings.")
 	}
 	defer hk.Unregister()
 
@@ -670,12 +685,22 @@ func run() {
 		configMu.Lock()
 		curProv, curModel := activeTranscriber.Name(), activeTranscriber.GetModel()
 		configMu.Unlock()
-		if s.Provider != "" && s.Model != "" && (s.Provider != curProv || s.Model != curModel) {
+		// An empty model means "the provider's default" (its first listed model)
+		// — exactly what setup's chooseActiveProvider writes and what a hand-edit
+		// naturally omits. Resolving it here keeps that a real switch, not a
+		// silent no-op. Models is a plain slice, so this is cheap (no model load).
+		reqProv, reqModel := s.Provider, s.Model
+		if reqProv != "" && reqModel == "" {
+			if p, ok := providerByName(reqProv); ok && len(p.Models) > 0 {
+				reqModel = p.Models[0].ID
+			}
+		}
+		if reqProv != "" && reqModel != "" && (reqProv != curProv || reqModel != curModel) {
 			// Only a ready model is applied — a file edit must not trigger a download.
-			if p, ok := providerByName(s.Provider); ok && p.Status(s.Model).Ready {
-				switchModel(p, s.Model)
+			if p, ok := providerByName(reqProv); ok && p.Status(reqModel).Ready {
+				switchModel(p, reqModel)
 			} else {
-				log.Warnf("settings reload: %s/%s not available, keeping %s/%s", s.Provider, s.Model, curProv, curModel)
+				log.Warnf("settings reload: %s/%s not available, keeping %s/%s", reqProv, reqModel, curProv, curModel)
 			}
 		}
 
@@ -714,6 +739,9 @@ func run() {
 		configMu.Unlock()
 		if apChanged {
 			tray.SetAutoPaste(s.AutoPaste)
+			if s.AutoPaste {
+				go ensureAutoPasteAccessibility()
+			}
 		}
 
 		if s.AutoStart != login.Enabled() {
@@ -844,21 +872,6 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 	}
 }
 
-// writeStatusFile persists a subcommand's exit code to the path(s) given by
-// `-status-file <path>` arguments, then returns the code unchanged. The
-// launchd re-exec (setup.maybeReexec) injects this argument because `open -W`
-// swallows the child's exit code — the parent zee reads the file back and
-// exits with the real code, so callers like install.sh just see a normal
-// process exit.
-func writeStatusFile(code int) int {
-	for i, a := range os.Args {
-		if a == "-status-file" && i+1 < len(os.Args) {
-			os.WriteFile(os.Args[i+1], []byte(fmt.Sprintf("%d\n", code)), 0644)
-		}
-	}
-	return code
-}
-
 // currentHotkeyCombo maps the saved config hotkey to a hotkey.Combo, falling
 // back to the built-in default when nothing is saved.
 func currentHotkeyCombo(cfg config.Settings) hotkey.Combo {
@@ -961,6 +974,41 @@ func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, cap
 	*selectedDevice = newDevice
 }
 
+// ensureAutoPasteAccessibility requests the one permission needed by
+// auto-paste and watches for the asynchronous System Settings grant. It never
+// changes the saved auto-paste preference: a grant makes the next recording
+// paste normally, while a timeout leaves the preference intact for a later
+// grant or app restart.
+func ensureAutoPasteAccessibility() {
+	if permissions.HasAccessibility() || !accessibilityPoll.CompareAndSwap(false, true) {
+		return
+	}
+	alert.Warn("Auto-paste requires Accessibility permission.\n\nGrant access to Zee.app (or your terminal app if running from CLI) in:\nSystem Settings → Privacy & Security → Accessibility")
+	permissions.RequestAccessibility()
+	permissions.OpenAccessibilitySettings()
+
+	go func() {
+		defer accessibilityPoll.Store(false)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		timeout := time.NewTimer(time.Minute)
+		defer timeout.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if permissions.HasAccessibility() {
+					log.Info("Accessibility permission granted; auto-paste is ready")
+					return
+				}
+			case <-timeout.C:
+				log.Warn("Accessibility permission not granted; auto-paste remains unavailable")
+				tray.SetError("Auto-paste is waiting for Accessibility permission")
+				return
+			}
+		}
+	}()
+}
+
 func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struct{}, error) {
 	clip.CancelRestore()
 
@@ -974,6 +1022,10 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		autoPaste: autoPaste,
 	}
 	configMu.Unlock()
+	if cfg.autoPaste && !permissions.HasAccessibility() {
+		cfg.autoPaste = false
+		tray.SetError("Auto-paste is waiting for Accessibility permission")
+	}
 
 	tSess, err := cfg.tr.NewSession(context.Background(), transcriber.SessionConfig{
 		Stream:   cfg.stream,

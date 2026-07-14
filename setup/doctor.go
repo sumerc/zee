@@ -20,11 +20,11 @@ import (
 // healthy). Configuration problems are fixed with `zee setup`, not here.
 func Doctor() int {
 	// Same guard as setup.Run: a live tray holds the hotkey this test needs.
-	if os.Getppid() != 1 && otherZeeRunning() {
+	if !isRespawnedChild() && otherZeeRunning() {
 		fmt.Println("Zee is already running — quit it first (menu bar → Quit), then re-run `zee doctor`.")
 		return 1
 	}
-	if code, done := maybeReexec("doctor"); done {
+	if code, done := maybeReexec(); done {
 		return code
 	}
 

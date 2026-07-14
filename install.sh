@@ -10,12 +10,25 @@ REPO="sumerc/zee"
 APP_DIR="/Applications"
 TMP="$(mktemp -d)"
 MOUNT=""
+DL_PID="" # pid of the in-flight background download, so cleanup can kill it
+STAGE="${APP_DIR}/.Zee.app.new-$$" # staged copy, swapped in atomically
+BACKUP="${APP_DIR}/.Zee.app.old-$$" # previous bundle, kept until swap succeeds
 
 err() { echo "error: $*" >&2; exit 1; }
 log() { echo "==> $*"; }
 cleanup() {
+  # Kill a still-running background download (Ctrl+C would otherwise orphan it).
+  [[ -n "${DL_PID:-}" ]] && kill "$DL_PID" 2>/dev/null || true
   [[ -n "$MOUNT" ]] && hdiutil detach "$MOUNT" -quiet >/dev/null 2>&1 || true
   rm -rf "$TMP"
+  # If interrupted in the swap window (old already moved to BACKUP, new not yet
+  # in place), restore the old app rather than leave nothing — data safety wins
+  # over cleanliness. Only then discard leftovers.
+  if [[ ! -e "${APP_DIR}/Zee.app" && -d "$BACKUP" ]]; then
+    run_or_sudo mv "$BACKUP" "${APP_DIR}/Zee.app" || true
+  fi
+  [[ -e "$STAGE" ]] && run_or_sudo rm -rf "$STAGE" || true
+  [[ -e "$BACKUP" ]] && run_or_sudo rm -rf "$BACKUP" || true
 }
 run_or_sudo() {
   "$@" 2>/dev/null || { log "Need sudo: $*"; sudo "$@"; }
@@ -26,18 +39,19 @@ run_or_sudo() {
 # size with one HEAD, download silently in the background, and redraw a short
 # fixed-width status that can never wrap.
 fetch() {
-  local head final size cur pid
+  local head final size cur
   head="$(curl -fsIL -w 'FINAL:%{url_effective}\n' "$1")" || return 1
   final="$(printf '%s' "$head" | sed -n 's/^FINAL://p' | tail -1)"
   size="$(printf '%s' "$head" | awk 'tolower($1)=="content-length:"{s=$2} END{print s+0}')"
 
   # -C -: resume a leftover partial (an interrupted run keeps its .part; the
   # caller's checksum still gates the final file, and release assets are
-  # immutable, so continuing is always safe).
+  # immutable, so continuing is always safe). DL_PID lets cleanup kill it on
+  # Ctrl+C instead of orphaning the curl.
   curl -fs -C - "$final" -o "$2" &
-  pid=$!
+  DL_PID=$!
   local width=20 filled bar
-  while kill -0 "$pid" 2>/dev/null; do
+  while kill -0 "$DL_PID" 2>/dev/null; do
     cur="$(stat -f%z "$2" 2>/dev/null || echo 0)"
     if [[ "$size" -gt 0 ]]; then
       filled=$((cur * width / size))
@@ -52,7 +66,9 @@ fetch() {
     sleep 0.5
   done
   printf '\r\033[K'
-  wait "$pid"
+  wait "$DL_PID"; local rc=$?
+  DL_PID=""
+  return $rc
 }
 trap cleanup EXIT
 
@@ -73,9 +89,17 @@ cat <<'BANNER'
 
 BANNER
 
+# Refuse to replace the bundle out from under a running instance. We don't quit
+# it ourselves: `osascript ... to quit` launches Zee if it's *not* running (to
+# deliver the event) and triggers an Automation TCC prompt — the user just
+# quits it deliberately. Fail-fast, before any download.
+if pgrep -x zee >/dev/null 2>&1; then
+  err "Zee is running — quit it first (menu bar → Quit), then re-run the installer."
+fi
+
 # DMG_PATH installs a locally built DMG (dev flow): version resolution,
-# download, and checksum are skipped — everything else (model prefetch, quit
-# running instance, copy, quarantine clear, setup handoff) runs identically.
+# download, and checksum are skipped — everything else (model prefetch, copy,
+# quarantine clear, setup handoff) runs identically.
 DMG_PATH="${DMG_PATH:-}"
 VERSION="${VERSION:-}"
 if [[ -n "$DMG_PATH" ]]; then
@@ -165,19 +189,24 @@ MOUNT="$(hdiutil attach -nobrowse -readonly -mountrandom /tmp "$DMG_FILE" \
   | tail -1)"
 [[ -n "$MOUNT" && -d "$MOUNT/Zee.app" ]] || err "Zee.app not found in DMG"
 
+# Stage-then-swap: copy the new bundle and clear its quarantine in a hidden
+# staging dir on the same volume, so the slow/fallible work never touches the
+# installed app. The swap itself is two fast renames (atomic on the volume);
+# only if it succeeds is the old bundle discarded. A failed swap restores it.
+log "Staging Zee.app..."
+run_or_sudo rm -rf "$STAGE"
+run_or_sudo cp -R "$MOUNT/Zee.app" "$STAGE"
+run_or_sudo xattr -cr "$STAGE"
+
+log "Installing to ${APP_DIR}/Zee.app..."
 if [[ -d "${APP_DIR}/Zee.app" ]]; then
-  # Quit a running instance before replacing the bundle (and so the post-install
-  # wizard can register the hotkey / launch a fresh copy).
-  osascript -e 'tell application "Zee" to quit' >/dev/null 2>&1 || true
-  log "Removing existing ${APP_DIR}/Zee.app"
-  run_or_sudo rm -rf "${APP_DIR}/Zee.app"
+  run_or_sudo mv "${APP_DIR}/Zee.app" "$BACKUP"
 fi
-
-log "Copying Zee.app to ${APP_DIR}..."
-run_or_sudo cp -R "$MOUNT/Zee.app" "${APP_DIR}/"
-
-log "Clearing quarantine attribute..."
-run_or_sudo xattr -cr "${APP_DIR}/Zee.app"
+if ! run_or_sudo mv "$STAGE" "${APP_DIR}/Zee.app"; then
+  [[ -d "$BACKUP" ]] && run_or_sudo mv "$BACKUP" "${APP_DIR}/Zee.app"
+  err "install failed during swap — previous Zee.app restored"
+fi
+run_or_sudo rm -rf "$BACKUP"
 
 log "Zee ${VERSION:-(local build)} installed to ${APP_DIR}/Zee.app"
 

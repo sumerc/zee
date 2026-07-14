@@ -1,8 +1,7 @@
 // Package permissions is the single, platform-neutral surface for the OS
 // privacy permissions Zee needs: Microphone (to record) and Accessibility (to
-// register a global hotkey and synthesize the paste keystroke). It owns the
-// *prompting* flow used by the setup wizard; passive checks elsewhere (e.g.
-// clipboard) are independent.
+// capture a custom global hotkey and synthesize the paste keystroke). It owns
+// the prompting flow used by setup and runtime permission recovery.
 //
 // On macOS these are TCC-gated and can only be granted when the app itself makes
 // the call, so the wizard runs as the installed bundle. On other platforms the

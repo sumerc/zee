@@ -2,12 +2,9 @@
 
 package setup
 
-/*
-#include <unistd.h>
-*/
-import "C"
-
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -16,59 +13,39 @@ import (
 	"zee/config"
 )
 
-// maybeReexec relaunches this mode (the `setup` or `doctor` subcommand)
-// through `open` when it was started from a terminal as the installed app
-// bundle, so the process is parented by launchd and macOS attributes
-// Microphone/Accessibility prompts to Zee.app instead of the terminal. The
-// current tty is wired as the child's stdio so it stays interactive. Returns
-// done=true when it re-exec'd (caller should exit).
+// maybeReexec re-runs the `setup`/`doctor` subcommand as a TCC-disclaimed
+// child (see disclaim_darwin.go) when started from a terminal as the installed
+// app bundle: the child — not the terminal — then owns the Microphone /
+// Accessibility prompts, so they say "Zee". stdio and the exit code inherit
+// naturally. Returns done=true when it respawned (caller should exit).
 //
-// It is a no-op — done=false — for dev builds (TCC correctly attributes to the
-// terminal there) and when already launchd-parented (launched via open, e.g. by
-// install.sh), detected via getppid()==1.
-func maybeReexec(mode string) (code int, done bool) {
-	if !config.IsAppBundle() || os.Getppid() == 1 {
+// It is a no-op — done=false — for dev builds (TCC deliberately attributes to
+// the terminal there, so grants survive rebuilds), for the disclaimed child
+// itself, and if the spawn fails (run in place rather than not at all).
+//
+// This replaced an `open -W` LaunchServices relaunch: that needed tty wiring,
+// an exit-code side channel, and collided with the direct-exec'd process
+// already being registered as the running Zee.app instance.
+func maybeReexec() (code int, done bool) {
+	if !config.IsAppBundle() || isRespawnedChild() {
 		return 0, false
 	}
-	tty := ttyName()
-	app := appBundlePath()
-	if tty == "" || app == "" {
-		return 0, false // no controlling tty or not a resolvable bundle: run in place
-	}
-	// -n is load-bearing: exec'ing the bundle binary directly (this process)
-	// already registers as the running Zee.app instance with LaunchServices,
-	// so a plain `open` would just activate *us* — no stdio wiring — and then
-	// -W waits for our own exit: a self-deadlock. -n forces a fresh instance.
-	args := []string{"-W", "-n", "-a", app,
-		"--stdin", tty, "--stdout", tty, "--stderr", tty,
-		"--args", mode}
-	if len(os.Args) > 2 {
-		args = append(args, os.Args[2:]...) // forward extras
-	}
-	// `open -W` waits but swallows the child's exit code, and our caller (e.g.
-	// install.sh) needs the real one — so the child writes its code to a temp
-	// file (-status-file, see main.writeStatusFile) that we read back and
-	// return as our own.
-	status, err := os.CreateTemp("", "zee-status-*")
-	if err == nil {
-		status.Close()
-		defer os.Remove(status.Name())
-		args = append(args, "-status-file", status.Name())
-	}
-	cmd := exec.Command("open", args...)
-	cmd.Stderr = os.Stderr // surface `open` errors; the child writes to the tty directly
-	if err := cmd.Run(); err != nil {
-		return 0, false // open failed — fall back to running in place
-	}
-	if status != nil {
-		if data, err := os.ReadFile(status.Name()); err == nil {
-			if n, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-				return n, true
-			}
+	code, err := spawnDisclaimed()
+	if err != nil {
+		// Symbol gone on some future macOS: degrade to running in place. Prompts
+		// then attribute to the terminal — note it so it's diagnosable.
+		if errors.Is(err, errNoDisclaimSymbol) {
+			fmt.Fprintln(os.Stderr, "note: TCC disclaim unavailable; running setup in place (prompts may attribute to your terminal)")
 		}
+		return 0, false
 	}
-	return 1, true // child never wrote a status (crash, force-quit): not a success
+	return code, true
 }
+
+// isRespawnedChild reports whether this process is the disclaimed child — the
+// instance-guard in Run/Doctor must skip it (pgrep would find its own waiting
+// parent) and maybeReexec must not respawn again.
+func isRespawnedChild() bool { return os.Getenv(disclaimedEnv) == "1" }
 
 // launchInstalledApp starts the tray app after setup completes (installed
 // bundle only; reports whether it launched). -n forces a new instance:
@@ -98,13 +75,6 @@ func otherZeeRunning() bool {
 		}
 	}
 	return false
-}
-
-func ttyName() string {
-	if p := C.ttyname(C.int(0)); p != nil { // STDIN_FILENO
-		return C.GoString(p)
-	}
-	return ""
 }
 
 // appBundlePath returns the <...>.app path containing this executable, or "".
