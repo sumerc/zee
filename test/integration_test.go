@@ -207,16 +207,21 @@ func requireDeepgramKey(t *testing.T) {
 
 // --- Batch tests ---
 
+// Provider is pinned explicitly on every test. -provider must precede the
+// positional wav: Go's flag.Parse stops at the first non-flag arg, so a flag
+// placed after "data/short.wav" is silently ignored — which used to let every
+// "batch" test fall through to auto-selected Deepgram (first available cloud
+// provider), so a bad Deepgram key failed tests named for Groq.
 func TestBatchWords(t *testing.T) {
 	requireGroqKey(t)
-	logDir := runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "QUIT"), "-test", "data/short.wav")
+	logDir := runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "QUIT"), "-provider", "groq", "-test", "data/short.wav")
 	requireTranscription(t, logDir)
 }
 
 func TestBatchConnReuse(t *testing.T) {
 	requireGroqKey(t)
 	logDir := runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "KEYDOWN", "KEYUP", "WAIT", "QUIT"),
-		"-test", "data/short.wav")
+		"-provider", "groq", "-test", "data/short.wav")
 	diag := readLog(t, logDir, "diagnostics_log.txt")
 	if strings.Count(diag, "transcription") < 2 {
 		t.Error("expected 2 transcription entries in diagnostics")
@@ -228,12 +233,12 @@ func TestBatchConnReuse(t *testing.T) {
 
 func TestBatchNoVoice(t *testing.T) {
 	requireGroqKey(t)
-	_ = runZee(t, cmds("KEYDOWN", "SLEEP 1500", "KEYUP", "WAIT", "QUIT"), "-test", "data/silence.wav")
+	_ = runZee(t, cmds("KEYDOWN", "SLEEP 1500", "KEYUP", "WAIT", "QUIT"), "-provider", "groq", "-test", "data/silence.wav")
 }
 
 func TestBatchEarlyKeyup(t *testing.T) {
 	requireGroqKey(t)
-	logDir := runZee(t, cmds("KEYDOWN", "SLEEP 500", "KEYUP", "WAIT", "QUIT"), "-test", "data/short.wav")
+	logDir := runZee(t, cmds("KEYDOWN", "SLEEP 500", "KEYUP", "WAIT", "QUIT"), "-provider", "groq", "-test", "data/short.wav")
 	_ = readLog(t, logDir, "diagnostics_log.txt")
 }
 
@@ -242,14 +247,14 @@ func TestBatchEarlyKeyup(t *testing.T) {
 func TestStreamWords(t *testing.T) {
 	requireDeepgramKey(t)
 	logDir := runZee(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "SLEEP 300", "KEYUP", "WAIT", "QUIT"),
-		"-test", "data/short.wav")
+		"-provider", "deepgram", "-test", "data/short.wav")
 	requireTranscription(t, logDir)
 }
 
 func TestStreamMetrics(t *testing.T) {
 	requireDeepgramKey(t)
 	logDir := runZee(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "SLEEP 300", "KEYUP", "WAIT", "QUIT"),
-		"-test", "data/short.wav")
+		"-provider", "deepgram", "-test", "data/short.wav")
 	diag := readLog(t, logDir, "diagnostics_log.txt")
 	if !strings.Contains(diag, "stream_transcription") {
 		t.Error("expected stream_transcription in diagnostics")
@@ -262,15 +267,16 @@ func TestStreamMetrics(t *testing.T) {
 func TestStreamKeyupAtBoundary(t *testing.T) {
 	requireDeepgramKey(t)
 	logDir := runZee(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "KEYUP", "WAIT", "QUIT"),
-		"-test", "data/short.wav")
+		"-provider", "deepgram", "-test", "data/short.wav")
 	_ = readLog(t, logDir, "diagnostics_log.txt")
 }
 
 // --- Failure recovery: a failed transcription must auto-save the recording ---
 
 // requireSavedSample returns the single auto-saved sample under <cfg>/samples
-// and its parsed info.json. These tests use deliberately invalid API keys, so
-// they need no secrets and never reach the real provider.
+// and its parsed info.json. These tests pin a provider and give it a
+// deliberately invalid key, so the call reaches the provider, fails auth, and
+// triggers the auto-save path — no valid secret needed.
 func requireSavedSample(t *testing.T, cfgDir string) (dir string, info map[string]string) {
 	t.Helper()
 	matches, _ := filepath.Glob(filepath.Join(cfgDir, "samples", "*", "info.json"))
@@ -290,7 +296,7 @@ func requireSavedSample(t *testing.T, cfgDir string) (dir string, info map[strin
 func TestBatchFailureAutoSavesSample(t *testing.T) {
 	_, cfgDir := runZeeDirs(t, cmds("KEYDOWN", "KEYUP", "WAIT", "QUIT"),
 		runOpts{env: []string{"GROQ_API_KEY=zee-invalid-key"}},
-		"-test", "data/short.wav", "-provider", "groq")
+		"-provider", "groq", "-test", "data/short.wav")
 	dir, info := requireSavedSample(t, cfgDir)
 	if info["error"] == "" {
 		t.Error("info.json error field is empty, expected the provider failure")
@@ -306,7 +312,7 @@ func TestStreamFailureAutoSavesSample(t *testing.T) {
 	// retained and auto-saved as WAV — stream sessions used to lose it entirely.
 	_, cfgDir := runZeeDirs(t, cmds("KEYDOWN", "WAIT_AUDIO_DONE", "SLEEP 300", "KEYUP", "WAIT", "QUIT"),
 		runOpts{env: []string{"DEEPGRAM_API_KEY=zee-invalid-key"}},
-		"-test", "data/short.wav", "-provider", "deepgram")
+		"-provider", "deepgram", "-test", "data/short.wav")
 	dir, info := requireSavedSample(t, cfgDir)
 	if info["error"] == "" {
 		t.Error("info.json error field is empty, expected the connect failure")
@@ -323,7 +329,7 @@ func TestStreamFailureAutoSavesSample(t *testing.T) {
 
 func TestPaste(t *testing.T) {
 	requireGroqKey(t)
-	logDir := runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "QUIT"), "-test", "data/short.wav")
+	logDir := runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "QUIT"), "-provider", "groq", "-test", "data/short.wav")
 	requireTranscription(t, logDir)
 	clip, err := clipboard.Read()
 	if err != nil {
@@ -342,7 +348,7 @@ func TestClipboardRestore(t *testing.T) {
 		t.Skip("clipboard not available")
 	}
 
-	_ = runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "SLEEP 1200", "QUIT"), "-test", "data/short.wav")
+	_ = runZee(t, cmds("KEYDOWN", "KEYUP", "WAIT", "SLEEP 1200", "QUIT"), "-provider", "groq", "-test", "data/short.wav")
 
 	clip, err := clipboard.Read()
 	if err != nil {
