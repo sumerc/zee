@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Setup's provider screen now runs on charm.land/huh v2 (Bubble Tea v2) instead of hand-rolled raw-mode terminal code — first step of migrating the wizard's prompts to a maintained, cross-platform TUI stack. Same semantics: "Done" pre-highlighted, Esc skips/backs out (without testing a stored key), Ctrl+C exits with the "progress is saved" note; piped/non-tty runs use huh's accessible numbered fallback (API keys fall back to a visible line read, as before). Requires Go ≥ 1.25.8 to build
+- Setup wizard streamlined for Enter-through: the provider menu pre-highlights "Done" (after a separator) so the offline default is one Enter, Esc cancels the API-key prompt without testing whatever key is stored (a mis-clicked provider no longer forces a key test), and the "Active provider" question is gone — local is the default engine and the tray switches providers any time
+- Setup runs from a neutral working directory when installed as Zee.app, so launching it from `~/Desktop`/`~/Documents` no longer triggers a "Zee wants to access files in your Desktop folder" prompt
+- Setup's paste test declares bracketed paste for the synthesized Cmd+V, so paste-protection terminals (Ghostty) no longer pop a confirmation dialog over the test token's newline; the received text is echoed by the wizard itself, identical in every terminal
+- Ctrl+C anywhere in setup now prints "everything configured so far is saved — re-run `zee setup` to continue" before exiting (every step already persisted as it completed; now it says so)
+
+- macOS colored tray icons (recording/warning/transcribing) now adapt to the menu bar theme: each ships light+dark glyph variants and the right one is picked when the icon changes — previously the white glyph was invisible on a light menu bar, leaving only the state dot
+
 - `install.sh` now installs atomically: the new bundle is copied and un-quarantined in a hidden staging dir on the same volume, then swapped into place with two fast renames, keeping the old bundle as a backup until the swap succeeds (restored on failure). A Ctrl+C mid-install can no longer leave a half-copied app — the download is killed (no orphaned curl), a partial staging copy is discarded, and an interruption in the swap window restores the previous app rather than leaving nothing
 
 - `install.sh` refuses upfront when a Zee instance is running ("quit it first") instead of trying to quit it via AppleScript — `tell application "Zee" to quit` would *launch* Zee if it wasn't running (to deliver the event) and trigger an Automation permission prompt, and a denied prompt left a running instance mid-`rm -rf`

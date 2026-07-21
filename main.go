@@ -705,9 +705,9 @@ func run() {
 		curProv, curModel := activeTranscriber.Name(), activeTranscriber.GetModel()
 		configMu.Unlock()
 		// An empty model means "the provider's default" (its first listed model)
-		// — exactly what setup's chooseActiveProvider writes and what a hand-edit
-		// naturally omits. Resolving it here keeps that a real switch, not a
-		// silent no-op. Models is a plain slice, so this is cheap (no model load).
+		// — what a hand-edit naturally omits. Resolving it here keeps that a
+		// real switch, not a silent no-op. Models is a plain slice, so this is
+		// cheap (no model load).
 		reqProv, reqModel := s.Provider, s.Model
 		if reqProv != "" && reqModel == "" {
 			if p, ok := providerByName(reqProv); ok && len(p.Models) > 0 {

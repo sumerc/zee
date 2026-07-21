@@ -3,6 +3,9 @@
 package tray
 
 import (
+	"os/exec"
+	"strings"
+
 	"github.com/energye/systray"
 	"golang.design/x/hotkey/mainthread"
 
@@ -47,9 +50,22 @@ func Init() <-chan struct{} {
 	return quitCh
 }
 
+// themedIcon picks the colored-state variant for the current menu bar
+// appearance: Hi (white glyph) on a dark bar, Lo (dark glyph) on a light one.
+// The colored icons can't be templates (template mode discards the state dot's
+// color), so appearance is checked here at set-time — same approach as Handy.
+// A theme flip mid-state is corrected on the next state change.
+func themedIcon(hi, lo []byte) []byte {
+	out, _ := exec.Command("defaults", "read", "-g", "AppleInterfaceStyle").Output()
+	if strings.TrimSpace(string(out)) == "Dark" { // key is absent in light mode
+		return hi
+	}
+	return lo
+}
+
 func updateRecordingIcon(rec bool) {
 	if rec {
-		systray.SetIcon(iconRecHi)
+		systray.SetIcon(themedIcon(iconRecHi, iconRecLo))
 	} else {
 		systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
 	}
@@ -108,15 +124,15 @@ func enableDevices() {
 
 func updateWarningIcon(on bool) {
 	if on {
-		systray.SetIcon(iconWarnHi)
+		systray.SetIcon(themedIcon(iconWarnHi, iconWarnLo))
 	} else {
-		systray.SetIcon(iconRecHi)
+		systray.SetIcon(themedIcon(iconRecHi, iconRecLo))
 	}
 }
 
 func updateTranscribingIcon(on bool) {
 	if on {
-		systray.SetIcon(iconBusyHi)
+		systray.SetIcon(themedIcon(iconBusyHi, iconBusyLo))
 	} else {
 		systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
 	}

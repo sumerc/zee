@@ -33,13 +33,25 @@ func readLine() string {
 	return b.String()
 }
 
+// exitInterrupted is the shared Ctrl+C epilogue (raw-mode readers see byte
+// 0x03, cooked-mode prompts deliver SIGINT to begin's handler — both land
+// here): every step persists as it completes, so nothing is lost. Say so and
+// leave with the conventional interrupt code.
+func exitInterrupted() {
+	fmt.Print("\r\n")
+	fmt.Println("Interrupted — everything configured so far is saved. Re-run `zee setup` to continue.")
+	os.Exit(130)
+}
+
 // menu renders an arrow-key selectable list (↑/↓ or j/k, Enter to confirm) and
-// returns the chosen index. start is the initially-highlighted row. On a
+// returns the chosen index. start is the initially-highlighted row, so the
+// caller makes start the default entry and Enter alone carries the common path.
+// An empty option renders as a blank separator row the cursor skips. On a
 // terminal that can't enter raw mode (or non-tty stdin) it falls back to a
 // numbered line-read prompt, so the wizard still works over any pipe. Ctrl+C
-// exits the process (130), matching the device picker.
+// exits the process (130).
 func menu(title string, options []string, start int) int {
-	if start < 0 || start >= len(options) {
+	if start < 0 || start >= len(options) || options[start] == "" {
 		start = 0
 	}
 
@@ -53,12 +65,31 @@ func menu(title string, options []string, start int) int {
 	defer term.Restore(fd, oldState)
 
 	cursor := start
+	up := func() {
+		for i := cursor - 1; i >= 0; i-- {
+			if options[i] != "" {
+				cursor = i
+				return
+			}
+		}
+	}
+	down := func() {
+		for i := cursor + 1; i < len(options); i++ {
+			if options[i] != "" {
+				cursor = i
+				return
+			}
+		}
+	}
 	render := func() {
 		fmt.Printf("\r\x1b[J%s  \x1b[2m(↑/↓, Enter)\x1b[0m\r\n\r\n", title)
 		for i, o := range options {
-			if i == cursor {
+			switch {
+			case o == "":
+				fmt.Print("\r\n")
+			case i == cursor:
 				fmt.Printf("  \x1b[1;36m❯ %s\x1b[0m\r\n", o)
-			} else {
+			default:
 				fmt.Printf("    %s\r\n", o)
 			}
 		}
@@ -78,28 +109,19 @@ func menu(title string, options []string, start int) int {
 				fmt.Print("\r\n")
 				return cursor
 			case 3: // Ctrl+C
-				fmt.Print("\r\n")
 				term.Restore(fd, oldState)
-				os.Exit(130)
+				exitInterrupted()
 			case 'j':
-				if cursor < len(options)-1 {
-					cursor++
-				}
+				down()
 			case 'k':
-				if cursor > 0 {
-					cursor--
-				}
+				up()
 			}
 		} else if n == 3 && buf[0] == 0x1b && buf[1] == '[' {
 			switch buf[2] {
 			case 'A': // up
-				if cursor > 0 {
-					cursor--
-				}
+				up()
 			case 'B': // down
-				if cursor < len(options)-1 {
-					cursor++
-				}
+				down()
 			}
 		}
 		fmt.Printf("\x1b[%dA", len(options)+2) // move cursor back up to redraw
@@ -107,28 +129,36 @@ func menu(title string, options []string, start int) int {
 	}
 }
 
-// numberedMenu is the non-raw fallback: print a numbered list and read a choice.
+// numberedMenu is the non-raw fallback: print a numbered list and read a
+// choice. Separator entries ("") are skipped; numbers map to real indices.
 func numberedMenu(title string, options []string, start int) int {
 	fmt.Printf("%s\n", title)
+	var sel []int // displayed number - 1 → index into options
+	def := 1
 	for i, o := range options {
+		if o == "" {
+			continue
+		}
+		sel = append(sel, i)
 		marker := " "
 		if i == start {
 			marker = "*"
+			def = len(sel)
 		}
-		fmt.Printf("  %s %d. %s\n", marker, i+1, o)
+		fmt.Printf("  %s %d. %s\n", marker, len(sel), o)
 	}
-	fmt.Printf("Choice [1-%d] (Enter = %d): ", len(options), start+1)
+	fmt.Printf("Choice [1-%d] (Enter = %d): ", len(sel), def)
 
 	line := strings.TrimSpace(readLine())
 	if line == "" {
 		return start
 	}
-	var idx int
-	if _, err := fmt.Sscanf(line, "%d", &idx); err != nil || idx < 1 || idx > len(options) {
+	var n int
+	if _, err := fmt.Sscanf(line, "%d", &n); err != nil || n < 1 || n > len(sel) {
 		fmt.Println("  (invalid choice, keeping current)")
 		return start
 	}
-	return idx - 1
+	return sel[n-1]
 }
 
 // askYesNo prompts for a yes/no answer, returning def when the user just hits
@@ -158,19 +188,4 @@ func readLineTimeout(d time.Duration) string {
 		defer os.Stdin.SetReadDeadline(time.Time{})
 	}
 	return readLine()
-}
-
-// readSecret reads a line without echoing it (for API keys). Falls back to a
-// visible read if the terminal can't disable echo. A blank line returns "".
-func readSecret(prompt string) string {
-	fmt.Print(prompt)
-	fd := int(os.Stdin.Fd())
-	if term.IsTerminal(fd) {
-		b, err := term.ReadPassword(fd)
-		fmt.Println()
-		if err == nil {
-			return strings.TrimSpace(string(b))
-		}
-	}
-	return strings.TrimSpace(readLine())
 }

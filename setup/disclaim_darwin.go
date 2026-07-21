@@ -43,6 +43,7 @@ import "C"
 import (
 	"errors"
 	"os"
+	"os/signal"
 	"syscall"
 	"unsafe"
 )
@@ -91,6 +92,11 @@ func spawnDisclaimed() (int, error) {
 		}
 		return 0, syscall.Errno(rc)
 	}
+
+	// Ctrl+C goes to the whole foreground process group; the child owns the
+	// interruption (it prints the "progress is saved" note), so this waiting
+	// parent must not die first and truncate that message.
+	signal.Ignore(os.Interrupt)
 
 	var ws syscall.WaitStatus
 	for {

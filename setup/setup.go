@@ -16,6 +16,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -48,10 +50,8 @@ const banner = `
 // the same banner itself before the model downloads, and the flag survives the
 // maybeReexec hop (extras are forwarded).
 func printBanner() {
-	for _, a := range os.Args[1:] {
-		if a == "-no-banner" {
-			return
-		}
+	if slices.Contains(os.Args[1:], "-no-banner") {
+		return
 	}
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		fmt.Print("\x1b[37m" + banner + "\x1b[0m\n")
@@ -101,6 +101,20 @@ func begin(cmd string) (code int, done bool) {
 	if code, done := maybeReexec(); done {
 		return code, true
 	}
+	if config.IsAppBundle() {
+		// install.sh (and users) often run setup from a TCC-protected folder
+		// (~/Desktop/…); the wizard inherits that cwd, so any relative-path
+		// touch by us or a child process (pbcopy, open) pops a "Zee wants to
+		// access your Desktop folder" prompt — attributed to Zee because of the
+		// disclaim respawn. Nothing here depends on cwd; move somewhere neutral.
+		_ = os.Chdir(os.TempDir())
+	}
+	// Cooked-mode prompts (askYesNo, line reads) surface Ctrl+C as SIGINT; the
+	// raw-mode readers handle byte 0x03 themselves. Either way interruption is
+	// safe — every step persists as it completes — so say that and leave.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	go func() { <-sig; exitInterrupted() }()
 	transcriber.SetKeySource(config.APIKey)
 	if err := config.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not load settings: %v\n", err)
@@ -115,6 +129,7 @@ func Run() int {
 	if code, done := begin("zee setup"); done {
 		return code
 	}
+	fmt.Println()
 	fmt.Println(bold("Everything here can be changed later: re-run `zee setup`, or edit"))
 	fmt.Println(bold("config.json from the tray (Settings → Edit Settings…) — edits apply live."))
 
@@ -126,7 +141,7 @@ func Run() int {
 	code := summary(r)
 
 	if launchInstalledApp() {
-		fmt.Println("Zee is running in your menu bar.")
+		fmt.Println("Zee is running in your menu bar — enjoy!")
 	}
 	return code
 }
@@ -167,7 +182,7 @@ func stepMic(r *results) {
 			fmt.Printf("  Heard: %q\n", text)
 			if askYesNo("  Is that roughly what you said?", true) {
 				r.micTested = true
-				fmt.Println("  "+tick()+" microphone verified")
+				fmt.Println("  " + tick() + " microphone verified")
 				return
 			}
 		}
@@ -181,7 +196,7 @@ func stepMic(r *results) {
 func micPermission() bool {
 	switch permissions.MicrophoneStatus() {
 	case permissions.MicGranted:
-		fmt.Println("  "+tick()+" permission already granted")
+		fmt.Println("  " + tick() + " permission already granted")
 		return true
 	case permissions.MicDenied:
 		fmt.Println("  " + cross() + " previously denied — opening System Settings; enable Zee under Privacy & Security → Microphone")
@@ -190,7 +205,7 @@ func micPermission() bool {
 	}
 	fmt.Println("  Approve the macOS prompt to allow recording…")
 	if permissions.RequestMicrophone() == permissions.MicGranted {
-		fmt.Println("  "+tick()+" granted")
+		fmt.Println("  " + tick() + " granted")
 		return true
 	}
 	fmt.Println("  " + cross() + " denied — opening System Settings; enable Zee under Privacy & Security → Microphone")
@@ -378,7 +393,7 @@ func ensureModel(p transcriber.ProviderInfo, modelID string) bool {
 		fmt.Printf("  Download failed: %v (retry later with `zee setup`)\n", err)
 		return false
 	}
-	fmt.Println("  "+tick()+" model ready")
+	fmt.Println("  " + tick() + " model ready")
 	return true
 }
 
@@ -463,7 +478,7 @@ func fireTest(c hotkey.Combo) error {
 		case <-hk.Keyup():
 		case <-time.After(3 * time.Second):
 		}
-		fmt.Println("  "+tick()+" fired")
+		fmt.Println("  " + tick() + " fired")
 		return nil
 	case <-time.After(20 * time.Second):
 		return fmt.Errorf("no event within 20s — the combo may be reserved by the system")
@@ -518,16 +533,58 @@ func pasteTest() bool {
 	}
 	fmt.Println("  Verifying paste — the test text should type itself below:")
 	fmt.Print("  ")
-	clipboard.Paste()
-	got := readLineTimeout(5 * time.Second)
+
+	// Declare paste-awareness (bracketed paste, ESC[?2004h) for the duration of
+	// the synthesized Cmd+V: paste-protection terminals (e.g. Ghostty) otherwise
+	// pop a warning over the newline in the token. The terminal then wraps the
+	// paste in ESC[200~/201~ markers, so read in raw mode (no echo of the marker
+	// garbage) and print the received text ourselves — output looks the same in
+	// every terminal, marker-wrapping or not.
+	var got string
+	fd := int(os.Stdin.Fd())
+	if oldState, err := term.MakeRaw(fd); err == nil {
+		fmt.Print("\x1b[?2004h")
+		clipboard.Paste()
+		got = readPasteBurst(5*time.Second, 300*time.Millisecond)
+		fmt.Print("\x1b[?2004l")
+		term.Restore(fd, oldState)
+	} else { // non-tty: nothing echoes and nothing warns, plain line read
+		clipboard.Paste()
+		got = readLineTimeout(5 * time.Second)
+	}
 	clipboard.Copy(prev) // restore what the user had (even if empty — don't leak the token)
 	if strings.Contains(got, token) {
+		fmt.Println(token)
 		fmt.Println("  " + tick() + " paste works")
 		return true
 	}
 	fmt.Println()
 	fmt.Println("  " + cross() + " pasted text did not arrive")
 	return false
+}
+
+// readPasteBurst collects the synthesized paste: waits up to total for the
+// first byte, then keeps reading until the input goes quiet for `quiet` — a
+// paste arrives as one burst, so a short silence means it is complete. This
+// needs no line terminator, so it works whether the terminal delivers the
+// token's newline as \n, \r, or wrapped in bracketed-paste markers.
+func readPasteBurst(total, quiet time.Duration) string {
+	var b strings.Builder
+	buf := make([]byte, 256)
+	deadline := time.Now().Add(total)
+	wait := total
+	for {
+		if err := os.Stdin.SetReadDeadline(time.Now().Add(wait)); err != nil {
+			return b.String()
+		}
+		n, err := os.Stdin.Read(buf)
+		b.Write(buf[:n])
+		if err != nil || time.Now().After(deadline) {
+			os.Stdin.SetReadDeadline(time.Time{})
+			return b.String()
+		}
+		wait = quiet
+	}
 }
 
 // ensureAccessibility prompts for the Accessibility permission, opens the
@@ -545,12 +602,12 @@ func ensureAccessibility(reason string) bool {
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		if permissions.HasAccessibility() {
-			fmt.Println("  "+tick()+" granted")
+			fmt.Println("  " + tick() + " granted")
 			return true
 		}
 		time.Sleep(time.Second)
 	}
-	fmt.Println("  "+cross()+" not granted (timed out) — enable it later and re-run `zee setup`")
+	fmt.Println("  " + cross() + " not granted (timed out) — enable it later and re-run `zee setup`")
 	return false
 }
 
@@ -573,9 +630,8 @@ func stepProviders(r *results) {
 	}
 	for {
 		cur := config.Get().Provider
-		start := len(providers) // "Done"
-		labels := make([]string, 0, len(providers)+1)
-		for i, p := range providers {
+		labels := make([]string, 0, len(providers)+2)
+		for _, p := range providers {
 			label := p.Label
 			switch {
 			case tested[p.Name] && p.Available():
@@ -591,13 +647,14 @@ func stepProviders(r *results) {
 			}
 			if p.Name == cur {
 				label += "  [active]"
-				start = i
 			}
 			labels = append(labels, label)
 		}
+		// "Done" is the pre-highlighted default, so the whole step is a single
+		// Enter (or Esc) for anyone happy with the offline engine.
 		labels = append(labels, "Done")
-		idx := menu("Configure a provider:", labels, start)
-		if idx == len(labels)-1 {
+		idx := selectIndex("Configure a provider", labels, len(labels)-1)
+		if idx >= len(providers) {
 			break
 		}
 		p := providers[idx]
@@ -609,37 +666,51 @@ func stepProviders(r *results) {
 			ensureModel(p, defaultLocalModelID())
 			continue
 		}
-		changed := promptAPIKey(p)
+		changed, backedOut := promptAPIKey(p)
+		if backedOut {
+			continue
+		}
 		// A key that already earned its tick this run and wasn't changed needs
 		// no re-test — re-verifying the same key would just waste a round-trip.
 		if config.HasAPIKey(p.Name) && (changed || !tested[p.Name]) {
 			tested[p.Name] = testProvider(p, r.testPCM)
 		}
 	}
-	chooseActiveProvider()
+	// No "pick the active one" question: local is the default engine
+	// (Providers() puts it first) and the tray switches providers any time.
+	if ok, label := providerReady(); ok {
+		fmt.Printf("  Active provider: %s — switch any time from the tray menu.\n", label)
+	} else {
+		fmt.Println("  No provider configured — Zee can't transcribe until one is (re-run `zee setup`).")
+	}
 }
 
 // promptAPIKey reports whether the stored key changed (Enter keeps the
-// existing one and changes nothing).
-func promptAPIKey(p transcriber.ProviderInfo) bool {
+// existing one and changes nothing) and whether the user backed out with Esc
+// (which must skip the key test entirely — backing out of a mis-click must
+// not test whatever key happens to be stored).
+func promptAPIKey(p transcriber.ProviderInfo) (changed, backedOut bool) {
 	has := config.HasAPIKey(p.Name)
-	prompt := fmt.Sprintf("  %s API key: ", p.Label)
+	desc := ""
 	if has {
-		prompt = fmt.Sprintf("  %s API key (Enter = keep existing): ", p.Label)
+		desc = "Enter = keep existing"
 	}
-	key := readSecret(prompt)
+	key, ok := secretInput(p.Label+" API key", desc)
+	if !ok {
+		return false, true
+	}
 	if key == "" {
 		if !has {
 			fmt.Printf("  No key entered — %s stays unconfigured.\n", p.Label)
 		}
-		return false
+		return false, false
 	}
 	if err := config.SetAPIKey(p.Name, key); err != nil {
 		fmt.Printf("  Could not save key: %v\n", err)
-		return false
+		return false, false
 	}
 	fmt.Printf("  Saved %s key.\n", p.Label)
-	return true
+	return true, false
 }
 
 // testProvider sends real audio (the mic-test recording, or a second of
@@ -663,39 +734,6 @@ func testProvider(p transcriber.ProviderInfo, pcm []byte) bool {
 		fmt.Printf(" %s heard: %q\n", tick(), text)
 	}
 	return true
-}
-
-func chooseActiveProvider() {
-	var avail []transcriber.ProviderInfo
-	for _, p := range transcriber.Providers() {
-		if p.Available() {
-			avail = append(avail, p)
-		}
-	}
-	if len(avail) == 0 {
-		fmt.Println("  No provider configured — Zee can't transcribe until one is (re-run `zee setup`).")
-		return
-	}
-	cur := config.Get().Provider
-	chosen := avail[0]
-	if len(avail) > 1 {
-		start := 0
-		labels := make([]string, len(avail))
-		for i, p := range avail {
-			labels[i] = p.Label
-			if p.Name == cur {
-				start = i
-			}
-		}
-		chosen = avail[menu("Active provider:", labels, start)]
-	}
-	if chosen.Name != cur {
-		config.Update(func(s *config.Settings) {
-			s.Provider = chosen.Name
-			s.Model = "" // model IDs are provider-specific; fall back to the new provider's default
-		})
-	}
-	fmt.Printf("  Active provider: %s\n", chosen.Label)
 }
 
 // defaultLocalModelID is the saved model when it's a local one, else the 110M
@@ -746,7 +784,7 @@ func summary(r results) int {
 		fmt.Println("\nSetup finished with warnings above — re-run `zee setup` any time.")
 		return 1
 	}
-	fmt.Println("\nSetup complete.")
+	fmt.Printf("\n%s Zee setup complete.\n", tick())
 	return 0
 }
 
@@ -784,7 +822,6 @@ func boolWord(b bool, yes, no string) string {
 	}
 	return no
 }
-
 
 // currentCombo is the saved hotkey, or the built-in default when none is saved.
 func currentCombo() hotkey.Combo {

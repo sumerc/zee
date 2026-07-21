@@ -226,9 +226,8 @@ if [[ -n "$TTY" ]]; then
   # Plain invocation: zee re-execs itself through `open` for correct TCC
   # attribution and still returns the wizard's real exit code, so a failed
   # setup (mic denied, nothing verified) fails this installer too.
-  if "${APP_DIR}/Zee.app/Contents/MacOS/zee" setup -no-banner <"$TTY" >"$TTY" 2>&1; then
-    log "Setup complete."
-  else
+  # On success the wizard prints its own completion message — nothing to add.
+  if ! "${APP_DIR}/Zee.app/Contents/MacOS/zee" setup -no-banner <"$TTY" >"$TTY" 2>&1; then
     log "Zee is installed, but setup did not finish cleanly."
     log "Fix it any time with: ${APP_DIR}/Zee.app/Contents/MacOS/zee setup"
     exit 1
