@@ -5,7 +5,6 @@ package update
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,33 +18,11 @@ func TestSwapBundles(t *testing.T) {
 	writeMarker(t, installed, "old")
 	writeMarker(t, staged, "new")
 
-	launched := false
-	if err := swapBundles(installed, staged, backup, func() error {
-		launched = true
-		return nil
-	}); err != nil {
+	if err := swapBundles(installed, staged, backup); err != nil {
 		t.Fatal(err)
-	}
-	if !launched {
-		t.Fatal("updated app was not launched")
 	}
 	assertMarker(t, installed, "new")
 	assertMarker(t, backup, "old")
-}
-
-func TestSwapBundlesRollsBackLaunchFailure(t *testing.T) {
-	dir := t.TempDir()
-	installed := filepath.Join(dir, "Zee.app")
-	staged := filepath.Join(dir, "new.app")
-	backup := filepath.Join(dir, "old.app")
-	writeMarker(t, installed, "old")
-	writeMarker(t, staged, "new")
-	wantErr := errors.New("launch failed")
-
-	if err := swapBundles(installed, staged, backup, func() error { return wantErr }); !errors.Is(err, wantErr) {
-		t.Fatalf("error = %v, want %v", err, wantErr)
-	}
-	assertMarker(t, installed, "old")
 }
 
 func TestSwapBundlesRollsBackInstallFailure(t *testing.T) {
@@ -55,7 +32,7 @@ func TestSwapBundlesRollsBackInstallFailure(t *testing.T) {
 	backup := filepath.Join(dir, "old.app")
 	writeMarker(t, installed, "old")
 
-	if err := swapBundles(installed, staged, backup, func() error { return nil }); err == nil {
+	if err := swapBundles(installed, staged, backup); err == nil {
 		t.Fatal("expected install failure")
 	}
 	assertMarker(t, installed, "old")

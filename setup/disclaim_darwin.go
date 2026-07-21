@@ -56,16 +56,14 @@ var errNoDisclaimSymbol = errors.New("responsibility_spawnattrs_setdisclaim unav
 // disclaimedEnv marks the respawned child so it doesn't respawn again.
 const disclaimedEnv = "ZEE_DISCLAIMED"
 
-// spawnDisclaimed re-runs this executable with the same args, disclaiming TCC
-// responsibility so the child — not the terminal — owns its permission
-// prompts. stdio is inherited (the child stays on this tty) and the child's
-// exit code is returned directly: no LaunchServices, no status-file dance.
-func spawnDisclaimed() (int, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return 0, err
-	}
-	argv := append([]string{exe}, os.Args[1:]...)
+// spawnDisclaimed runs path with args, disclaiming TCC responsibility so the
+// child — not the terminal — owns its permission prompts. stdio is inherited
+// (the child stays on this tty) and the child's exit code is returned
+// directly: no LaunchServices, no status-file dance. The disclaimedEnv marker
+// also tells the child's begin() to tolerate this waiting parent (a zee
+// process) and not respawn again.
+func spawnDisclaimed(path string, args []string) (int, error) {
+	argv := append([]string{path}, args...)
 	envp := append(os.Environ(), disclaimedEnv+"=1")
 
 	cArgv := make([]*C.char, len(argv)+1) // NULL-terminated

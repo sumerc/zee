@@ -194,12 +194,23 @@ func run() {
 				os.Exit(0)
 			}
 			fmt.Printf("Updating %s → %s...\n", version, rel.Version)
-			if err := update.Install(*rel); err != nil {
+			app, err := update.Install(*rel)
+			if err != nil {
 				fmt.Printf("Error: %v\n", err)
 				os.Exit(1)
 			}
-			fmt.Println("Update installed. Restarting Zee...")
-			os.Exit(0)
+			// The swap changed the (ad-hoc) code signature, so macOS dropped
+			// the TCC grants — setup re-grants and re-verifies as the new
+			// binary. Its exit code is the update's: an updated app that can't
+			// hear is not a successful update.
+			fmt.Println("Update installed. macOS resets permissions when the app changes — running setup to restore them.")
+			code, err := setup.SpawnSetupAt(app)
+			if err != nil {
+				fmt.Printf("Zee %s is installed, but setup could not start: %v\n", rel.Version, err)
+				fmt.Printf("Run it manually: %s/Contents/MacOS/zee setup\n", app)
+				os.Exit(1)
+			}
+			os.Exit(code)
 		}
 	}
 
@@ -218,14 +229,7 @@ func run() {
 	transcribeFlag := flag.String("transcribe", "", "Transcribe audio file(s) and exit; extra files may follow as positional args (one transcript printed per line)")
 	providerFlag := flag.String("provider", "", "Transcription provider (e.g. parakeet, groq); overrides saved config")
 	modelFlag := flag.String("model", "", "Model ID for the selected provider; overrides saved config")
-	waitPIDFlag := flag.Int("wait-for-pid", 0, "Internal: wait for an older Zee process before starting")
 	flag.Parse()
-	if *waitPIDFlag > 0 {
-		if err := update.WaitForPID(*waitPIDFlag, 10*time.Second); err != nil {
-			fmt.Fprintf(os.Stderr, "zee: %v\n", err)
-			os.Exit(1)
-		}
-	}
 
 	// Resolve log directory early
 	logPath, err := log.ResolveDir(*logPathFlag)
@@ -634,12 +638,11 @@ func run() {
 		}
 	}()
 
+	// Notify-only: the tray never installs. Updating swaps the bundle, which
+	// resets the TCC grants (ad-hoc signature) and requires the interactive
+	// setup re-grant — a terminal flow the running tray app can't host.
 	tray.OnCheckUpdate(func() {
 		go func() {
-			if isRecording.Load() {
-				alert.Warn("Finish the current recording or transcription before updating.")
-				return
-			}
 			rel, err := update.CheckLatest(version)
 			if err != nil {
 				alert.Warn("Could not check for updates:\n" + err.Error())
@@ -649,14 +652,13 @@ func run() {
 				alert.Info("You're on the latest version (" + version + ")")
 				return
 			}
-			if !alert.Confirm("Update available: "+version+" → "+rel.Version+"\n\nZee will restart after installing it.", "Install and Restart") {
-				return
+			cmd := "/Applications/Zee.app/Contents/MacOS/zee update"
+			if exe, err := os.Executable(); err == nil {
+				cmd = exe + " update"
 			}
-			if err := update.Install(*rel); err != nil {
-				alert.Warn("Update failed:\n" + err.Error())
-				return
-			}
-			gracefulShutdown()
+			alert.Info("Update available: " + version + " → " + rel.Version +
+				"\n\nQuit Zee (menu bar → Quit), then run in a terminal:\n\n" + cmd +
+				"\n\nThe update re-runs setup — macOS resets permissions when the app changes.")
 		}()
 	})
 

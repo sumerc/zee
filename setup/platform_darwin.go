@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -30,7 +31,11 @@ func maybeReexec() (code int, done bool) {
 	if !config.IsAppBundle() || isRespawnedChild() {
 		return 0, false
 	}
-	code, err := spawnDisclaimed()
+	exe, err := os.Executable()
+	if err != nil {
+		return 0, false
+	}
+	code, err = spawnDisclaimed(exe, os.Args[1:])
 	if err != nil {
 		// Symbol gone on some future macOS: degrade to running in place. Prompts
 		// then attribute to the terminal — note it so it's diagnosable.
@@ -46,6 +51,34 @@ func maybeReexec() (code int, done bool) {
 // instance-guard in Run/Doctor must skip it (pgrep would find its own waiting
 // parent) and maybeReexec must not respawn again.
 func isRespawnedChild() bool { return os.Getenv(disclaimedEnv) == "1" }
+
+// SpawnSetupAt runs `zee setup` from the bundle at appPath as a TCC-disclaimed
+// child and returns its exit code. `zee update` hands off here after swapping
+// the bundle: the app is ad-hoc signed, so the swap changed the cdhash and
+// macOS dropped the TCC grants — setup (running as the NEW binary at the
+// installed path) re-grants and re-verifies. The disclaim spawn is required,
+// not just reused: its env marker is what lets the child's instance-guard
+// tolerate this waiting zee parent. If the disclaim SPI is gone, degrade to a
+// plain spawn carrying the same marker (prompts then attribute to the
+// terminal, matching maybeReexec's degradation).
+func SpawnSetupAt(appPath string) (int, error) {
+	bin := filepath.Join(appPath, "Contents", "MacOS", "zee")
+	code, err := spawnDisclaimed(bin, []string{"setup"})
+	if !errors.Is(err, errNoDisclaimSymbol) {
+		return code, err
+	}
+	cmd := exec.Command(bin, "setup")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Env = append(os.Environ(), disclaimedEnv+"=1")
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode(), nil
+		}
+		return 0, err
+	}
+	return 0, nil
+}
 
 // launchInstalledApp starts the tray app after setup completes (installed
 // bundle only; reports whether it launched). -n forces a new instance:

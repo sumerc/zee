@@ -44,7 +44,7 @@ make benchmark WAV=file.wav RUNS=5
 - `-device <name>` - use named microphone device (also switchable from tray menu)
 - `zee setup` (or `-setup`) - interactive setup wizard: mic + live transcription test, hotkey capture + fire test, permissions, providers (multiple, each key live-tested)
 - `zee doctor` - zero-question health check: hold the configured hotkey, speak, release — verifies hotkey/mic/provider end to end with the saved config; exit code reflects health
-- `zee update` - check GitHub for a newer release
+- `zee update` - download + verify the latest release, swap it into place, then re-run `zee setup` (macOS drops TCC grants when the ad-hoc-signed bundle changes; setup restores them). The tray's "Check for Updates" is notify-only
 - `-benchmark <wav>` - run benchmark instead of live recording
 - `-runs N` - benchmark iterations (default: 3)
 - `-logpath <path>` - log directory (default: `$ZEE_LOG_PATH` or OS-specific, use `./` for current directory)

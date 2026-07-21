@@ -19,49 +19,51 @@ import (
 
 var updateHTTPClient = &http.Client{Timeout: 10 * time.Minute}
 
-func Install(rel Release) error {
+// Install downloads, verifies, and swaps the release into place, returning
+// the installed bundle path. It does NOT relaunch: the app is ad-hoc signed,
+// so every update changes the cdhash and macOS drops the TCC grants — the
+// caller must hand off to `zee setup` (as the new binary) to re-grant and
+// re-verify, rather than relaunching into an app that can no longer hear.
+func Install(rel Release) (string, error) {
 	if otherZeeRunning() {
-		return fmt.Errorf("another Zee instance is running; quit it before updating")
+		return "", fmt.Errorf("another Zee instance is running; quit it before updating")
 	}
 	app, err := currentAppPath()
 	if err != nil {
-		return err
+		return "", err
 	}
 	work, err := os.MkdirTemp(filepath.Dir(app), ".zee-update-")
 	if err != nil {
-		return fmt.Errorf("stage update beside %s: %w", app, err)
+		return "", fmt.Errorf("stage update beside %s: %w", app, err)
 	}
 	defer os.RemoveAll(work)
 
 	archive := filepath.Join(work, rel.AssetName())
 	if err := download(rel.AssetURL(), archive); err != nil {
-		return err
+		return "", err
 	}
 	want, err := releaseChecksum(rel.ChecksumsURL(), rel.AssetName())
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := verifyChecksum(archive, want); err != nil {
-		return err
+		return "", err
 	}
 
 	unpacked := filepath.Join(work, "unpacked")
 	if out, err := exec.Command("ditto", "-x", "-k", archive, unpacked).CombinedOutput(); err != nil {
-		return fmt.Errorf("extract update: %w (%s)", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("extract update: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	staged := filepath.Join(unpacked, "Zee.app")
 	if err := validateBundle(staged, rel.Version); err != nil {
-		return err
+		return "", err
 	}
 
 	backup := filepath.Join(work, "previous.app")
-	return swapBundles(app, staged, backup, func() error {
-		cmd := exec.Command("open", "-n", app, "--args", "-wait-for-pid", strconv.Itoa(os.Getpid()))
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("launch updated Zee: %w (%s)", err, strings.TrimSpace(string(out)))
-		}
-		return nil
-	})
+	if err := swapBundles(app, staged, backup); err != nil {
+		return "", err
+	}
+	return app, nil
 }
 
 func otherZeeRunning() bool {
@@ -179,21 +181,17 @@ func plistValue(path, key string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func swapBundles(installed, staged, backup string, launch func() error) error {
+// swapBundles replaces installed with staged via two renames, restoring the
+// backup if the second rename fails. Once the swap succeeds the update is
+// committed — a later setup failure is a config problem, not grounds to roll
+// back a verified bundle.
+func swapBundles(installed, staged, backup string) error {
 	if err := os.Rename(installed, backup); err != nil {
 		return fmt.Errorf("back up current app: %w", err)
 	}
 	if err := os.Rename(staged, installed); err != nil {
 		_ = os.Rename(backup, installed)
 		return fmt.Errorf("install updated app: %w", err)
-	}
-	if err := launch(); err != nil {
-		failed := staged + ".failed"
-		_ = os.Rename(installed, failed)
-		if restoreErr := os.Rename(backup, installed); restoreErr != nil {
-			return fmt.Errorf("%v; restore previous app: %w", err, restoreErr)
-		}
-		return err
 	}
 	return nil
 }

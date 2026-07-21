@@ -65,13 +65,13 @@ curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_arm64.
 
 ### Update
 
-Use **Check for Updates** from the tray, or run:
+Quit Zee (menu bar → Quit), then run:
 
 ```bash
 /Applications/Zee.app/Contents/MacOS/zee update
 ```
 
-Zee verifies the release archive, replaces `Zee.app`, and restarts. Models and settings are unchanged.
+Zee verifies the release archive, replaces `Zee.app`, and re-runs the setup wizard — macOS resets the app's permissions whenever the bundle changes, and setup restores and re-verifies them. Models and settings are unchanged. (**Check for Updates** in the tray tells you when a release is available.)
 
 ### Build from source
 
