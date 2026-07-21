@@ -44,7 +44,7 @@ parakeet-lib:
 	  echo "==> configuring parakeet.cpp (one-time)"; \
 	  cmake -S $(PARAKEET_DIR) -B $(PARAKEET_DIR)/build-release \
 	    -DBUILD_SHARED_LIBS=OFF -DPARAKEET_SHARED=OFF -DPARAKEET_BUILD_CLI=OFF \
-	    -DPARAKEET_GGML_METAL=OFF -DGGML_NATIVE=OFF \
+	    -DPARAKEET_GGML_METAL=ON -DGGML_NATIVE=OFF \
 	    -DCMAKE_OSX_DEPLOYMENT_TARGET=$(MACOS_MIN) \
 	    -DCMAKE_C_FLAGS="-mcpu=apple-m1" -DCMAKE_CXX_FLAGS="-mcpu=apple-m1"; \
 	fi && \

@@ -44,13 +44,39 @@ fallbacks. Local-first wins on privacy and latency; the cloud path is there for
 when accuracy matters or the environment is noisy. All numbers below were
 measured on an M1 Pro.
 
-**CPU backend, not Metal.** ggml's Metal backend doesn't implement `CONV_2D_DW`,
-the depthwise conv the FastConformer encoder needs, and Parakeet runs the whole
-graph on one backend with no per-op CPU fallback — so a Metal build *aborts*, it
-doesn't degrade. Still true on ggml v0.13.0. The CPU path runs at 20–65x
-real-time, which is plenty for dictation-length clips; Metal would only matter
-for batching hours of audio. (A different Metal-capable backend exists but only
-beats CPU on the 0.6b model and *loses* on our 110m default.)
+**CPU backend, not Metal** — *but see below, fixed in mudler v0.4.0.* ggml's
+Metal backend doesn't implement `CONV_2D_DW`, the depthwise conv the
+FastConformer encoder needs, and Parakeet ran the whole graph on one backend
+with no per-op CPU fallback — so a Metal build *aborted*, it didn't degrade. The
+CPU path runs at 20–65x real-time, which is plenty for dictation-length clips;
+Metal would only matter for batching hours of audio. (A different Metal-capable
+backend exists but only beats CPU on the 0.6b model and *loses* on our 110m
+default.)
+
+**Metal works as of mudler v0.4.0 (bump from v0.1.1+4).** The abort above is
+superseded — *not* by ggml (still v0.13.0, still missing `CONV_2D_DW`) but by
+parakeet's own fix (upstream #2 / PR #4): a `ggml_backend_sched` over `{GPU,CPU}`
+that offloads unsupported ops to CPU, plus a native Metal depthwise-conv kernel.
+Same ggml pin, so no ggml movement. Both 110m and the v3 multilingual GGUF (the
+model that used to crash) transcribe cleanly on Metal.
+
+- **Speedup** (synthetic TTS, wall-clock A/B, same clips both sides — read as
+  relative, not absolute): steady-state RTFx 110m 22→**38x** (~1.7x), v3-0.6b
+  8→**21x** (~2.6x). Per-utterance warm-daemon on a 10s clip: 110m 0.45→0.26 s,
+  v3 1.25→**0.48 s**. The win scales with model size, so it's **marginal for the
+  English 110m default** (both already sub-perceptible; fixed overhead dominates)
+  but **real for multilingual** (v3/Turkish) — the case that justifies Metal.
+- **Cold-start is paid once, not per utterance.** Shaders are embedded in
+  `libggml-metal.a` (no shipped `.metallib` — single-binary intact) and the OS
+  caches compiled pipelines, so the two-point fit put fixed overhead at ~0–0.3 s.
+  In the daemon it lands once at launch: bake a warmup `Transcribe` on a synthetic
+  buffer into startup (same spirit as HTTP pre-warming), sized near dictation
+  length so the common tensor shapes pre-compile.
+- **Whisper angle:** since Metal now works on the *shared* ggml v0.13.0, a future
+  whisper.cpp integration could link the same Metal-enabled ggml — and whisper
+  benefits from GPU more (larger models, offline ~99-language incl. Turkish).
+  Still gated on the open POC: does whisper.cpp v1.9.1 build against ggml v0.13.0
+  (see `zee-whisper-poc/PLAN.md`).
 
 **Static-linked** (`BUILD_SHARED_LIBS=OFF` → `.a` folded into the Go binary):
 one self-contained arm64 binary, no shipped `lib/`, no dylib version-skew. Cost
