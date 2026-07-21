@@ -14,8 +14,16 @@ DL_PID="" # pid of the in-flight background download, so cleanup can kill it
 STAGE="${APP_DIR}/.Zee.app.new-$$" # staged copy, swapped in atomically
 BACKUP="${APP_DIR}/.Zee.app.old-$$" # previous bundle, kept until swap succeeds
 
-err() { echo "error: $*" >&2; exit 1; }
+# Bold the key status lines when writing to a terminal — under `curl | bash`
+# only stdin is the pipe, so stdout/stderr are still the user's tty. No-op when
+# redirected to a file/pipe (no escape codes in captured logs).
+[[ -t 1 ]] && BOLD=$'\033[1m' RESET=$'\033[0m' || BOLD='' RESET=''
+[[ -t 2 ]] && EBOLD=$'\033[1m' ERESET=$'\033[0m' || EBOLD='' ERESET=''
+
+err() { echo "${EBOLD}error: $*${ERESET}" >&2; exit 1; }
 log() { echo "==> $*"; }
+# logb: a status line worth not losing in the scroll (bold).
+logb() { echo "==> ${BOLD}$*${RESET}"; }
 cleanup() {
   # Kill a still-running background download (Ctrl+C would otherwise orphan it).
   [[ -n "${DL_PID:-}" ]] && kill "$DL_PID" 2>/dev/null || true
@@ -137,7 +145,12 @@ prefetch_models() {
   while read -r f sum; do
     [[ -n "$f" ]] || continue
     dest="${MODELS_DIR}/${f}"
-    if [[ -f "$dest" ]] && shasum -a 256 "$dest" | grep -q "$sum"; then
+    # A bare $dest (no .part) only exists because a prior run passed the sha
+    # check below and mv'd it into place — in-flight downloads are always
+    # .part — so existence is proof of verification. Skip re-hashing it: these
+    # models are ~1 GB total and re-hashing them on every install cost seconds
+    # for no added safety.
+    if [[ -f "$dest" ]]; then
       log "Model ${f} already present"; continue
     fi
     log "Downloading model ${f}..."
@@ -208,7 +221,7 @@ if ! run_or_sudo mv "$STAGE" "${APP_DIR}/Zee.app"; then
 fi
 run_or_sudo rm -rf "$BACKUP"
 
-log "Zee ${VERSION:-(local build)} installed to ${APP_DIR}/Zee.app"
+logb "Zee ${VERSION:-(local build)} installed to ${APP_DIR}/Zee.app"
 
 # Hand off to the in-app setup wizard, which grants permissions (attributed to
 # Zee.app because it runs as the bundle), stores any cloud API key, captures a
@@ -228,8 +241,8 @@ if [[ -n "$TTY" ]]; then
   # setup (mic denied, nothing verified) fails this installer too.
   # On success the wizard prints its own completion message — nothing to add.
   if ! "${APP_DIR}/Zee.app/Contents/MacOS/zee" setup -no-banner <"$TTY" >"$TTY" 2>&1; then
-    log "Zee is installed, but setup did not finish cleanly."
-    log "Fix it any time with: ${APP_DIR}/Zee.app/Contents/MacOS/zee setup"
+    logb "Zee is installed, but setup did not finish cleanly."
+    logb "Fix it any time with: ${APP_DIR}/Zee.app/Contents/MacOS/zee setup"
     exit 1
   fi
 else
@@ -238,7 +251,7 @@ else
 Setup was not run (no interactive terminal detected).
 Finish configuring Zee — provider + API key, permissions, and hotkey — with:
 
-    /Applications/Zee.app/Contents/MacOS/zee setup
+    ${BOLD}/Applications/Zee.app/Contents/MacOS/zee setup${RESET}
 
 On Apple Silicon, Zee also works offline out of the box (local model, no key).
 EOF

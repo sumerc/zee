@@ -14,16 +14,15 @@ package setup
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/signal"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
 	"zee/audio"
-	"zee/clipboard"
 	"zee/config"
 	"zee/encoder"
 	"zee/hotkey"
@@ -60,19 +59,34 @@ func printBanner() {
 	}
 }
 
-// bold wraps s in ANSI bold on a tty, plain otherwise.
+// bold / dim wrap s in ANSI styling on a tty, plain otherwise.
 func bold(s string) string { return sgr("1", s) }
+func dim(s string) string  { return sgr("2", s) }
 
-// tick / cross are the pass/fail glyphs, green/red on a tty. ANSI SGR colors
-// are safe in any modern terminal; non-ttys get the bare glyph.
+// tick / cross / ring are the pass/fail/unverified glyphs (green/red/yellow on
+// a tty). ANSI SGR colors are safe in any modern terminal; non-ttys get the
+// bare glyph.
 func tick() string  { return sgr("32", "✓") }
 func cross() string { return sgr("31", "✗") }
+func ring() string  { return sgr("33", "○") }
 
 func sgr(code, s string) string {
-	if term.IsTerminal(int(os.Stdout.Fd())) {
+	if colorEnabled() {
 		return "\x1b[" + code + "m" + s + "\x1b[0m"
 	}
 	return s
+}
+
+// colorEnabled honors the NO_COLOR convention (no-color.org: any non-empty
+// value disables color) on top of the tty check.
+func colorEnabled() bool {
+	return os.Getenv("NO_COLOR") == "" && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// step prints a bold "Step n/4 · title" header so the user always knows where
+// they are in the wizard.
+func step(n int, title string) {
+	fmt.Printf("\n%s\n", bold(fmt.Sprintf("Step %d/4 · %s", n, title)))
 }
 
 // results collects what each step actually proved, for the final summary.
@@ -132,6 +146,7 @@ func Run() int {
 	fmt.Println()
 	fmt.Println(bold("Everything here can be changed later: re-run `zee setup`, or edit"))
 	fmt.Println(bold("config.json from the tray (Settings → Edit Settings…) — edits apply live."))
+	fmt.Println(dim("Ctrl+C anytime — progress is saved."))
 
 	var r results
 	stepMic(&r)
@@ -141,7 +156,8 @@ func Run() int {
 	code := summary(r)
 
 	if launchInstalledApp() {
-		fmt.Println("Zee is running in your menu bar — enjoy!")
+		fmt.Println("\n" + bold("Zee is running in your menu bar — enjoy!"))
+		fmt.Printf("Hold %s in any app to dictate.\n", bold(currentCombo().Display()))
 	}
 	return code
 }
@@ -149,7 +165,7 @@ func Run() int {
 // --- Microphone (permission + device + live loopback test) ---
 
 func stepMic(r *results) {
-	fmt.Println("\nMicrophone (required)")
+	step(1, "Microphone (required)")
 	r.micGranted = micPermission()
 	chooseDevice()
 	if !r.micGranted {
@@ -186,7 +202,7 @@ func stepMic(r *results) {
 				return
 			}
 		}
-		if !askYesNo("  Try again (you can pick another microphone)?", true) {
+		if !askYesNo("  Try again? (No skips the mic check — you can pick another microphone on retry)", true) {
 			return
 		}
 		chooseDevice()
@@ -246,7 +262,7 @@ func chooseDevice() {
 		labels = append(labels, l)
 	}
 
-	idx := menu("  Microphone:", labels, start)
+	idx := selectIndex("Microphone", labels, start)
 	name := ""
 	if idx > 0 {
 		name = devices[idx-1].Name
@@ -263,7 +279,7 @@ func chooseDevice() {
 // record captures d of audio from the configured device (raw 16 kHz mono PCM),
 // showing a countdown while it runs.
 func record(d time.Duration) ([]byte, error) {
-	fmt.Println("  Speak a short English sentence…")
+	fmt.Println("\n  Speak a short English sentence…")
 	stop := make(chan struct{})
 	go func() {
 		defer close(stop)
@@ -390,7 +406,7 @@ func ensureModel(p transcriber.ProviderInfo, modelID string) bool {
 	})
 	fmt.Println()
 	if err != nil {
-		fmt.Printf("  Download failed: %v (retry later with `zee setup`)\n", err)
+		fmt.Printf("  Download failed: %v (re-run `zee setup` to retry)\n", err)
 		return false
 	}
 	fmt.Println("  " + tick() + " model ready")
@@ -400,7 +416,7 @@ func ensureModel(p transcriber.ProviderInfo, modelID string) bool {
 // --- Hotkey (capture optional, live fire test always) ---
 
 func stepHotkey(r *results) {
-	fmt.Println("\nPush-to-talk hotkey (required)")
+	step(2, "Push-to-talk hotkey (required)")
 	combo := currentCombo()
 	if askYesNo(fmt.Sprintf("  Use a custom hotkey instead of %s?", combo.Display()), false) {
 		// Capturing keystrokes needs the Accessibility permission (NSEvent
@@ -434,7 +450,7 @@ func stepHotkey(r *results) {
 	if r.comboFired {
 		fmt.Printf("  "+tick()+" hotkey %s saved\n", combo.Display())
 	} else {
-		fmt.Printf("  Saved %s unconfirmed — change it later by re-running `zee setup`\n", combo.Display())
+		fmt.Printf("  Saved %s unconfirmed — re-run `zee setup` any time to change it\n", combo.Display())
 	}
 }
 
@@ -471,7 +487,7 @@ func fireTest(c hotkey.Combo) error {
 		return err
 	}
 	defer hk.Unregister()
-	fmt.Printf("  Press %s once to confirm it fires…\n", c.Display())
+	fmt.Printf("  Press %s once to confirm it fires… %s\n", c.Display(), dim("(waiting up to 20s)"))
 	select {
 	case <-hk.Keydown():
 		select {
@@ -487,11 +503,16 @@ func fireTest(c hotkey.Combo) error {
 
 // --- Auto-paste + Accessibility ---
 
-// stepAutoPaste asks for auto-paste and, when wanted, makes it provably work
-// before setup moves on: the Accessibility grant is required, and then a real
-// synthesized paste must land (pasteTest). The user can back out — auto-paste
-// is then turned off, because it cannot work without the permission.
+// stepAutoPaste asks for auto-paste and, when wanted, requires the
+// Accessibility grant that makes it work. Accessibility (AXIsProcessTrusted) is
+// the whole contract: it's the permission macOS checks before CGEventPost — the
+// synthesized Cmd+V — is delivered to another app, and it's keyed to this
+// binary's signature (so a stale post-update entry reads as not-granted). We
+// don't fire a test keystroke: at real dictation time the paste lands in
+// whatever app is focused, never the terminal, so a terminal round-trip would
+// only test an artificial scenario (and race terminal focus). Trust the grant.
 func stepAutoPaste(r *results) {
+	step(3, "Auto-paste")
 	r.autoPaste = askYesNo("Will you use auto-paste? (types each transcription into the focused app)", config.Get().AutoPaste)
 	if !r.autoPaste {
 		r.axGranted = permissions.HasAccessibility()
@@ -499,92 +520,15 @@ func stepAutoPaste(r *results) {
 		config.Update(func(s *config.Settings) { s.AutoPaste = false })
 		return
 	}
-	fmt.Println("  Auto-paste needs the Accessibility permission (required).")
-	for {
-		if ensureAccessibility("auto-paste") && pasteTest() {
-			r.axGranted = true
-			config.Update(func(s *config.Settings) { s.AutoPaste = true })
-			return
-		}
-		if askYesNo("  Auto-paste verification failed — try again?", true) {
-			continue
-		}
-		fmt.Println("  Auto-paste disabled; grant Accessibility and re-enable it from the tray.")
-		r.autoPaste = false
-		config.Update(func(s *config.Settings) { s.AutoPaste = false })
+	if ensureAccessibility("auto-paste") {
+		r.axGranted = true
+		fmt.Println("  " + tick() + " auto-paste enabled")
+		config.Update(func(s *config.Settings) { s.AutoPaste = true })
 		return
 	}
-}
-
-// pasteTest proves a synthesized paste actually works — Accessibility being
-// granted is not the same thing. It puts a token on the clipboard, sends the
-// paste keystroke at the focused app (this terminal), and checks that the
-// token arrives on our own stdin.
-func pasteTest() bool {
-	if err := clipboard.Init(); err != nil {
-		fmt.Printf("  %s paste init: %v\n", cross(), err)
-		return false
-	}
-	prev, _ := clipboard.Read()
-	const token = "zee-paste-test"
-	if err := clipboard.Copy(token + "\n"); err != nil {
-		fmt.Printf("  %s clipboard write: %v\n", cross(), err)
-		return false
-	}
-	fmt.Println("  Verifying paste — the test text should type itself below:")
-	fmt.Print("  ")
-
-	// Declare paste-awareness (bracketed paste, ESC[?2004h) for the duration of
-	// the synthesized Cmd+V: paste-protection terminals (e.g. Ghostty) otherwise
-	// pop a warning over the newline in the token. The terminal then wraps the
-	// paste in ESC[200~/201~ markers, so read in raw mode (no echo of the marker
-	// garbage) and print the received text ourselves — output looks the same in
-	// every terminal, marker-wrapping or not.
-	var got string
-	fd := int(os.Stdin.Fd())
-	if oldState, err := term.MakeRaw(fd); err == nil {
-		fmt.Print("\x1b[?2004h")
-		clipboard.Paste()
-		got = readPasteBurst(5*time.Second, 300*time.Millisecond)
-		fmt.Print("\x1b[?2004l")
-		term.Restore(fd, oldState)
-	} else { // non-tty: nothing echoes and nothing warns, plain line read
-		clipboard.Paste()
-		got = readLineTimeout(5 * time.Second)
-	}
-	clipboard.Copy(prev) // restore what the user had (even if empty — don't leak the token)
-	if strings.Contains(got, token) {
-		fmt.Println(token)
-		fmt.Println("  " + tick() + " paste works")
-		return true
-	}
-	fmt.Println()
-	fmt.Println("  " + cross() + " pasted text did not arrive")
-	return false
-}
-
-// readPasteBurst collects the synthesized paste: waits up to total for the
-// first byte, then keeps reading until the input goes quiet for `quiet` — a
-// paste arrives as one burst, so a short silence means it is complete. This
-// needs no line terminator, so it works whether the terminal delivers the
-// token's newline as \n, \r, or wrapped in bracketed-paste markers.
-func readPasteBurst(total, quiet time.Duration) string {
-	var b strings.Builder
-	buf := make([]byte, 256)
-	deadline := time.Now().Add(total)
-	wait := total
-	for {
-		if err := os.Stdin.SetReadDeadline(time.Now().Add(wait)); err != nil {
-			return b.String()
-		}
-		n, err := os.Stdin.Read(buf)
-		b.Write(buf[:n])
-		if err != nil || time.Now().After(deadline) {
-			os.Stdin.SetReadDeadline(time.Time{})
-			return b.String()
-		}
-		wait = quiet
-	}
+	fmt.Println("  Auto-paste disabled; grant Accessibility and re-enable it from the tray.")
+	r.autoPaste = false
+	config.Update(func(s *config.Settings) { s.AutoPaste = false })
 }
 
 // ensureAccessibility prompts for the Accessibility permission, opens the
@@ -596,7 +540,13 @@ func ensureAccessibility(reason string) bool {
 		return true
 	}
 	fmt.Printf("  Accessibility permission is needed for %s.\n", reason)
-	fmt.Println("  Opening System Settings — enable Zee under Privacy & Security → Accessibility, then return here.")
+	fmt.Println("  Opening System Settings → Privacy & Security → Accessibility:")
+	fmt.Println("    • if Zee is NOT listed, enable it.")
+	// After an update the old entry keeps the previous build's signature, so it
+	// shows checked yet AXIsProcessTrusted stays false — toggling won't help,
+	// only removing and re-adding rebinds the grant to the new binary.
+	fmt.Println("    • if Zee IS already listed, remove it with the “−” button and add it back (an update changed its signature).")
+	fmt.Println("  Then return here.")
 	permissions.RequestAccessibility()
 	permissions.OpenAccessibilitySettings()
 	deadline := time.Now().Add(60 * time.Second)
@@ -614,7 +564,7 @@ func ensureAccessibility(reason string) bool {
 // --- Providers (configure any number, live-test each, pick the active one) ---
 
 func stepProviders(r *results) {
-	fmt.Println("\nTranscription providers")
+	step(4, "Transcription providers")
 	fmt.Println("  Configure as many as you like — each key is tested with real audio and")
 	fmt.Println("  stored in credentials.json. Add or change keys later by re-running `zee setup`.")
 	providers := transcriber.Providers()
@@ -713,14 +663,29 @@ func promptAPIKey(p transcriber.ProviderInfo) (changed, backedOut bool) {
 	return true, false
 }
 
-// testProvider sends real audio (the mic-test recording, or a second of
-// silence) through the provider's normal session path — the only proof the
-// stored key actually authenticates. Always in English: the sample was
-// recorded against the English-only local model, and every cloud provider
-// supports English. Reports whether the key verified.
+// sampleSpeechWAV is a ~1.6s English clip (copied from test/data/en.wav),
+// embedded so a provider test has real speech to transcribe even when the user
+// skipped the mic recording. Silence made Whisper-class providers hallucinate
+// phantom text ("."), which read as a real (wrong) transcription.
+//
+//go:embed sample_en.wav
+var sampleSpeechWAV []byte
+
+// sampleSpeechPCM is the decoded clip (raw 16 kHz mono PCM, matching the WAV's
+// format), computed once. nil only if the embed/decoding somehow fails.
+var sampleSpeechPCM, _ = audio.WAVToPCM(sampleSpeechWAV)
+
+// testProvider sends real audio through the provider's normal session path —
+// the only proof the stored key actually authenticates. It prefers the user's
+// mic-test recording; absent that, the embedded English sample; only if both
+// are missing does it fall back to silence. Always English: every cloud
+// provider supports it, and the sample is English. Reports whether it verified.
 func testProvider(p transcriber.ProviderInfo, pcm []byte) bool {
 	if len(pcm) == 0 {
-		pcm = make([]byte, encoder.SampleRate*2) // 1s of silence still exercises auth
+		pcm = sampleSpeechPCM
+	}
+	if len(pcm) == 0 {
+		pcm = make([]byte, encoder.SampleRate*2) // last-resort: silence still exercises auth
 	}
 	fmt.Printf("  Testing %s…", p.Label)
 	text, err := transcribePCM(p.New(), pcm, "en")
@@ -759,16 +724,20 @@ func providerByName(name string) (transcriber.ProviderInfo, bool) {
 func summary(r results) int {
 	fmt.Println("\nSummary")
 
-	micDetail := permissions.MicrophoneStatus().String()
-	if r.micGranted {
-		micDetail = "granted (live test skipped)"
-		if r.micTested {
-			micDetail = "recorded + transcribed " + tick()
-		}
+	switch {
+	case r.micTested:
+		report("microphone", true, "recorded + transcribed")
+	case r.micGranted:
+		reportWarn("microphone", "granted (live test skipped)")
+	default:
+		report("microphone", false, permissions.MicrophoneStatus().String())
 	}
-	report("microphone", r.micGranted, micDetail)
 
-	report("hotkey", r.comboFired, r.combo.Display()+boolWord(r.comboFired, " (fired)", " (not confirmed)"))
+	if r.comboFired {
+		report("hotkey", true, r.combo.Display()+" (fired)")
+	} else {
+		reportWarn("hotkey", r.combo.Display()+" (not confirmed)")
+	}
 
 	axOK := r.axGranted || !r.autoPaste
 	report("accessibility", axOK, boolWord(r.axGranted, "granted", boolWord(r.autoPaste, "missing — auto-paste won't work", "not needed")))
@@ -784,7 +753,7 @@ func summary(r results) int {
 		fmt.Println("\nSetup finished with warnings above — re-run `zee setup` any time.")
 		return 1
 	}
-	fmt.Printf("\n%s Zee setup complete.\n", tick())
+	fmt.Printf("\n%s %s\n", tick(), bold("Zee setup complete."))
 	return 0
 }
 
@@ -813,7 +782,13 @@ func report(name string, ok bool, detail string) {
 	if ok {
 		mark = tick()
 	}
-	fmt.Printf("  %s %-14s %s\n", mark, name, detail)
+	fmt.Printf("  %s %-14s %s\n", mark, name, bold(detail))
+}
+
+// reportWarn is the middle state: configured but unverified/skipped — the
+// wizard proved nothing either way, which neither ✓ nor ✗ says honestly.
+func reportWarn(name, detail string) {
+	fmt.Printf("  %s %-14s %s\n", ring(), name, bold(detail))
 }
 
 func boolWord(b bool, yes, no string) string {

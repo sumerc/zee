@@ -33,12 +33,6 @@ func Doctor() int {
 	// hotkey, microphone, and provider proven in a single real dictation.
 	fired, text, liveErr := hotkeyDictation(combo)
 
-	// Auto-paste enabled → prove a synthesized paste actually lands.
-	pasteOK := true
-	if autoPaste {
-		pasteOK = axOK && pasteTest()
-	}
-
 	fmt.Println("\nReport")
 	report("microphone", micOK, permissions.MicrophoneStatus().String())
 	axDetail := "granted"
@@ -51,9 +45,6 @@ func Doctor() int {
 	report("accessibility", axOK || !autoPaste, axDetail)
 	report("hotkey", fired, combo.Display()+boolWord(fired, " (fired)", " (did not fire)"))
 	report("provider", provOK, provLabel)
-	if autoPaste {
-		report("paste", pasteOK, boolWord(pasteOK, "verified", "did not arrive"))
-	}
 	switch {
 	case liveErr != nil:
 		report("dictation", false, liveErr.Error())
@@ -63,7 +54,7 @@ func Doctor() int {
 		report("dictation", true, fmt.Sprintf("%q", text))
 	}
 
-	healthy := micOK && fired && provOK && liveErr == nil && text != "" && (axOK || !autoPaste) && pasteOK
+	healthy := micOK && fired && provOK && liveErr == nil && text != "" && (axOK || !autoPaste)
 	fmt.Println()
 	if healthy {
 		fmt.Println("All checks passed.")

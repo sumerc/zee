@@ -37,22 +37,6 @@ func TestReadLineNoSwallow(t *testing.T) {
 	})
 }
 
-// TestNumberedMenuChoice exercises the non-tty fallback (piped stdin can't enter
-// raw mode) and confirms a numeric choice maps to the right index.
-func TestNumberedMenuChoice(t *testing.T) {
-	opts := []string{"a", "b", "c"}
-	withStdin(t, "3\n", func() {
-		if got := menu("pick", opts, 0); got != 2 {
-			t.Fatalf("menu choice = %d, want 2", got)
-		}
-	})
-	withStdin(t, "\n", func() { // Enter keeps the start default
-		if got := menu("pick", opts, 1); got != 1 {
-			t.Fatalf("menu default = %d, want 1", got)
-		}
-	})
-}
-
 func TestCurrentComboDefaultsWhenUnset(t *testing.T) {
 	config.SetDir(t.TempDir())
 	if err := config.Load(); err != nil {

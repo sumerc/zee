@@ -24,12 +24,17 @@ import (
 // terminal. Both keys surface as huh.ErrUserAborted, so a message filter
 // records which one fired.
 func runPrompt(field huh.Field) (escaped bool) {
+	fmt.Println() // separate the prompt from preceding output (menu() did this)
 	km := huh.NewDefaultKeyMap()
 	km.Quit = key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc", "skip"))
 
 	ctrlC := false
 	err := huh.NewForm(huh.NewGroup(field)).
 		WithKeyMap(km).
+		// ThemeBase is huh's leanest theme: monochrome, using only ANSI 0/7/8
+		// (black/white/gray, which follow the terminal palette) with no accent
+		// colors — the selected button is a plain inverse, not a colored fill.
+		WithTheme(huh.ThemeFunc(huh.ThemeBase)).
 		WithAccessible(!term.IsTerminal(int(os.Stdin.Fd()))).
 		WithProgramOptions(tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
 			if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "ctrl+c" {
@@ -63,6 +68,18 @@ func selectIndex(title string, labels []string, def int) int {
 	choice := def
 	runPrompt(huh.NewSelect[int]().Title(title).Options(opts...).Value(&choice))
 	return choice
+}
+
+// askYesNo asks a yes/no question, returning def on Enter or Esc. It uses huh's
+// Confirm rather than a hand-rolled stdin read: after a huh Select/Input runs
+// (bubbletea owns stdin during it), a raw os.Stdin read in the same process can
+// race a lingering bubbletea reader that steals the keystroke — which sent the
+// wizard back a step instead of advancing. Keeping every prompt on huh means
+// one stdin owner throughout.
+func askYesNo(prompt string, def bool) bool {
+	v := def
+	runPrompt(huh.NewConfirm().Title(prompt).Value(&v))
+	return v
 }
 
 // secretInput reads a masked line. Enter submits (possibly empty), Esc backs
