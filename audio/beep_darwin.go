@@ -4,9 +4,17 @@ package audio
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/gen2brain/malgo"
+
+	"zee/log"
 )
+
+// beepFrames counts tone frames actually rendered by dataCallback — the only
+// ground truth that a beep made it to the device. Silent in the healthy case;
+// see the watcher in playInt16.
+var beepFrames atomic.Uint64
 
 var (
 	playbackDevice *malgo.Device
@@ -78,6 +86,7 @@ func dataCallback(pOutput, _ []byte, frameCount uint32) {
 		pOutput[i] = 0 // zero-fill any frames past the buffer
 	}
 	playPos.Store(pos + frames)
+	beepFrames.Add(uint64(frames))
 }
 
 func playInt16(mono []int16) {
@@ -97,8 +106,10 @@ func playInt16(mono []int16) {
 		playbackDevice.Uninit()
 		playbackDevice = nil
 	}
+	initMs := time.Now()
 	if err := initPlaybackDevice(); err != nil {
 		playbackDevice = nil
+		log.Warnf("beep: device init failed: %v", err)
 		return
 	}
 
@@ -107,7 +118,23 @@ func playInt16(mono []int16) {
 
 	if err := playbackDevice.Start(); err != nil {
 		playMono.Store(nil)
+		log.Warnf("beep: device start failed: %v", err)
+		return
 	}
+
+	// Telemetry, silent when healthy: warn if the reinit was slow enough to be
+	// audible/stall-prone, and — after the tone should have drained — if the
+	// callback never rendered a frame (a silently-dead device).
+	if d := time.Since(initMs); d > 150*time.Millisecond {
+		log.Warnf("beep: slow device reinit %dms", d.Milliseconds())
+	}
+	before := beepFrames.Load()
+	toneDur := time.Duration(len(mono)) * time.Second / beepSampleRate
+	time.AfterFunc(toneDur+300*time.Millisecond, func() {
+		if beepFrames.Load() == before {
+			log.Warnf("beep: silent — no frames rendered (%d samples queued)", len(mono))
+		}
+	})
 }
 
 func playOne(s sound) {
