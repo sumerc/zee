@@ -150,11 +150,11 @@ type CaptureDevice interface {
 
 // --- Feedback tones (record start/end, error, denied) ---
 //
-// Playback shares the OS audio device with capture — on darwin the same malgo
-// context and lifecycle lock (see capture_darwin.go). This file owns the
-// platform-neutral half: the public API, the enable guard, and tone synthesis.
-// Each platform file provides exactly two backend hooks, initSound() and
-// playOne(sound), so the guard logic lives here once instead of per platform.
+// This file owns the platform-neutral half: the public API, the enable guard,
+// and tone synthesis. Each platform file provides exactly two backend hooks,
+// initSound() and playOne(sound), so the guard logic lives here once instead
+// of per platform. Playback is independent of capture on every OS (darwin:
+// AVAudioPlayer, linux: PulseAudio) — it never touches the capture device.
 
 // sound identifies a tone; it indexes the canonical sample table below.
 type sound int
@@ -168,9 +168,9 @@ const (
 )
 
 // samples is the canonical tone table: 16-bit mono PCM, synthesized once by
-// buildSamples. Each platform's playback adapts these to its device format
-// (darwin: mono S16 little-endian bytes; linux: stereo) as it copies into the
-// device buffer — so the tone data and synthesis live here once, never per OS.
+// buildSamples. Each platform's playback adapts these to its own format
+// (darwin: in-memory WAV bytes; linux: stereo stream) — so the tone data and
+// synthesis live here once, never per OS.
 var samples [numSounds][]int16
 
 // disabled is set once at startup (or by tests) but read from recording
