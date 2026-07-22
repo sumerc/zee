@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gen2brain/malgo"
+
+	"zee/log"
 )
 
 // deviceMu serializes every malgo context/device lifecycle call across capture
@@ -129,21 +132,32 @@ func (c *malgoCapture) initDevice() error {
 }
 
 func (c *malgoCapture) Start() error {
+	// Timing breakdown of the record-start hot path: the mic device is torn down
+	// and re-created on every Start (see below), and this whole block holds
+	// deviceMu, so it can stall the beep and — empirically — delay hotkey event
+	// delivery. capture_start_ms is the dominant term in press_to_record_ms.
+	t0 := time.Now()
 	deviceMu.Lock()
+	waitMs := time.Since(t0).Milliseconds()
 	defer deviceMu.Unlock()
-	// Always reinitialize before starting — handles macOS sleep/wake where the
-	// device handle goes stale without returning errors. Null the pointer after
-	// Uninit: if the reinit below fails (transient CoreAudio error during a
-	// route/sleep-wake change), c.device must not be left pointing at the freed
-	// device, or the next Start uninits it again and double-frees.
-	if c.device != nil {
-		c.device.Uninit()
-		c.device = nil
+	// EXPERIMENT(tap-misfire): reuse the initialized device instead of the
+	// per-press Uninit+InitDevice (which existed to survive macOS sleep/wake
+	// staleness). Tests whether the reinit is what stalls the run loop and
+	// delays keyup delivery. uninit_ms should now always be 0 and init_ms ~0
+	// after the first press.
+	var uninitMs int64
+	ti := time.Now()
+	if c.device == nil {
+		if err := c.initDevice(); err != nil {
+			return fmt.Errorf("device reinit failed: %w", err)
+		}
 	}
-	if err := c.initDevice(); err != nil {
-		return fmt.Errorf("device reinit failed: %w", err)
-	}
-	return c.device.Start()
+	initMs := time.Since(ti).Milliseconds()
+	ts := time.Now()
+	err := c.device.Start()
+	log.Info(fmt.Sprintf("capture_start devicemu_wait_ms=%d uninit_ms=%d init_ms=%d start_ms=%d",
+		waitMs, uninitMs, initMs, time.Since(ts).Milliseconds()))
+	return err
 }
 
 func (c *malgoCapture) Stop() {

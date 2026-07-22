@@ -34,6 +34,7 @@ type Metrics struct {
 	TotalTimeMs      float64
 	ProcessRSSMB     float64
 	InferenceMs      float64
+	PressToRecordMs  float64 // press → mic-live; a stall here (fork/lock) misses quick taps
 }
 
 func ResolveDir(flagPath string) (string, error) {
@@ -214,7 +215,21 @@ func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused b
 	if m.InferenceMs > 0 {
 		ev = ev.Float64("inference_ms", m.InferenceMs)
 	}
+	if m.PressToRecordMs > 0 {
+		ev = ev.Float64("press_to_record_ms", m.PressToRecordMs)
+	}
 	ev.Msg("transcription")
+}
+
+// HotkeyPress records one push-to-talk press: how long the keys were held as
+// the app *observed* them (down_to_up_ms — a value far above the tap/hold
+// threshold on a quick tap means the keyup event was delivered late, i.e. the
+// run loop stalled) and how it resolved (hold/toggle/denied).
+func HotkeyPress(downToUpMs float64, mode string) {
+	if !logReady.Load() {
+		return
+	}
+	diagLog.Info().Float64("down_to_up_ms", downToUpMs).Str("mode", mode).Msg("hotkey_press")
 }
 
 func TranscriptionText(text string) {

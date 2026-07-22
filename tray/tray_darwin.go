@@ -50,14 +50,25 @@ func Init() <-chan struct{} {
 	return quitCh
 }
 
+// darkMenuBar caches the menu bar appearance, read once at startup
+// (detectMenuBarAppearance). Reading it costs a `defaults` subprocess fork,
+// which is cheap at launch but very expensive once a multi-GB local model is
+// resident (fork is copy-on-write over the whole process) — so it must never
+// run on the icon hot path, where it would stall the run loop and delay hotkey
+// events. A mid-session light/dark flip is picked up on the next relaunch.
+var darkMenuBar bool
+
+func detectMenuBarAppearance() {
+	out, _ := exec.Command("defaults", "read", "-g", "AppleInterfaceStyle").Output()
+	darkMenuBar = strings.TrimSpace(string(out)) == "Dark" // key is absent in light mode
+}
+
 // themedIcon picks the colored-state variant for the current menu bar
 // appearance: Hi (white glyph) on a dark bar, Lo (dark glyph) on a light one.
 // The colored icons can't be templates (template mode discards the state dot's
-// color), so appearance is checked here at set-time — same approach as Handy.
-// A theme flip mid-state is corrected on the next state change.
+// color), so the variant is chosen from the cached appearance.
 func themedIcon(hi, lo []byte) []byte {
-	out, _ := exec.Command("defaults", "read", "-g", "AppleInterfaceStyle").Output()
-	if strings.TrimSpace(string(out)) == "Dark" { // key is absent in light mode
+	if darkMenuBar {
 		return hi
 	}
 	return lo
@@ -215,6 +226,7 @@ func RefreshDevices(names []string, selected string) {
 }
 
 func onReady() {
+	detectMenuBarAppearance() // once, before a big model is resident (see darkMenuBar)
 	systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
 	systray.SetTooltip("zee – push to talk")
 

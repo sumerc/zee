@@ -95,15 +95,17 @@ func modelSupportsStream(tr transcriber.Transcriber) bool {
 type recSession struct {
 	Stop         <-chan struct{}
 	SilenceClose *atomic.Bool
+	PressedAt    time.Time // when the press was accepted; drives the reflex-latency metric
 }
 
 type recordingConfig struct {
-	tr        transcriber.Transcriber
-	stream    bool
-	format    string
-	lang      string
-	hints     string
-	autoPaste bool
+	tr              transcriber.Transcriber
+	stream          bool
+	format          string
+	lang            string
+	hints           string
+	autoPaste       bool
+	pressToRecordMs float64 // press→mic-live, filled at record start; logged with the transcription metrics
 }
 
 var configMu sync.Mutex
@@ -471,6 +473,8 @@ func run() {
 	// switchModel), so the freed model can't be one an in-flight session uses.
 	applySwitch := func(p transcriber.ProviderInfo, model string) {
 		configMu.Lock()
+		from := activeTranscriber.Name() + "/" + activeTranscriber.GetModel()
+		swStart := time.Now()
 		var outgoing transcriber.Transcriber
 		if activeTranscriber.Name() != p.Name {
 			outgoing = activeTranscriber
@@ -479,6 +483,9 @@ func run() {
 			activeTranscriber = newTr
 		}
 		activeTranscriber.SetModel(model) // local: blocks here during gguf load
+		// load_ms is the synchronous gguf load (multi-second for a big local
+		// model); it blocks the UI thread, so it's worth having in the log.
+		log.Info(fmt.Sprintf("model_switch from=%s to=%s/%s load_ms=%d", from, p.Name, model, time.Since(swStart).Milliseconds()))
 		streamEnabled = modelIndex[p.Name+":"+model].Stream
 		if !streamEnabled {
 			activeFormat = *formatFlag
@@ -848,7 +855,7 @@ func tryStartSession(sessions chan<- recSession) *atomic.Bool {
 		return nil
 	}
 	sc := &atomic.Bool{}
-	sessions <- recSession{Stop: resetStop(), SilenceClose: sc}
+	sessions <- recSession{Stop: resetStop(), SilenceClose: sc, PressedAt: time.Now()}
 	return sc
 }
 
@@ -916,6 +923,7 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 		<-hk.Keydown()
 		if isRecording.Load() {
 			<-hk.Keyup()
+			log.HotkeyPress(0, "denied")
 			if isTranscribing.Load() {
 				go audio.PlayDenied() // ignored: transcription still in progress
 			} else {
@@ -925,12 +933,18 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 		}
 		sc := tryStartSession(sessions)
 		if sc == nil {
+			log.HotkeyPress(0, "denied")
 			<-hk.Keyup() // denied (a cycle began between the guard above and here)
 			continue
 		}
 		// Shared press semantics (hold vs toggle) — see hotkey.WaitStop. Toggle
 		// mode arms silence auto-close the moment it is entered.
-		hotkey.WaitStop(hk, longPress, func() { sc.Store(true) })
+		downToUp, toggled := hotkey.WaitStop(hk, longPress, func() { sc.Store(true) })
+		mode := "hold"
+		if toggled {
+			mode = "toggle"
+		}
+		log.HotkeyPress(float64(downToUp.Milliseconds()), mode)
 		requestStop()
 	}
 }
@@ -1082,6 +1096,13 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		tSess.Close()
 		return nil, err
 	}
+	// Reflex latency: press → mic live. Logged with the transcription metrics
+	// (next to rss_mb) so a stall here — a fork or lock on the record-start path,
+	// which scales with resident memory and makes quick taps misfire — is visible
+	// in the field and correlatable with model size.
+	if !sess.PressedAt.IsZero() {
+		cfg.pressToRecordMs = float64(time.Since(sess.PressedAt).Milliseconds())
+	}
 	rec.Wait()
 
 	if rec.totalFrames < uint64(encoder.SampleRate/10) {
@@ -1159,6 +1180,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 			TotalTimeMs:      bs.TotalTimeMs,
 			ProcessRSSMB:     result.ProcessRSSMB,
 			InferenceMs:      bs.InferenceMs,
+			PressToRecordMs:  cfg.pressToRecordMs,
 		}
 		transcriptionsMu.Lock()
 		transcriptionCount++
