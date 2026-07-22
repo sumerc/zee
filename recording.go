@@ -91,8 +91,8 @@ func (r *recordingSession) monitorSilence() {
 				audio.PlayError()
 			case SilenceAutoClose:
 				log.Info("silence_auto_close")
+				audio.PlayEnd()
 				tray.SetRecording(false)
-				go audio.PlayEnd()
 				r.autoClosed.Store(true)
 				r.close()
 				return
@@ -108,8 +108,8 @@ func (r *recordingSession) awaitStop() {
 		return
 	}
 	log.Info("recording_stop")
+	audio.PlayEnd() // reflexive: sound the release before the tray/icon update (playOne is non-blocking)
 	tray.SetRecording(false)
-	go audio.PlayEnd()
 	if r.stream {
 		time.Sleep(recordTail)
 	}

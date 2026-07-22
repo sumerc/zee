@@ -853,10 +853,11 @@ func applyPendingSwitch() {
 // unattended recording that fires the instant inference ends.
 func tryStartSession(sessions chan<- recSession) *atomic.Bool {
 	if isRecording.Load() {
-		go audio.PlayDenied()
+		audio.PlayDenied()
 		return nil
 	}
 	sc := &atomic.Bool{}
+	audio.PlayStart() // reflexive: sound the press now, not after the record loop spins up (playOne is non-blocking)
 	sessions <- recSession{Stop: resetStop(), SilenceClose: sc, PressedAt: time.Now()}
 	return sc
 }
@@ -877,7 +878,6 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		log.Info("recording_device: " + capture.DeviceName())
 		isRecording.Store(true)
 		tray.SetRecording(true)
-		go audio.PlayStart()
 
 		done, err := handleRecording(capture, sess)
 		if err != nil {
@@ -927,7 +927,7 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 			<-hk.Keyup()
 			log.HotkeyPress(0, "denied")
 			if isTranscribing.Load() {
-				go audio.PlayDenied() // ignored: transcription still in progress
+				audio.PlayDenied() // ignored: transcription still in progress
 			} else {
 				requestStop()
 			}

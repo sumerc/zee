@@ -3,84 +3,40 @@
 package audio
 
 /*
-#cgo LDFLAGS: -framework AudioToolbox -framework CoreFoundation
-#include <stdlib.h>
-#include <string.h>
-#include <AudioToolbox/AudioToolbox.h>
-
-static SystemSoundID zee_sound_load(const char* path) {
-	CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8*)path, (CFIndex)strlen(path), false);
-	if (url == NULL) return 0;
-	SystemSoundID sid = 0;
-	OSStatus st = AudioServicesCreateSystemSoundID(url, &sid);
-	CFRelease(url);
-	return st == kAudioServicesNoError ? sid : 0;
-}
-
-static void zee_sound_play(SystemSoundID sid) { AudioServicesPlaySystemSound(sid); }
+#cgo darwin LDFLAGS: -framework AVFoundation -framework Foundation
+void zeeBeepLoad(int idx, const void *wav, int len);
+void zeeBeepPlay(int idx);
 */
 import "C"
 
 import (
 	"encoding/binary"
-	"os"
-	"path/filepath"
 	"unsafe"
-
-	"zee/log"
 )
 
-// Feedback tones play via AudioToolbox System Sound Services: the OS sound
-// server owns the audio machinery, so each beep is one fire-and-forget C call
-// with no playback device to init, keep warm, or serialize against capture
-// (deviceMu guards capture only). App-managed malgo playback was tried twice
-// and lost both ways: reinit-per-tone stalls the run loop 100–600ms (audibly
-// late end-beep, delayed hotkey events), a kept-warm device intermittently
-// went silent. Tones are still synthesized by buildSamples (the single source
-// of truth) and serialized once at startup to small WAVs in the cache dir,
-// because AudioServicesCreateSystemSoundID takes file URLs only. They play on
-// the user's sound-effects output at alert volume, like every UI feedback
-// sound.
-
-var soundIDs [numSounds]C.SystemSoundID
-
-var soundNames = [numSounds]string{"start", "end", "error", "denied"}
-
+// Feedback tones play via AVAudioPlayer (see beep_darwin.m): the OS owns the
+// audio machinery, so each beep is fire-and-forget with no playback device to
+// init, keep warm, or serialize against capture (deviceMu guards capture
+// only). App-managed malgo playback was tried both ways and lost: reinit-per-
+// tone stalled the run loop 100–600ms (audibly late end-beep, delayed hotkey
+// events), a kept-warm device intermittently went silent. Tones are still
+// synthesized by buildSamples (the single source of truth) and handed to the
+// OS as in-memory WAV bytes at startup.
 func initSound() {
 	buildSamples()
-
-	dir, err := os.UserCacheDir()
-	if err != nil {
-		log.Warnf("beep: no cache dir: %v", err)
-		return
-	}
-	dir = filepath.Join(dir, "zee")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Warnf("beep: %v", err)
-		return
-	}
-
 	for s := startSound; s < numSounds; s++ {
-		pcm := make([]byte, 2*len(samples[s]))
-		for i, v := range samples[s] {
-			binary.LittleEndian.PutUint16(pcm[i*2:], uint16(v))
-		}
-		path := filepath.Join(dir, "tone-"+soundNames[s]+".wav")
-		if err := os.WriteFile(path, pcmWAV(pcm, beepSampleRate), 0o644); err != nil {
-			log.Warnf("beep: write %s: %v", path, err)
-			continue
-		}
-		cPath := C.CString(path)
-		soundIDs[s] = C.zee_sound_load(cPath)
-		C.free(unsafe.Pointer(cPath))
-		if soundIDs[s] == 0 {
-			log.Warnf("beep: load %s failed", path)
-		}
+		wav := pcmWAV(pcm16LE(samples[s]), beepSampleRate)
+		C.zeeBeepLoad(C.int(s), unsafe.Pointer(&wav[0]), C.int(len(wav)))
 	}
 }
 
-func playOne(s sound) {
-	if id := soundIDs[s]; id != 0 {
-		C.zee_sound_play(id)
+func playOne(s sound) { C.zeeBeepPlay(C.int(s)) }
+
+// pcm16LE flattens canonical int16 samples to little-endian bytes.
+func pcm16LE(s []int16) []byte {
+	b := make([]byte, 2*len(s))
+	for i, v := range s {
+		binary.LittleEndian.PutUint16(b[i*2:], uint16(v))
 	}
+	return b
 }

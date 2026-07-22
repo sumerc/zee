@@ -24,8 +24,8 @@ import (
 var deviceMu sync.Mutex
 
 // maCtx is the single process-wide malgo context (capture only — feedback
-// tones go through System Sound Services, see beep_darwin.go). Created lazily
-// under deviceMu and never freed — its lifetime is the process.
+// tones go through AVAudioPlayer, see beep_darwin.go). Created lazily under
+// deviceMu and never freed — its lifetime is the process.
 var maCtx *malgo.AllocatedContext
 
 // ensureContext creates the shared context on first use. Caller must hold deviceMu.

@@ -68,7 +68,7 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - `transcriber/` - STT providers (Groq, OpenAI, Deepgram, Mistral, ElevenLabs) with shared TracedClient for HTTP timing metrics
 - `hotkey/` - global hotkey registration (Ctrl+Shift+Space) with platform-specific backends
 - `clipboard/` - platform-specific clipboard and paste operations (Cmd+V / Ctrl+V)
-- `audio/` - platform-specific audio I/O: capture (malgo on macOS, PulseAudio on Linux) and feedback-tone playback (`PlayStart/PlayEnd/...`); on macOS playback goes through AudioToolbox System Sound Services (fire-and-forget, no app-managed device), capture through one malgo context + a private device-lifecycle lock
+- `audio/` - platform-specific audio I/O: capture (malgo on macOS, PulseAudio on Linux) and feedback-tone playback (`PlayStart/PlayEnd/...`); on macOS playback goes through AVAudioPlayer (fire-and-forget, in-memory WAV, no app-managed device), capture through one malgo context + a private device-lifecycle lock
 - `setup/` - interactive setup wizard (`zee setup`) and health check (`zee doctor`): providers + API keys, device, TCC permissions, hotkey capture + fire test, live mic/provider verification; absorbed the former `doctor/`
 - `permissions/` - macOS TCC prompting (Microphone via AVFoundation, Accessibility via `AXIsProcessTrustedWithOptions`)
 - `internal/mp3/` - vendored shine-mp3 encoder (with mono fix)
