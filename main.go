@@ -497,7 +497,9 @@ func run() {
 		// Only Parakeet has a provider-level Close (frees the gguf); cloud
 		// providers don't implement it and are skipped.
 		if c, ok := outgoing.(interface{ Close() }); ok {
+			ct := time.Now()
 			c.Close()
+			log.Info(fmt.Sprintf("model_close freed=%s close_ms=%d", from, time.Since(ct).Milliseconds()))
 		}
 
 		config.Update(func(s *config.Settings) { s.Provider = p.Name; s.Model = model })
@@ -809,6 +811,8 @@ func run() {
 		}
 	}()
 
+	go monitorRunLoop() // temporary: logs runloop_stall when the macOS main thread is blocked (delays hotkey events)
+
 	recordSessions(func() audio.CaptureDevice {
 		captureMu.Lock()
 		defer captureMu.Unlock()
@@ -1069,11 +1073,15 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		return nil, err
 	}
 
-	// Save clipboard before recording overwrites it (async to not delay capture start)
+	// Save the clipboard before the first overwrite so it can be restored
+	// after the paste — but never during the press: atotto's Read forks
+	// pbpaste, and fork freezes every thread for O(resident memory) while the
+	// kernel clones the page tables (~0.5s with a local model loaded), which
+	// delays keyup delivery and misreads a quick tap as a hold. Saved lazily
+	// instead: at the first streamed paste, or once recording has ended.
 	clipCh := make(chan string, 1)
-	if cfg.autoPaste {
-		go func() { clipCh <- clip.SaveCurrent() }()
-	}
+	var clipOnce sync.Once
+	saveClip := func() { clipOnce.Do(func() { clipCh <- clip.SaveCurrent() }) }
 
 	updatesDone := make(chan struct{})
 	go func() {
@@ -1081,6 +1089,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		var prev string
 		for text := range tSess.Updates() {
 			if cfg.autoPaste && len(text) > len(prev) {
+				saveClip()
 				clip.PasteText(text[len(prev):])
 			}
 			prev = text
@@ -1108,6 +1117,9 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 	if rec.totalFrames < uint64(encoder.SampleRate/10) {
 		tSess.Close()
 		return nil, nil
+	}
+	if cfg.autoPaste {
+		go saveClip() // keys are up now; the pbpaste fork can't distort the press
 	}
 
 	recDur := time.Duration(float64(rec.totalFrames) / float64(encoder.SampleRate) * float64(time.Second))

@@ -49,6 +49,9 @@ func Init() error {
 }
 
 func Paste() error {
+	if disabled {
+		return nil
+	}
 	if err := Init(); err != nil {
 		return err
 	}

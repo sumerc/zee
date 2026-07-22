@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/gen2brain/malgo"
 
@@ -131,33 +130,33 @@ func (c *malgoCapture) initDevice() error {
 	return nil
 }
 
+// Start starts the warm device, created once and reused across recordings.
+// A full CoreAudio reinit costs 250–650ms per press and stalls the main run
+// loop (delaying hotkey keyup delivery, which misreads quick taps as holds);
+// starting a warm device takes ~40ms. If the handle went bad (sleep/wake,
+// coreaudiod restart), Start fails loudly — rebuild once and retry. A selected
+// device that vanished is handled by the device watcher in main, not here.
 func (c *malgoCapture) Start() error {
-	// Timing breakdown of the record-start hot path: the mic device is torn down
-	// and re-created on every Start (see below), and this whole block holds
-	// deviceMu, so it can stall the beep and — empirically — delay hotkey event
-	// delivery. capture_start_ms is the dominant term in press_to_record_ms.
-	t0 := time.Now()
 	deviceMu.Lock()
-	waitMs := time.Since(t0).Milliseconds()
 	defer deviceMu.Unlock()
-	// EXPERIMENT(tap-misfire): reuse the initialized device instead of the
-	// per-press Uninit+InitDevice (which existed to survive macOS sleep/wake
-	// staleness). Tests whether the reinit is what stalls the run loop and
-	// delays keyup delivery. uninit_ms should now always be 0 and init_ms ~0
-	// after the first press.
-	var uninitMs int64
-	ti := time.Now()
 	if c.device == nil {
 		if err := c.initDevice(); err != nil {
-			return fmt.Errorf("device reinit failed: %w", err)
+			return err
 		}
 	}
-	initMs := time.Since(ti).Milliseconds()
-	ts := time.Now()
 	err := c.device.Start()
-	log.Info(fmt.Sprintf("capture_start devicemu_wait_ms=%d uninit_ms=%d init_ms=%d start_ms=%d",
-		waitMs, uninitMs, initMs, time.Since(ts).Milliseconds()))
-	return err
+	if err == nil {
+		return nil
+	}
+	log.Warnf("capture start failed (%v), rebuilding device", err)
+	// Null before reinit: if the rebuild fails, c.device must not point at the
+	// freed device, or the next Start would uninit it again and double-free.
+	c.device.Uninit()
+	c.device = nil
+	if initErr := c.initDevice(); initErr != nil {
+		return fmt.Errorf("device rebuild failed: %w (start: %v)", initErr, err)
+	}
+	return c.device.Start()
 }
 
 func (c *malgoCapture) Stop() {

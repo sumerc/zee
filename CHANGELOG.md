@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Push-to-talk starts ~200–600ms faster on macOS: the mic device is created once and kept warm across recordings instead of a full CoreAudio teardown+reinit on every press. The per-press reinit stalled the main run loop, delaying hotkey keyup delivery — the cause of quick taps being misread as hold-and-release, worse with large local models loaded. Diagnostics from the era it was added show it never fixed the post-sleep staleness it targeted (the real culprit was a vanished USB mic's stale device ID, since handled by the device watcher). If starting the warm device fails, it is rebuilt once and retried
+
 - Local Parakeet now runs on the Metal (GPU) backend: bumped parakeet.cpp to v0.4.0, which fixes the macOS Metal crash (upstream #2/PR #4 — GPU→CPU scheduler fallback plus a native depthwise-conv kernel). Same ggml pin (v0.13.0). Steady-state ~1.7x faster on the 110m English model and ~2.6x on the 0.6b multilingual model; the win matters mainly for the multilingual model. The GPU pipelines are pre-compiled at model load (a warmup transcribe) so the first dictation isn't stalled, and ggml's verbose per-run backend logging is silenced. Metal shaders are embedded, so the binary stays self-contained
 
 - Setup wizard readability pass: bold "Step n/4 · …" headers, a dim "Ctrl+C anytime — progress is saved" note up front, the saved hotkey shown as "Hold ⌃⇧Space in any app to dictate" at the end, a "(waiting up to 20s)" hint on the hotkey fire test, bold summary values and final status lines, and a third summary state — yellow ○ for configured-but-unverified (skipped mic test, unconfirmed hotkey) instead of overstating with ✓. ANSI styling now honors NO_COLOR
