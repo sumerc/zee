@@ -2,141 +2,85 @@
 
 package audio
 
-import (
-	"sync/atomic"
-	"time"
+/*
+#cgo LDFLAGS: -framework AudioToolbox -framework CoreFoundation
+#include <stdlib.h>
+#include <string.h>
+#include <AudioToolbox/AudioToolbox.h>
 
-	"github.com/gen2brain/malgo"
+static SystemSoundID zee_sound_load(const char* path) {
+	CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8*)path, (CFIndex)strlen(path), false);
+	if (url == NULL) return 0;
+	SystemSoundID sid = 0;
+	OSStatus st = AudioServicesCreateSystemSoundID(url, &sid);
+	CFRelease(url);
+	return st == kAudioServicesNoError ? sid : 0;
+}
+
+static void zee_sound_play(SystemSoundID sid) { AudioServicesPlaySystemSound(sid); }
+*/
+import "C"
+
+import (
+	"encoding/binary"
+	"os"
+	"path/filepath"
+	"unsafe"
 
 	"zee/log"
 )
 
-// beepFrames counts tone frames actually rendered by dataCallback — the only
-// ground truth that a beep made it to the device. Silent in the healthy case;
-// see the watcher in playInt16.
-var beepFrames atomic.Uint64
+// Feedback tones play via AudioToolbox System Sound Services: the OS sound
+// server owns the audio machinery, so each beep is one fire-and-forget C call
+// with no playback device to init, keep warm, or serialize against capture
+// (deviceMu guards capture only). App-managed malgo playback was tried twice
+// and lost both ways: reinit-per-tone stalls the run loop 100–600ms (audibly
+// late end-beep, delayed hotkey events), a kept-warm device intermittently
+// went silent. Tones are still synthesized by buildSamples (the single source
+// of truth) and serialized once at startup to small WAVs in the cache dir,
+// because AudioServicesCreateSystemSoundID takes file URLs only. They play on
+// the user's sound-effects output at alert volume, like every UI feedback
+// sound.
 
-var (
-	playbackDevice *malgo.Device
+var soundIDs [numSounds]C.SystemSoundID
 
-	// Playback state, read from the device callback: the canonical mono buffer
-	// being played and the current sample offset into it.
-	playMono atomic.Pointer[[]int16]
-	playPos  atomic.Uint32
-)
-
-// initPlaybackDevice is lock-free; callers must hold deviceMu around it.
-func initPlaybackDevice() error {
-	config := malgo.DefaultDeviceConfig(malgo.Playback)
-	config.Playback.Format = malgo.FormatS16
-	config.Playback.Channels = 1
-	config.SampleRate = beepSampleRate
-
-	callbacks := malgo.DeviceCallbacks{
-		Data: dataCallback,
-	}
-
-	var err error
-	playbackDevice, err = malgo.InitDevice(maCtx.Context, config, callbacks)
-	return err
-}
+var soundNames = [numSounds]string{"start", "end", "error", "denied"}
 
 func initSound() {
-	deviceMu.Lock()
-	defer deviceMu.Unlock()
-
-	if err := ensureContext(); err != nil {
-		return
-	}
-
 	buildSamples()
-	initPlaybackDevice() // best-effort; playInt16 reinits per play anyway
-}
 
-// dataCallback fills the mono S16 device buffer, converting each canonical
-// int16 sample to two little-endian bytes as it copies.
-func dataCallback(pOutput, _ []byte, frameCount uint32) {
-	silence := func() {
-		for i := range pOutput {
-			pOutput[i] = 0
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		log.Warnf("beep: no cache dir: %v", err)
+		return
+	}
+	dir = filepath.Join(dir, "zee")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Warnf("beep: %v", err)
+		return
+	}
+
+	for s := startSound; s < numSounds; s++ {
+		pcm := make([]byte, 2*len(samples[s]))
+		for i, v := range samples[s] {
+			binary.LittleEndian.PutUint16(pcm[i*2:], uint16(v))
+		}
+		path := filepath.Join(dir, "tone-"+soundNames[s]+".wav")
+		if err := os.WriteFile(path, pcmWAV(pcm, beepSampleRate), 0o644); err != nil {
+			log.Warnf("beep: write %s: %v", path, err)
+			continue
+		}
+		cPath := C.CString(path)
+		soundIDs[s] = C.zee_sound_load(cPath)
+		C.free(unsafe.Pointer(cPath))
+		if soundIDs[s] == 0 {
+			log.Warnf("beep: load %s failed", path)
 		}
 	}
-
-	mono := playMono.Load()
-	if mono == nil {
-		silence()
-		return
-	}
-	pos := playPos.Load()
-	total := uint32(len(*mono))
-	if pos >= total {
-		playMono.Store(nil)
-		silence()
-		return
-	}
-
-	frames := min(total-pos, frameCount)
-	s := *mono
-	for i := uint32(0); i < frames; i++ {
-		v := s[pos+i]
-		pOutput[i*2] = byte(v)
-		pOutput[i*2+1] = byte(v >> 8)
-	}
-	for i := frames * 2; i < frameCount*2; i++ {
-		pOutput[i] = 0 // zero-fill any frames past the buffer
-	}
-	playPos.Store(pos + frames)
-	beepFrames.Add(uint64(frames))
-}
-
-func playInt16(mono []int16) {
-	if maCtx == nil || len(mono) == 0 {
-		return
-	}
-
-	deviceMu.Lock()
-	defer deviceMu.Unlock()
-
-	// Always reinitialize to pick up current default output device
-	// (handles BT connect/disconnect, sleep/wake). Null device after Uninit
-	// so a failed reinit can't leave it pointing at the freed device — the
-	// next call would otherwise Uninit it again and double-free.
-	if playbackDevice != nil {
-		playbackDevice.Stop()
-		playbackDevice.Uninit()
-		playbackDevice = nil
-	}
-	initMs := time.Now()
-	if err := initPlaybackDevice(); err != nil {
-		playbackDevice = nil
-		log.Warnf("beep: device init failed: %v", err)
-		return
-	}
-
-	playPos.Store(0)
-	playMono.Store(&mono)
-
-	if err := playbackDevice.Start(); err != nil {
-		playMono.Store(nil)
-		log.Warnf("beep: device start failed: %v", err)
-		return
-	}
-
-	// Telemetry, silent when healthy: warn if the reinit was slow enough to be
-	// audible/stall-prone, and — after the tone should have drained — if the
-	// callback never rendered a frame (a silently-dead device).
-	if d := time.Since(initMs); d > 150*time.Millisecond {
-		log.Warnf("beep: slow device reinit %dms", d.Milliseconds())
-	}
-	before := beepFrames.Load()
-	toneDur := time.Duration(len(mono)) * time.Second / beepSampleRate
-	time.AfterFunc(toneDur+300*time.Millisecond, func() {
-		if beepFrames.Load() == before {
-			log.Warnf("beep: silent — no frames rendered (%d samples queued)", len(mono))
-		}
-	})
 }
 
 func playOne(s sound) {
-	playInt16(samples[s])
+	if id := soundIDs[s]; id != 0 {
+		C.zee_sound_play(id)
+	}
 }

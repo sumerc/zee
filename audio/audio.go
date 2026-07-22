@@ -76,8 +76,11 @@ func WAVToPCM(b []byte) ([]byte, error) {
 // wrapped here. That's what the "Save Last Recording" feature (and the
 // auto-save-on-error path in main.go) writes to disk. Unlike WAVToPCM, this is
 // on the hot path, not test-only.
-func PCMToWAV(pcm []byte) []byte {
-	const sampleRate, channels, bits = 16000, 1, 16
+// PCMToWAV wraps raw 16 kHz mono S16 PCM (the capture format) in a WAV header.
+func PCMToWAV(pcm []byte) []byte { return pcmWAV(pcm, 16000) }
+
+func pcmWAV(pcm []byte, sampleRate int) []byte {
+	const channels, bits = 1, 16
 	byteRate := sampleRate * channels * bits / 8
 	blockAlign := channels * bits / 8
 
@@ -89,7 +92,7 @@ func PCMToWAV(pcm []byte) []byte {
 	binary.LittleEndian.PutUint32(buf[16:20], 16) // PCM fmt chunk size
 	binary.LittleEndian.PutUint16(buf[20:22], 1)  // format = PCM
 	binary.LittleEndian.PutUint16(buf[22:24], channels)
-	binary.LittleEndian.PutUint32(buf[24:28], sampleRate)
+	binary.LittleEndian.PutUint32(buf[24:28], uint32(sampleRate))
 	binary.LittleEndian.PutUint32(buf[28:32], uint32(byteRate))
 	binary.LittleEndian.PutUint16(buf[32:34], uint16(blockAlign))
 	binary.LittleEndian.PutUint16(buf[34:36], bits)

@@ -13,8 +13,9 @@ import (
 	"zee/log"
 )
 
-// deviceMu serializes every malgo context/device lifecycle call across capture
-// AND playback (beep_darwin.go). miniaudio's CoreAudio backend keeps process-
+// deviceMu serializes every malgo context/device lifecycle call — the record
+// loop's Start/Stop, the device watcher's enumeration and switches, and the
+// tray's switches all interleave. miniaudio's CoreAudio backend keeps process-
 // global default-device state that ma_device_init/uninit/start/stop mutate; two
 // threads touching it concurrently corrupt the heap (observed SIGSEGV in
 // ma_device_uninit). It does NOT guard the audio data callbacks — those run on
@@ -22,9 +23,9 @@ import (
 // acquire once per logical operation, never nest.
 var deviceMu sync.Mutex
 
-// maCtx is the single process-wide malgo context, shared by capture and
-// playback so there's one piece of CoreAudio global state, not two. Created
-// lazily under deviceMu and never freed — its lifetime is the process.
+// maCtx is the single process-wide malgo context (capture only — feedback
+// tones go through System Sound Services, see beep_darwin.go). Created lazily
+// under deviceMu and never freed — its lifetime is the process.
 var maCtx *malgo.AllocatedContext
 
 // ensureContext creates the shared context on first use. Caller must hold deviceMu.

@@ -811,8 +811,6 @@ func run() {
 		}
 	}()
 
-	go monitorRunLoop() // temporary: logs runloop_stall when the macOS main thread is blocked (delays hotkey events)
-
 	recordSessions(func() audio.CaptureDevice {
 		captureMu.Lock()
 		defer captureMu.Unlock()
