@@ -127,12 +127,10 @@ func (h *xHotkey) Unregister() {
 func (h *xHotkey) Keydown() <-chan struct{} { return h.keydown }
 func (h *xHotkey) Keyup() <-chan struct{}   { return h.keyup }
 
-var libMods = map[string]hotkey.Modifier{
-	"ctrl":   hotkey.ModCtrl,
-	"shift":  hotkey.ModShift,
-	"option": hotkey.ModOption,
-	"cmd":    hotkey.ModCmd,
-}
+// libMods maps our platform-neutral modifier names to the backend's constants.
+// The set is identical across darwin/windows but the constants differ (option→
+// Option vs Alt, cmd→Cmd vs Win), so each platform supplies its own in
+// mods_<goos>.go — keeping this file free of any OS-only symbol.
 
 // validateCombo rejects a combo that can't bind safely: no modifier (would
 // grab a bare key system-wide), an unrecognized modifier name (dropped by
