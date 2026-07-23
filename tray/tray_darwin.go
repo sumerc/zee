@@ -27,6 +27,7 @@ var (
 	mHotkey       *systray.MenuItem
 	mEditHints    *systray.MenuItem
 	mEditSettings *systray.MenuItem
+	mEditCreds    *systray.MenuItem
 	mBackend      *systray.MenuItem
 	mLanguage     *systray.MenuItem
 	langEntries   []struct {
@@ -312,6 +313,13 @@ func onReady() {
 	mEditSettings.Click(func() {
 		if editSettingsCb != nil {
 			go editSettingsCb()
+		}
+	})
+
+	mEditCreds = mSettings.AddSubMenuItem("Edit Credentials…", "Open credentials.json to change provider API keys")
+	mEditCreds.Click(func() {
+		if editCredsCb != nil {
+			go editCredsCb()
 		}
 	})
 

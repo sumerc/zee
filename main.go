@@ -338,6 +338,12 @@ func run() {
 		var initErr error
 		activeTranscriber, initErr = transcriber.New()
 		if initErr != nil {
+			// An unreadable credentials.json hides every cloud key, so the
+			// generic "run zee setup" would send the user to reconfigure keys
+			// that are already there. Name the actual problem.
+			if cerr := config.CredentialsError(); cerr != nil {
+				fatal("Credentials could not be read, so no provider is configured.\n\n%v\n\nFix %s and start Zee again.", cerr, config.CredentialsPath())
+			}
 			fatal("%v", initErr)
 		}
 	}
@@ -579,6 +585,15 @@ func run() {
 			}
 		})
 		exec.Command("open", "-t", config.SettingsPath()).Run()
+	})
+	tray.OnEditCredentials(func() {
+		// Keys are read fresh on every APIKey() call, so an edit takes effect
+		// on the next transcription — no watcher, no restart.
+		if err := config.EnsureCredentials(); err != nil {
+			alert.Warn("Could not create the credentials file.\n\n" + err.Error())
+			return
+		}
+		exec.Command("open", "-t", config.CredentialsPath()).Run()
 	})
 	tray.SetHotkeyLabel(currentHotkeyCombo(cfg).Display())
 
@@ -1149,6 +1164,12 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 			// Persist synchronously — an immediate quit after the failure must
 			// not lose the recording; only the dialog is fire-and-forget.
 			msg := "Transcription failed:\n" + closeErr.Error()
+			if cerr := config.CredentialsError(); cerr != nil {
+				// No key was sent at all: the provider's "invalid api key" is a
+				// symptom of the unreadable file, so lead with the real cause.
+				msg = "Transcription failed — credentials could not be read, so no API key was sent.\n\n" +
+					cerr.Error() + "\n\nFix it from the menu bar: Settings → Edit Credentials…\n\n" + closeErr.Error()
+			}
 			if dir, err := persistLastRecording(); err == nil {
 				msg += "\n\nRecording saved to:\n" + dir
 			}

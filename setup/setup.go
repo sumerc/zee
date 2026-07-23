@@ -566,7 +566,8 @@ func ensureAccessibility(reason string) bool {
 func stepProviders(r *results) {
 	step(4, "Transcription providers")
 	fmt.Println("  Configure as many as you like — each key is tested with real audio and")
-	fmt.Println("  stored in credentials.json. Add or change keys later by re-running `zee setup`.")
+	fmt.Println("  stored in credentials.json. Change a key later from the tray:")
+	fmt.Println("  Settings → Edit Credentials… (re-run `zee setup` to add a tested provider).")
 	providers := transcriber.Providers()
 	// tested marks providers proven with real audio this run: the tick in the
 	// menu means "verified", not merely "configured". Parakeet earned its tick
@@ -746,7 +747,7 @@ func summary(r results) int {
 	report("provider", provOK, detail)
 
 	fmt.Println("\nChange any of this later: re-run `zee setup`, or tray → Settings →")
-	fmt.Println("Edit Settings… (config.json edits apply live).")
+	fmt.Println("Edit Settings… (config.json edits apply live) / Edit Credentials… (API keys).")
 
 	// Mic is the only hard requirement; the rest are warnings.
 	if !r.micGranted {

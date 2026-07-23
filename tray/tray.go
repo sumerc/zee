@@ -68,6 +68,7 @@ var (
 	saveAudioCb    func()
 	editHintsCb    func()
 	editSettingsCb func()
+	editCredsCb    func()
 	hotkeyLabel    string // display-only current push-to-talk combo (e.g. "⌃⇧Space")
 )
 
@@ -229,11 +230,12 @@ func SetHintsEnabled(on bool) {
 	setHintsEnabled(on)
 }
 
-func SetVersion(v string)      { appVersion = v }
-func OnCheckUpdate(fn func())  { checkUpdateCb = fn }
-func OnSaveAudio(fn func())    { saveAudioCb = fn }
-func OnEditHints(fn func())    { editHintsCb = fn }
-func OnEditSettings(fn func()) { editSettingsCb = fn }
+func SetVersion(v string)         { appVersion = v }
+func OnCheckUpdate(fn func())     { checkUpdateCb = fn }
+func OnSaveAudio(fn func())       { saveAudioCb = fn }
+func OnEditHints(fn func())       { editHintsCb = fn }
+func OnEditSettings(fn func())    { editSettingsCb = fn }
+func OnEditCredentials(fn func()) { editCredsCb = fn }
 
 // SetHotkeyLabel sets the display-only current push-to-talk combo shown (and
 // disabled) in the menu, and the combo hint on the Start/Stop Recording item.
