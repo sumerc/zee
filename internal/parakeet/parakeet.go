@@ -59,9 +59,10 @@ type Ctx struct {
 
 var hushOnce sync.Once
 
-// New loads a GGUF model from path. The returned Ctx must be Closed. On the
-// Metal build it also warms up: one throwaway transcribe so the GPU pipelines
-// compile now (at startup) rather than stalling the first real dictation.
+// New loads a GGUF model from path. The returned Ctx must be Closed. It also
+// warms up: one throwaway transcribe so the backend's first-use init (pipeline
+// compilation on the GPU, buffer/kernel setup on the CPU) happens now rather
+// than stalling the first real dictation.
 func New(path string) (*Ctx, error) {
 	hushOnce.Do(func() { C.zee_ggml_hush() })
 

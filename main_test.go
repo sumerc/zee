@@ -261,23 +261,23 @@ func TestTryStartSessionEnqueuesWhenIdle(t *testing.T) {
 	}
 }
 
-// TestApplyPendingSwitchRunsOnceAtCycleEnd pins the deferred-switch mechanism a
-// model switch requested mid-cycle rides on: recordSessions calls
-// applyPendingSwitch at cycle end, which runs the deferred swap exactly once
-// (when no session is in flight, so the freed model can't be one in use).
-func TestApplyPendingSwitchRunsOnceAtCycleEnd(t *testing.T) {
+// TestApplyPendingReloadRunsOnceAtCycleEnd pins the deferred-reload mechanism a
+// config-file change requested mid-cycle rides on: recordSessions calls
+// applyPendingReload at cycle end, which runs the deferred reload exactly once
+// (when no session is in flight).
+func TestApplyPendingReloadRunsOnceAtCycleEnd(t *testing.T) {
 	var ran int32
 	pendingMu.Lock()
-	pendingSwitch = func() { atomic.AddInt32(&ran, 1) }
+	pendingReload = func() { atomic.AddInt32(&ran, 1) }
 	pendingMu.Unlock()
 
-	applyPendingSwitch()
+	applyPendingReload()
 	if atomic.LoadInt32(&ran) != 1 {
-		t.Fatalf("deferred switch ran %d times, want 1", ran)
+		t.Fatalf("deferred reload ran %d times, want 1", ran)
 	}
-	applyPendingSwitch() // nothing pending now — must be a no-op
+	applyPendingReload() // nothing pending now — must be a no-op
 	if atomic.LoadInt32(&ran) != 1 {
-		t.Fatalf("deferred switch ran again after being cleared (%d)", ran)
+		t.Fatalf("deferred reload ran again after being cleared (%d)", ran)
 	}
 }
 

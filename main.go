@@ -438,6 +438,9 @@ func run() {
 	tray.SetBTCheck(audio.IsBluetooth)
 	if devices, err := ctx.Devices(); err == nil && len(devices) > 0 {
 		tray.SetDevices(deviceNames(devices), preferredDevice, func(name string) {
+			if guardBusy("Can't change the microphone while recording or transcribing.") {
+				return
+			}
 			captureMu.Lock()
 			preferredDevice = name
 			captureMu.Unlock()
@@ -480,7 +483,6 @@ func run() {
 	applySwitch := func(p transcriber.ProviderInfo, model string) {
 		configMu.Lock()
 		from := activeTranscriber.Name() + "/" + activeTranscriber.GetModel()
-		swStart := time.Now()
 		var outgoing transcriber.Transcriber
 		if activeTranscriber.Name() != p.Name {
 			outgoing = activeTranscriber
@@ -488,10 +490,8 @@ func run() {
 			newTr.SetLanguage(activeTranscriber.GetLanguage())
 			activeTranscriber = newTr
 		}
-		activeTranscriber.SetModel(model) // local: blocks here during gguf load
-		// load_ms is the synchronous gguf load (multi-second for a big local
-		// model); it blocks the UI thread, so it's worth having in the log.
-		log.Info(fmt.Sprintf("model_switch from=%s to=%s/%s load_ms=%d", from, p.Name, model, time.Since(swStart).Milliseconds()))
+		activeTranscriber.SetModel(model) // local: kicks off a background gguf load, returns at once
+		log.Info(fmt.Sprintf("model_switch from=%s to=%s/%s", from, p.Name, model))
 		streamEnabled = modelIndex[p.Name+":"+model].Stream
 		if !streamEnabled {
 			activeFormat = *formatFlag
@@ -514,16 +514,12 @@ func run() {
 		tray.SetActiveModel(p.Name, model)
 	}
 
-	// switchModel applies the swap immediately when idle, or defers it to the end
-	// of the current record/inference cycle when one is active — so neither the
+	// switchModel is the guarded wrapper for a user-initiated model/provider
+	// change: it denies while a record/inference cycle is active (so neither the
 	// gguf reload nor the Close of the outgoing model can free a ctx an in-flight
-	// session is using. The tray menu and the download-complete goroutine both
-	// funnel through here.
+	// session is using), otherwise applies the swap. Only the tray menu calls it.
 	switchModel := func(p transcriber.ProviderInfo, model string) {
-		if isRecording.Load() {
-			pendingMu.Lock()
-			pendingSwitch = func() { applySwitch(p, model) }
-			pendingMu.Unlock()
+		if guardBusy("Can't switch models while recording or transcribing.") {
 			return
 		}
 		applySwitch(p, model)
@@ -552,12 +548,22 @@ func run() {
 					return
 				}
 				tray.UpdateModelState(provider, model, tray.ModelReady, "")
-				switchModel(p, model)
+				// Don't auto-switch: a download finishing shouldn't yank the active
+				// model out from under an in-flight dictation. Notify and let the
+				// user select it — the menu already shows it ready.
+				label := model
+				if m, ok := modelIndex[provider+":"+model]; ok {
+					label = m.Label
+				}
+				alert.Info(label + " downloaded and ready.\n\nSelect it from the menu to use it.")
 			}()
 		}
 	})
 
 	tray.SetLanguage(*langFlag, func(code string, persist bool) {
+		if guardBusy("Can't change the language while recording or transcribing.") {
+			return
+		}
 		configMu.Lock()
 		activeTranscriber.SetLanguage(code)
 		configMu.Unlock()
@@ -744,8 +750,11 @@ func run() {
 		}
 		if reqProv != "" && reqModel != "" && (reqProv != curProv || reqModel != curModel) {
 			// Only a ready model is applied — a file edit must not trigger a download.
+			// applySwitch (raw), not switchModel: this reload path is internal and
+			// already deferred to an idle moment by config.Watch → pendingReload, so
+			// it must apply unconditionally rather than re-checking the busy guard.
 			if p, ok := providerByName(reqProv); ok && p.Status(reqModel).Ready {
-				switchModel(p, reqModel)
+				applySwitch(p, reqModel)
 			} else {
 				log.Warnf("settings reload: %s/%s not available, keeping %s/%s", reqProv, reqModel, curProv, curModel)
 			}
@@ -837,38 +846,57 @@ func run() {
 // record+transcribe cycle. Test-only hook (lets the harness know a cycle ended).
 var afterRecordCycle func()
 
-// pendingSwitch holds a model switch deferred because it was requested during a
-// record/inference cycle; applyPendingSwitch runs it at cycle end, when no
-// session is in flight (see switchModel). pendingMu guards it across the tray and
-// download goroutines and the record loop.
+// pendingReload holds a config-file reload deferred because the file changed
+// mid-cycle; applyPendingReload runs it at cycle end. A file edit can't be
+// denied (it already happened), so it defers — unlike user-initiated engine ops,
+// which guardBusy denies outright. pendingMu guards it across goroutines.
 var (
 	pendingMu     sync.Mutex
-	pendingSwitch func()
-	pendingReload func() // config-file reload deferred for the same reason
+	pendingReload func()
 )
 
-func applyPendingSwitch() {
+func applyPendingReload() {
 	pendingMu.Lock()
-	fn, rl := pendingSwitch, pendingReload
-	pendingSwitch, pendingReload = nil, nil
+	rl := pendingReload
+	pendingReload = nil
 	pendingMu.Unlock()
-	if fn != nil {
-		fn()
-	}
 	if rl != nil {
-		rl() // after the switch: the reload carries the newest file state
+		rl()
 	}
 }
 
+// busyAlert ensures at most one "busy" dialog is open at a time: a second denial
+// while it's showing only beeps, so rapid taps can't stack modal dialogs.
+var busyAlert atomic.Bool
+
+// guardBusy denies a user-initiated engine op while a record/inference cycle is
+// active — the fragile window in which the model ctx must not be swapped or
+// freed. It beeps immediately and pops one non-blocking dialog (the given
+// warning) explaining why. Returns true when the op was denied. Every user
+// action that touches the engine (record start, model/provider switch, device
+// switch, language change) funnels through here; internal callers (startup
+// restore, setup) use the raw functions and skip the guard.
+func guardBusy(warning string) bool {
+	if !isRecording.Load() {
+		return false
+	}
+	audio.PlayDenied()
+	if busyAlert.CompareAndSwap(false, true) {
+		go func() {
+			alert.Warn(warning)
+			busyAlert.Store(false)
+		}()
+	}
+	return true
+}
+
 // tryStartSession enqueues a fresh recording session unless a cycle is already
-// active (recording OR still transcribing) — in which case it denies audibly,
-// the same guard the hotkey uses. Returns the SilenceClose handle when it
-// started a session, nil when it denied. The hotkey and the tray "Start
-// Recording" button both funnel through here, so neither can queue an
-// unattended recording that fires the instant inference ends.
+// active (recording OR still transcribing) — in which case guardBusy denies it.
+// Returns the SilenceClose handle when it started a session, nil when it denied.
+// The hotkey and the tray "Start Recording" button both funnel through here, so
+// neither can queue an unattended recording that fires the instant inference ends.
 func tryStartSession(sessions chan<- recSession) *atomic.Bool {
-	if isRecording.Load() {
-		audio.PlayDenied()
+	if guardBusy("Already recording or transcribing.") {
 		return nil
 	}
 	sc := &atomic.Bool{}
@@ -907,7 +935,7 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		}
 		isRecording.Store(false)
 		tray.SetRecording(false)
-		applyPendingSwitch() // apply any model switch deferred during this cycle
+		applyPendingReload() // apply any config-file reload deferred during this cycle
 		if afterRecordCycle != nil {
 			afterRecordCycle()
 		}

@@ -267,6 +267,7 @@ func onReady() {
 		}
 	})
 
+	systray.AddSeparator()
 	mSettings = systray.AddMenuItem("Settings", "Settings")
 
 	mAutoPaste = mSettings.AddSubMenuItemCheckbox("Auto-paste", "Auto-paste transcribed text", autoPasteOn)

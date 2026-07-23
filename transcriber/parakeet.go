@@ -16,17 +16,20 @@ import (
 
 // Parakeet is the offline, on-device provider. It wraps one loaded GGUF model
 // (decision #2: a single shared ctx; push-to-talk is serial) and swaps the
-// gguf to change models (decision #3: 110m loaded at startup, switching freezes
-// briefly). The C-API has no usable language parameter for these models, so
-// language is model-driven (decision #1): English-only for 110m/v2, and the
-// multilingual v3 auto-detects (it is not prompt-conditioned, so a target
-// language cannot be forced).
+// gguf to change models (decision #3: the default is warmed in the background at
+// startup, and switches reload in the background too, so the UI never blocks).
+// The C-API has no usable language parameter for these models, so language is
+// model-driven (decision #1): English-only for 110m/v2, and the multilingual v3
+// auto-detects (it is not prompt-conditioned, so a target language cannot be
+// forced).
 type Parakeet struct {
-	mu      sync.Mutex
-	modelID string
-	ctx     *parakeet.Ctx
-	loadErr error
-	lang    string
+	mu       sync.Mutex    // guards the fields below; held only briefly, never across a gguf load
+	loadMu   sync.Mutex    // serializes load() so concurrent triggers can't double-load
+	modelID  string        // desired model
+	loadedID string        // model currently in ctx ("" while unloaded or loading)
+	ctx      *parakeet.Ctx
+	loadErr  error
+	lang     string
 }
 
 // parakeetAvailable reports whether local transcription is compiled in and the
@@ -74,34 +77,55 @@ func ParakeetModels() []ModelInfo {
 	return out
 }
 
-// NewParakeet builds the provider and eagerly loads the default model (110m,
-// ~55 ms) so the first recording is instant. A missing/failed model is deferred
-// to NewSession as an error.
+// NewParakeet builds the provider and warms the default model (110m) in the
+// background so construction never blocks startup. The load holds only loadMu
+// (not mu) while it reads the gguf, so metadata accessors stay responsive; the
+// first NewSession waits for it via load()'s idempotent fast path. A missing or
+// failed model surfaces at NewSession as an error.
 func NewParakeet() *Parakeet {
 	p := &Parakeet{modelID: localmodel.ID110mEN, lang: "en"}
-	p.mu.Lock()
-	p.load()
-	p.mu.Unlock()
+	go p.load()
 	return p
 }
 
-// load (mu held) swaps the loaded ctx to p.modelID, freeing the previous one.
+// load brings ctx in line with the desired modelID, freeing the previous one.
+// It's serialized by loadMu and idempotent: if the desired model is already
+// loaded it returns at once, so NewSession can call it to *wait out* an in-flight
+// background load without triggering a reload. The slow gguf read runs with mu
+// released, so GetModel/SetLanguage/etc. never block on it.
 func (p *Parakeet) load() {
-	m, ok := localmodel.ByID(p.modelID)
-	if !ok {
-		p.loadErr = fmt.Errorf("unknown local model %q", p.modelID)
+	p.loadMu.Lock()
+	defer p.loadMu.Unlock()
+
+	p.mu.Lock()
+	want := p.modelID
+	if p.ctx != nil && p.loadedID == want {
+		p.mu.Unlock()
 		return
 	}
-	if !localmodel.Present(m) {
-		p.loadErr = fmt.Errorf("model %q not downloaded", m.Label)
-		return
+	old := p.ctx
+	p.ctx, p.loadedID, p.loadErr = nil, "", nil
+	p.mu.Unlock()
+
+	if old != nil {
+		old.Close()
 	}
-	if p.ctx != nil {
-		p.ctx.Close()
-		p.ctx = nil
+
+	var (
+		ctx *parakeet.Ctx
+		err error
+	)
+	if m, ok := localmodel.ByID(want); !ok {
+		err = fmt.Errorf("unknown local model %q", want)
+	} else if !localmodel.Present(m) {
+		err = fmt.Errorf("model %q not downloaded", m.Label)
+	} else {
+		ctx, err = parakeet.New(localmodel.Path(m)) // slow; mu released
 	}
-	ctx, err := parakeet.New(localmodel.Path(m))
-	p.ctx, p.loadErr = ctx, err
+
+	p.mu.Lock()
+	p.ctx, p.loadErr, p.loadedID = ctx, err, want
+	p.mu.Unlock()
 }
 
 // IsLocal reports whether tr is the on-device provider. Local decode has no
@@ -136,17 +160,20 @@ func (p *Parakeet) GetLanguage() string     { p.mu.Lock(); defer p.mu.Unlock(); 
 
 func (p *Parakeet) GetModel() string { p.mu.Lock(); defer p.mu.Unlock(); return p.modelID }
 
-// SetModel swaps the active model, loading its gguf eagerly. The caller (tray)
-// is intentionally blocked during the load (decision #3); a load failure is
-// surfaced at NewSession.
+// SetModel records the desired model and warms it in the background, so a tray
+// switch returns immediately instead of blocking the UI on the gguf load. The
+// next NewSession waits for the load (the record→inference guard keeps switches
+// out of an active cycle, and recording overlaps the load, hiding its latency);
+// a load failure surfaces there.
 func (p *Parakeet) SetModel(id string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if id == p.modelID && p.ctx != nil {
+	same := id == p.modelID
+	p.modelID = id
+	p.mu.Unlock()
+	if same {
 		return
 	}
-	p.modelID = id
-	p.load()
+	go p.load()
 }
 
 // Transcribe decodes a WAV file to PCM and runs one batch inference, satisfying
@@ -183,9 +210,12 @@ func (p *Parakeet) NewSession(_ context.Context, cfg SessionConfig) (Session, er
 		return nil, fmt.Errorf("parakeet does not support streaming")
 	}
 	p.mu.Lock()
-	if p.ctx == nil && p.loadErr == nil {
-		p.load()
+	ready := p.ctx != nil && p.loadedID == p.modelID
+	p.mu.Unlock()
+	if !ready {
+		p.load() // waits out an in-flight background load, or loads now
 	}
+	p.mu.Lock()
 	ctx, err := p.ctx, p.loadErr
 	decoder := 0
 	if m, ok := localmodel.ByID(p.modelID); ok {
@@ -198,14 +228,18 @@ func (p *Parakeet) NewSession(_ context.Context, cfg SessionConfig) (Session, er
 	return &pcmSession{ctx: ctx, decoder: decoder, updates: make(chan string)}, nil
 }
 
-// Close frees the loaded model. The provider is reusable afterwards (the next
-// NewSession reloads lazily).
+// Close frees the loaded model. It waits out any in-flight background load
+// (loadMu) so it can't free a ctx a loader is about to publish. The provider is
+// reusable afterwards (the next NewSession reloads lazily).
 func (p *Parakeet) Close() {
+	p.loadMu.Lock()
+	defer p.loadMu.Unlock()
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.ctx != nil {
-		p.ctx.Close()
-		p.ctx = nil
+	ctx := p.ctx
+	p.ctx, p.loadedID, p.loadErr = nil, "", nil
+	p.mu.Unlock()
+	if ctx != nil {
+		ctx.Close()
 	}
 }
 
