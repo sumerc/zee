@@ -105,7 +105,8 @@ type recordingConfig struct {
 	lang            string
 	hints           string
 	autoPaste       bool
-	pressToRecordMs float64 // press→mic-live, filled at record start; logged with the transcription metrics
+	tailWait        time.Duration // mic kept open after release so a fast keyup doesn't clip the last word
+	pressToRecordMs float64       // press→mic-live, filled at record start; logged with the transcription metrics
 }
 
 var configMu sync.Mutex
@@ -1097,6 +1098,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		lang:      activeTranscriber.GetLanguage(),
 		hints:     config.GetHints(),
 		autoPaste: autoPaste,
+		tailWait:  time.Duration(config.Get().TailWaitMs) * time.Millisecond,
 	}
 	configMu.Unlock()
 	if cfg.autoPaste && !permissions.HasAccessibility() {
@@ -1137,7 +1139,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		}
 	}()
 
-	rec, err := newRecordingSession(capture, sess.Stop, tSess, sess.SilenceClose, cfg.stream)
+	rec, err := newRecordingSession(capture, sess.Stop, tSess, sess.SilenceClose, cfg.tailWait)
 	if err != nil {
 		tSess.Close()
 		return nil, err

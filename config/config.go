@@ -29,17 +29,26 @@ type Settings struct {
 	Hotkey    Hotkey `json:"hotkey"`
 	AutoPaste bool   `json:"auto_paste"`
 	AutoStart bool   `json:"auto_start"`
+	// TailWaitMs keeps the mic open this many ms after the hotkey is released so
+	// a fast keyup doesn't clip the last word. 0 disables the wait.
+	TailWaitMs int `json:"tail_wait_ms"`
 }
 
 const settingsFile = "config.json"
+
+// defaultTailWaitMs is the default mic tail-wait after hotkey release (ms):
+// long enough to catch the last word on a fast keyup, short enough not to feel
+// like lag before inference. See Settings.TailWaitMs.
+const defaultTailWaitMs = 200
 
 var (
 	mu       sync.Mutex
 	current  Settings
 	dir      string
 	defaults = Settings{
-		Language:  "en",
-		AutoPaste: true,
+		Language:   "en",
+		AutoPaste:  true,
+		TailWaitMs: defaultTailWaitMs,
 	}
 )
 

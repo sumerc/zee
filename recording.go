@@ -12,15 +12,13 @@ import (
 	"zee/tray"
 )
 
-const recordTail = 500 * time.Millisecond
-
 type recordingSession struct {
-	capture audio.CaptureDevice
+	capture         audio.CaptureDevice
 	transcriberSess transcriber.Session
-	stop    <-chan struct{}
-	vp      *vadProcessor
-	mon     *silenceMonitor
-	stream  bool
+	stop            <-chan struct{}
+	vp              *vadProcessor
+	mon             *silenceMonitor
+	tailWait        time.Duration // mic stays open this long after release (anti-clip)
 
 	mu          sync.Mutex
 	totalFrames uint64
@@ -30,19 +28,19 @@ type recordingSession struct {
 	closeOnce   sync.Once
 }
 
-func newRecordingSession(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.Session, silenceClose *atomic.Bool, stream bool) (*recordingSession, error) {
+func newRecordingSession(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.Session, silenceClose *atomic.Bool, tailWait time.Duration) (*recordingSession, error) {
 	vp, err := newVADProcessor()
 	if err != nil {
 		return nil, fmt.Errorf("VAD init: %w", err)
 	}
 	return &recordingSession{
-		capture: capture,
-		transcriberSess:    sess,
-		stop:    stop,
-		vp:      vp,
-		mon:     newSilenceMonitor(silenceClose),
-		stream:  stream,
-		done:    make(chan struct{}),
+		capture:         capture,
+		transcriberSess: sess,
+		stop:            stop,
+		vp:              vp,
+		mon:             newSilenceMonitor(silenceClose),
+		tailWait:        tailWait,
+		done:            make(chan struct{}),
 	}, nil
 }
 
@@ -110,8 +108,10 @@ func (r *recordingSession) awaitStop() {
 	log.Info("recording_stop")
 	audio.PlayEnd() // reflexive: sound the release before the tray/icon update (playOne is non-blocking)
 	tray.SetRecording(false)
-	if r.stream {
-		time.Sleep(recordTail)
+	// Keep the mic open a beat after release so a fast keyup doesn't clip the
+	// last word: onAudio keeps feeding until close() below stops capture.
+	if r.tailWait > 0 {
+		time.Sleep(r.tailWait)
 	}
 	r.close()
 }
