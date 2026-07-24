@@ -1,0 +1,71 @@
+# zee — local Parakeet inference baselines
+#
+# One block per machine+corpus, appended by: make bench-save [WAV=...] [RUNS=n]
+# Isolated local inference (model load + Transcribe) — no capture, encode or network.
+#
+# xRT = realtime factor: audio seconds processed per wall second (higher is faster).
+# Compare two runs with: benchstat old.txt benchmark.txt
+
+################################################################################
+## MACHINE:  Apple M5 Pro, 15 cores, 24 GB RAM, macOS 26.5.2
+## CORPUS:   test/data/short.wav
+## RUNS:     3
+## COMMIT:   cad7737 (dirty)
+## MODELS:   v1
+## DATE:     2026-07-25T02:11:41+0300
+################################################################################
+
+goos: darwin
+goarch: arm64
+pkg: zee/internal/parakeet
+cpu: Apple M5 Pro
+BenchmarkTranscribe
+BenchmarkTranscribe/parakeet-110m-en
+BenchmarkTranscribe/parakeet-110m-en/short
+BenchmarkTranscribe/parakeet-110m-en/short-15   	       3	  16360153 ns/op	         1.243 audio_s	        75.98 xRT
+BenchmarkTranscribe/parakeet-v3-multi
+BenchmarkTranscribe/parakeet-v3-multi/short
+BenchmarkTranscribe/parakeet-v3-multi/short-15  	       3	  29651000 ns/op	         1.243 audio_s	        41.92 xRT
+BenchmarkTranscribe/parakeet-v2-en-large
+BenchmarkTranscribe/parakeet-v2-en-large/short
+BenchmarkTranscribe/parakeet-v2-en-large/short-15         	       3	  28851208 ns/op	         1.243 audio_s	        43.08 xRT
+PASS
+ok  	zee/internal/parakeet	1.345s
+
+################################################################################
+## MACHINE:  Apple M5 Pro, 15 cores, 24 GB RAM, macOS 26.5.2
+## CORPUS:   /Users/supo/Library/Application Support/zee/samples
+## RUNS:     3
+## COMMIT:   cad7737 (dirty)
+## MODELS:   v1
+## DATE:     2026-07-25T02:11:53+0300
+################################################################################
+
+goos: darwin
+goarch: arm64
+pkg: zee/internal/parakeet
+cpu: Apple M5 Pro
+BenchmarkTranscribe
+BenchmarkTranscribe/parakeet-110m-en
+BenchmarkTranscribe/parakeet-110m-en/2026-06-19T16-52-03
+BenchmarkTranscribe/parakeet-110m-en/2026-06-19T16-52-03-15         	       3	  17447208 ns/op	         1.860 audio_s	       106.6 xRT
+BenchmarkTranscribe/parakeet-110m-en/2026-06-19T16-56-30
+BenchmarkTranscribe/parakeet-110m-en/2026-06-19T16-56-30-15         	       3	  22508792 ns/op	         5.160 audio_s	       229.2 xRT
+BenchmarkTranscribe/parakeet-110m-en/2026-07-24T16-24-44
+BenchmarkTranscribe/parakeet-110m-en/2026-07-24T16-24-44-15         	       3	1117313361 ns/op	       182.7 audio_s	       163.5 xRT
+BenchmarkTranscribe/parakeet-v3-multi
+BenchmarkTranscribe/parakeet-v3-multi/2026-06-19T16-52-03
+BenchmarkTranscribe/parakeet-v3-multi/2026-06-19T16-52-03-15        	       3	  30624792 ns/op	         1.860 audio_s	        60.74 xRT
+BenchmarkTranscribe/parakeet-v3-multi/2026-06-19T16-56-30
+BenchmarkTranscribe/parakeet-v3-multi/2026-06-19T16-56-30-15        	       3	  38228014 ns/op	         5.160 audio_s	       135.0 xRT
+BenchmarkTranscribe/parakeet-v3-multi/2026-07-24T16-24-44
+BenchmarkTranscribe/parakeet-v3-multi/2026-07-24T16-24-44-15        	       3	1752086111 ns/op	       182.7 audio_s	       104.3 xRT
+BenchmarkTranscribe/parakeet-v2-en-large
+BenchmarkTranscribe/parakeet-v2-en-large/2026-06-19T16-52-03
+BenchmarkTranscribe/parakeet-v2-en-large/2026-06-19T16-52-03-15     	       3	  31860055 ns/op	         1.860 audio_s	        58.38 xRT
+BenchmarkTranscribe/parakeet-v2-en-large/2026-06-19T16-56-30
+BenchmarkTranscribe/parakeet-v2-en-large/2026-06-19T16-56-30-15     	       3	  37613986 ns/op	         5.160 audio_s	       137.2 xRT
+BenchmarkTranscribe/parakeet-v2-en-large/2026-07-24T16-24-44
+BenchmarkTranscribe/parakeet-v2-en-large/2026-07-24T16-24-44-15     	       3	1683602403 ns/op	       182.7 audio_s	       108.5 xRT
+PASS
+ok  	zee/internal/parakeet	20.594s

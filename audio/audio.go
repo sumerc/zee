@@ -67,6 +67,17 @@ func WAVToPCM(b []byte) ([]byte, error) {
 	return data, nil
 }
 
+// PCMToF32 converts raw signed-16-bit little-endian PCM (the capture format,
+// and what WAVToPCM returns) to the -1..1 float32 samples the local Parakeet
+// engine consumes. A trailing odd byte is ignored.
+func PCMToF32(pcm []byte) []float32 {
+	f32 := make([]float32, len(pcm)/2)
+	for i := range f32 {
+		f32[i] = float32(int16(binary.LittleEndian.Uint16(pcm[i*2:]))) / 32768.0
+	}
+	return f32
+}
+
 // PCMToWAV wraps raw 16 kHz mono signed-16-bit little-endian PCM in a minimal
 // 44-byte RIFF/WAVE container — the inverse of WAVToPCM.
 //

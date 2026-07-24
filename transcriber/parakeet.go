@@ -2,7 +2,6 @@ package transcriber
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"strings"
 	"sync"
@@ -274,11 +273,7 @@ func (s *pcmSession) Close() (SessionResult, error) {
 		return SessionResult{NoSpeech: true}, nil
 	}
 
-	f32 := make([]float32, n)
-	for i := 0; i < n; i++ {
-		f32[i] = float32(int16(binary.LittleEndian.Uint16(raw[i*2:]))) / 32768.0
-	}
-
+	f32 := audio.PCMToF32(raw)
 	audioData := audio.PCMToWAV(raw)
 
 	start := time.Now()

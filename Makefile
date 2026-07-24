@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark integration-test clean bump-version release icns app parakeet-lib download-models manifest model-release
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark bench-local bench-save integration-test clean bump-version release icns app parakeet-lib download-models manifest model-release
 
 # --match 'v*' keeps model-release tags (models-vN) out of the app version.
 VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo "dev")
@@ -16,6 +16,13 @@ endif
 
 build: parakeet-lib download-models
 	$(CGO_ENV) go build -ldflags="-X main.version=$(VERSION)" -o zee
+
+# The dev model folder `localmodels download` writes to (cmd/localmodels keeps
+# the same layout). Test binaries run from a temp dir, so their default lookup
+# can't find it — bench-local points ZEE_MODELS_DIR here.
+MODELS_VERSION  := $(shell sed -n 's/^const Version = "\(.*\)"/\1/p' localmodel/localmodel.go)
+# Absolute: `go test` runs the binary with cwd set to the package dir.
+MODELS_DEV_DIR  := $(CURDIR)/models/parakeet/$(MODELS_VERSION)
 
 # Fetch the mandatory (PreFetch) local models into the dev folder from the
 # pinned models-<Version> GitHub release. Reuses the localmodel registry +
@@ -69,6 +76,50 @@ benchmark: build
 	@test -n "$(WAV)" || (echo "Usage: make benchmark WAV=file.wav [RUNS=5]" && exit 1)
 	@if [ -f .env ]; then export $$(grep -v '^#' .env | xargs); fi; \
 	./zee -benchmark $(WAV) -runs $(or $(RUNS),3)
+
+# Isolated local-inference benchmark (no capture/encode/network): each clip x
+# each downloaded model, reporting ns/op plus a realtime factor (xRT). WAV is a
+# file or a directory of clips (16 kHz mono 16-bit), default test/data/short.wav
+# — e.g. WAV="$$HOME/Library/Application Support/zee/samples" to benchmark your
+# own saved recordings. Pipe to a file and compare runs with benchstat.
+bench-local: parakeet-lib download-models
+	ZEE_BENCH_WAV="$(WAV)" ZEE_MODELS_DIR="$(MODELS_DEV_DIR)" $(CGO_ENV) go test ./internal/parakeet \
+		-run '^$$' -bench BenchmarkTranscribe -benchtime $(or $(RUNS),3)x -v
+
+# Append a bench-local run to BENCH_FILE as a labelled per-machine baseline
+# block, so results from several machines accumulate in one comparable file.
+# Same WAV=/RUNS= options as bench-local; one invocation = one block.
+BENCH_FILE ?= benchmark.txt
+bench-save: parakeet-lib download-models
+	@test -f "$(BENCH_FILE)" || { \
+	  echo "# zee — local Parakeet inference baselines"; \
+	  echo "#"; \
+	  echo "# One block per machine+corpus, appended by: make bench-save [WAV=...] [RUNS=n]"; \
+	  echo "# Isolated local inference (model load + Transcribe) — no capture, encode or network."; \
+	  echo "#"; \
+	  echo "# xRT = realtime factor: audio seconds processed per wall second (higher is faster)."; \
+	  echo "# Compare two runs with: benchstat old.txt $(BENCH_FILE)"; \
+	} > "$(BENCH_FILE)"
+	@{ \
+	  echo ""; \
+	  echo "################################################################################"; \
+	  if [ "$$(uname)" = Darwin ]; then \
+	    echo "## MACHINE:  $$(sysctl -n machdep.cpu.brand_string), $$(sysctl -n hw.ncpu) cores, $$(($$(sysctl -n hw.memsize)/1073741824)) GB RAM, macOS $$(sw_vers -productVersion)"; \
+	  else \
+	    echo "## MACHINE:  $$(uname -sm)"; \
+	  fi; \
+	  echo "## CORPUS:   $(or $(WAV),test/data/short.wav)"; \
+	  echo "## RUNS:     $(or $(RUNS),3)"; \
+	  echo "## COMMIT:   $$(git rev-parse --short HEAD 2>/dev/null)$$(git diff --quiet 2>/dev/null || echo ' (dirty)')"; \
+	  echo "## MODELS:   $(MODELS_VERSION)"; \
+	  echo "## DATE:     $$(date '+%Y-%m-%dT%H:%M:%S%z')"; \
+	  echo "################################################################################"; \
+	  echo ""; \
+	} >> "$(BENCH_FILE)"
+	@ZEE_BENCH_WAV="$(WAV)" ZEE_MODELS_DIR="$(MODELS_DEV_DIR)" $(CGO_ENV) go test ./internal/parakeet \
+		-run '^$$' -bench BenchmarkTranscribe -benchtime $(or $(RUNS),3)x -v 2>&1 \
+		| grep -vE 'duplicate librar|Backend using device' >> "$(BENCH_FILE)"
+	@echo "appended a baseline block to $(BENCH_FILE)"
 
 test-integration: parakeet-lib
 	@tmp=$$(mktemp -d) && \
