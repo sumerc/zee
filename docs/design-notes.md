@@ -232,6 +232,29 @@ M5 Pro, real saved dictations, warm, best of 3:
 +----------+---------------+--------------+----------------+
 ```
 
+M1 Pro (10 cores), same models, warm, best of 3, synthetic clips (2026-07-26).
+The floor machine — every number users feel is worst here:
+
+```
++----------+---------------+--------------+----------------+
+| Audio    | parakeet-110m | whisper (en) | whisper (auto) |
++----------+---------------+--------------+----------------+
+| 2.5 s    |     44 ms     |    947 ms    |    1946 ms     |
+| 11.5 s   |    116 ms     |   1049 ms    |    1984 ms     |
+| 27 s     |    294 ms     |   1161 ms    |    2164 ms     |
+| 60 s     |    761 ms     |   3235 ms    |    4071 ms     |
++----------+---------------+--------------+----------------+
+```
+
+Three things this pins down. **whisper is ~3.3× slower than M5** (947 vs 272 ms,
+1161 vs ~389 ms) — the ratio claimed above, now with an M1 block in
+`benchmark.txt` behind it. **Cost tracks 30 s windows, not audio length:**
+947→1049→1161 ms across a 10× range, then a step to 3235 ms at 60 s when a
+second window opens. Budget ~1.1–1.6 s per 30 s window, not per second of
+speech. **parakeet scales linearly instead** (44/116/294/761 ms), so the gap
+widens as clips shorten: 21× at 2.5 s, 4× at 27 s — the routing default is most
+valuable exactly where dictation actually lives.
+
 **One ggml, two engines.** whisper.cpp v1.9.1 builds against the *patched* ggml
 v0.13.0 that parakeet.cpp vendors; both load in one process, no duplicate
 symbols. `make whisper-lib` installs parakeet's ggml to a local prefix and
@@ -257,8 +280,12 @@ detection is on: on Turkish audio with embedded English, `-l tr` output was
 *identical* to `-l auto`, English terms intact under both. Whisper transcribes
 foreign words regardless of the token; only the wrong dominant language breaks
 it. Auto is the default because that language isn't known before the user
-speaks — the mixed-language case zee exists for. Cost: one extra encoder pass,
-~260 ms.
+speaks — the mixed-language case zee exists for. Cost: one extra encoder pass —
+~260 ms on M5, but **~1.0 s on M1 Pro**, where it doubles short-utterance
+latency (0.95 s → 1.95 s). It is a full encoder pass, so it scales with the
+machine, not the clip: measured +999/+935/+1003 ms across 2.5/11.5/27 s. On
+M1-class hardware auto-detect, not whisper itself, is the dominant cost of the
+multilingual path.
 
 Parakeet is unaffected — no language parameter in its C-API; each gguf is
 single-language by build.
@@ -277,7 +304,10 @@ corpus (accented/noisy/non-English, human transcripts) we don't have.
 
 **Metal, not Core ML/ANE — measured, then declined.** The ANE path works
 (`-DWHISPER_COREML=1`, `.mlmodelc` encoder bundle, `-framework CoreML`) and is
-faster:
+faster. Measured on both machines — the gain is a function of how weak the GPU
+is, so read the two tables together, not the average.
+
+M5 Pro:
 
 ```
 Audio    Metal-only   +CoreML/ANE   gain
@@ -285,6 +315,18 @@ Audio    Metal-only   +CoreML/ANE   gain
 11.0 s     295 ms       247 ms      -16%
 22.8 s     389 ms       331 ms      -15%
 ```
+
+M1 Pro (in-process, warm, best of 3, `-l en`):
+
+```
+Audio    Metal-only   +CoreML/ANE   gain
+2.5 s      906 ms       634 ms      -30%
+11.5 s     984 ms       721 ms      -27%
+27.0 s    1199 ms       879 ms      -27%
+```
+
+Encoder alone on M1: ~880–920 ms → ~630 ms (~1.4×), far short of the ~3×
+upstream advertises — that figure comes from later ANE generations.
 
 Declined on price, not size of gain: **+1.2 GB per model** (a second encoder
 copy on top of the 547 MB gguf — more than doubles the payload) and **an ANE

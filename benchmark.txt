@@ -182,3 +182,73 @@ BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T21-52-43/en
 BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T21-52-43/en-15      	       3	 866616014 ns/op	        26.61 audio_s	        30.71 xRT
 PASS
 ok  	zee/internal/localbench	99.189s
+
+################################################################################
+## MACHINE:  Apple M1 Pro, 10 cores, 16 GB RAM, macOS 26.5.1
+## CORPUS:   test/data/short.wav
+## RUNS:     3
+## COMMIT:   3d3943d (dirty)
+## MODELS:   v2
+## DATE:     2026-07-26T00:22:29+0300
+################################################################################
+
+# zee/internal/localbench.test
+goos: darwin
+goarch: arm64
+pkg: zee/internal/localbench
+cpu: Apple M1 Pro
+BenchmarkTranscribe
+BenchmarkTranscribe/parakeet-110m-en
+BenchmarkTranscribe/parakeet-110m-en/short
+BenchmarkTranscribe/parakeet-110m-en/short-10   	       3	  26424333 ns/op	         1.243 audio_s	        47.04 xRT
+BenchmarkTranscribe/whisper-turbo-q5
+BenchmarkTranscribe/whisper-turbo-q5/short/auto
+BenchmarkTranscribe/whisper-turbo-q5/short/auto-10         	       3	1708941514 ns/op	         1.243 audio_s	         0.7274 xRT
+BenchmarkTranscribe/whisper-turbo-q5/short/en
+BenchmarkTranscribe/whisper-turbo-q5/short/en-10           	       3	 863319069 ns/op	         1.243 audio_s	         1.440 xRT
+PASS
+ok  	zee/internal/localbench	25.516s
+
+################################################################################
+## MACHINE:  Apple M1 Pro, 10 cores, 16 GB RAM, macOS 26.5.1
+## CORPUS:   /private/tmp/claude-501/-Users-supo-Desktop-p-zee-whisper-poc/6f0357c0-aba2-4deb-8e04-c5e4c61a5b8b/scratchpad/bench-corpus
+## RUNS:     3
+## COMMIT:   3d3943d (dirty)
+## MODELS:   v2
+## DATE:     2026-07-26T00:26:58+0300
+################################################################################
+
+# zee/internal/localbench.test
+goos: darwin
+goarch: arm64
+pkg: zee/internal/localbench
+cpu: Apple M1 Pro
+BenchmarkTranscribe
+BenchmarkTranscribe/parakeet-110m-en
+BenchmarkTranscribe/parakeet-110m-en/len02s
+BenchmarkTranscribe/parakeet-110m-en/len02s-10  	       3	  44185778 ns/op	         2.497 audio_s	        56.50 xRT
+BenchmarkTranscribe/parakeet-110m-en/len11s
+BenchmarkTranscribe/parakeet-110m-en/len11s-10  	       3	 115513444 ns/op	        11.49 audio_s	        99.51 xRT
+BenchmarkTranscribe/parakeet-110m-en/len27s
+BenchmarkTranscribe/parakeet-110m-en/len27s-10  	       3	 294284458 ns/op	        27.04 audio_s	        91.88 xRT
+BenchmarkTranscribe/parakeet-110m-en/len60s
+BenchmarkTranscribe/parakeet-110m-en/len60s-10  	       3	 760951153 ns/op	        60.03 audio_s	        78.89 xRT
+BenchmarkTranscribe/whisper-turbo-q5
+BenchmarkTranscribe/whisper-turbo-q5/len02s/auto
+BenchmarkTranscribe/whisper-turbo-q5/len02s/auto-10         	       3	1945535403 ns/op	         2.497 audio_s	         1.283 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len02s/en
+BenchmarkTranscribe/whisper-turbo-q5/len02s/en-10           	       3	 946953931 ns/op	         2.497 audio_s	         2.636 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len11s/auto
+BenchmarkTranscribe/whisper-turbo-q5/len11s/auto-10         	       3	1984141736 ns/op	        11.49 audio_s	         5.793 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len11s/en
+BenchmarkTranscribe/whisper-turbo-q5/len11s/en-10           	       3	1048909681 ns/op	        11.49 audio_s	        10.96 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len27s/auto
+BenchmarkTranscribe/whisper-turbo-q5/len27s/auto-10         	       3	2164085875 ns/op	        27.04 audio_s	        12.49 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len27s/en
+BenchmarkTranscribe/whisper-turbo-q5/len27s/en-10           	       3	1160609903 ns/op	        27.04 audio_s	        23.30 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len60s/auto
+BenchmarkTranscribe/whisper-turbo-q5/len60s/auto-10         	       3	4070895639 ns/op	        60.03 audio_s	        14.75 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len60s/en
+BenchmarkTranscribe/whisper-turbo-q5/len60s/en-10           	       3	3234945680 ns/op	        60.03 audio_s	        18.56 xRT
+PASS
+ok  	zee/internal/localbench	75.926s
