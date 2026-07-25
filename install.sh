@@ -182,7 +182,7 @@ prefetch_models() {
   done < <(awk '!/^#/ && $3=="true" {print $1, $2}' <<<"$manifest")
 }
 
-log "Fetching offline models..."
+log "Fetching offline models (one-time download, reused across updates)..."
 prefetch_models
 
 if [[ -n "$DMG_PATH" ]]; then
