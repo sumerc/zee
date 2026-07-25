@@ -208,6 +208,18 @@ user is never silently downgraded to English-only (`retiredIDs` in
 `localmodel/localmodel.go`). Old builds keep working — they pin `models-v1`,
 still published.
 
+`ByID` following `retiredIDs` is right for a user's stale `config.json` and wrong
+for code that names a model deliberately: the ID resolves, but to a model on a
+*different engine*, so pairing it with a hardcoded provider yields whisper
+weights loaded by the parakeet engine. That combination does not fail uniformly —
+locally it returns a clean `gguf open failed`, on CI it hung silently for 8m24s
+until the test timeout (mechanism never identified; the child printed nothing).
+The integration tests therefore reject a retired ID instead of following the
+migration, and take the provider from `Model.Engine` rather than a literal
+(`localModel` in `test/integration_test.go`). Worth remembering if a mismatched
+provider/model pair can reach users some other way — the failure may be a hang,
+not an error.
+
 M5 Pro, real saved dictations, warm, best of 3:
 
 ```

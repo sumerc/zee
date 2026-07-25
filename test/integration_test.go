@@ -445,24 +445,46 @@ func localModelsDir(t *testing.T) string {
 	return dir
 }
 
-// transcribeFiles runs `zee -transcribe` over one or more files in a SINGLE
-// process (the model is loaded once and reused across files) and returns the
-// per-file transcripts — one per stdout line, in input order. Skips if the
-// model's gguf isn't present.
-func transcribeFiles(t *testing.T, modelID, lang string, files ...string) []string {
+// localModel resolves a model the tests name directly and reports whether it is
+// usable here, skipping when its weights aren't downloaded.
+//
+// It rejects a retired ID outright instead of following the migration. `ByID`
+// deliberately maps retired IDs to their successor so an old config.json still
+// works, but that is wrong for a test: a stale ID would silently resolve to a
+// *different* model of a *different* engine, and pairing those weights with the
+// engine the test names produces a nonsense combination whose failure mode is
+// environment-dependent (a clean load error locally; an 8-minute silent hang on
+// CI, which is how this was found). Naming the successor is the caller's job.
+func localModel(t *testing.T, modelID string) (localmodel.Model, string) {
 	t.Helper()
 	m, ok := localmodel.ByID(modelID)
 	if !ok {
 		t.Fatalf("unknown local model %q", modelID)
 	}
+	if m.ID != modelID {
+		t.Fatalf("model %q is retired (now %q) — name the successor explicitly", modelID, m.ID)
+	}
 	modelsDir := localModelsDir(t)
 	if fi, err := os.Stat(filepath.Join(modelsDir, m.Filename)); err != nil || fi.Size() != m.SizeBytes {
 		t.Skipf("model %q not downloaded (run: make download-models)", modelID)
 	}
+	return m, modelsDir
+}
+
+// transcribeFiles runs `zee -transcribe` over one or more files in a SINGLE
+// process (the model is loaded once and reused across files) and returns the
+// per-file transcripts — one per stdout line, in input order. Skips if the
+// model's gguf isn't present.
+//
+// The provider comes from the model's own engine, never a literal: the two must
+// agree, and hardcoding one lets a model move engines without the test noticing.
+func transcribeFiles(t *testing.T, modelID, lang string, files ...string) []string {
+	t.Helper()
+	m, modelsDir := localModel(t, modelID)
 
 	// Flags must precede the positional files: Go's flag parser stops at the
 	// first non-flag arg, so -transcribe and the files come last.
-	args := append([]string{"-logpath", t.TempDir(), "-provider", "parakeet",
+	args := append([]string{"-logpath", t.TempDir(), "-provider", m.Engine,
 		"-model", modelID, "-lang", lang, "-transcribe"}, files...)
 	cmd := exec.Command(testBinary, args...)
 	cmd.Env = append(os.Environ(), "ZEE_MODELS_DIR="+modelsDir)
@@ -527,21 +549,22 @@ func tokenOverlap(got, want string) float64 {
 	return float64(hits) / float64(len(w))
 }
 
-func TestLocalParakeetModels(t *testing.T) {
+func TestLocalModels(t *testing.T) {
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		t.Skip("local Parakeet transcription is darwin/arm64 only")
+		t.Skip("local transcription is darwin/arm64 only")
 	}
 
 	const wantEN = "The quick brown fox jumps."
 
 	t.Run("english-110m", func(t *testing.T) {
-		got := transcribeFiles(t, "parakeet-110m-en", "en", "data/en.wav")
+		got := transcribeFiles(t, localmodel.ID110mEN, "en", "data/en.wav")
 		assertTranscript(t, got[0], wantEN)
 	})
 
-	// One process, one v3 load, three languages (auto-detect).
-	t.Run("v3-multilingual", func(t *testing.T) {
-		got := transcribeFiles(t, "parakeet-v3-multi", "",
+	// One process, one whisper load, three languages (auto-detect). Whisper took
+	// over the multilingual role from Parakeet v3 in models-v2.
+	t.Run("whisper-multilingual", func(t *testing.T) {
+		got := transcribeFiles(t, localmodel.IDWhisperQ5, "",
 			"data/en.wav", "data/fr.wav", "data/ru.wav")
 		assertTranscript(t, got[0], wantEN)
 		assertTranscript(t, got[1], "Je m'appelle Thomas Dupont.")
@@ -556,26 +579,19 @@ func TestLocalParakeetModels(t *testing.T) {
 // path (-test) is what logs metrics; -transcribe is a quiet one-shot.
 func TestLocalModelDiagnostics(t *testing.T) {
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		t.Skip("local Parakeet transcription is darwin/arm64 only")
+		t.Skip("local transcription is darwin/arm64 only")
 	}
-	const modelID = "parakeet-v3-multi"
-	m, ok := localmodel.ByID(modelID)
-	if !ok {
-		t.Fatalf("unknown local model %q", modelID)
-	}
-	modelsDir := localModelsDir(t)
-	if fi, err := os.Stat(filepath.Join(modelsDir, m.Filename)); err != nil || fi.Size() != m.SizeBytes {
-		t.Skipf("model %q not downloaded (run: make download-models)", modelID)
-	}
+	const modelID = localmodel.IDWhisperQ5
+	m, modelsDir := localModel(t, modelID)
 
 	// Flags must precede the positional WAV: Go's flag parsing stops at the
 	// first non-flag argument. runZeeOpts already orders them correctly.
 	logDir := runZeeOpts(t, cmds("KEYDOWN", "KEYUP", "WAIT", "SLEEP 500", "QUIT"),
 		runOpts{env: []string{"ZEE_MODELS_DIR=" + modelsDir}},
-		"-provider", "parakeet", "-model", modelID, "-lang", "", "-test", "data/fr.wav")
+		"-provider", m.Engine, "-model", modelID, "-lang", "", "-test", "data/fr.wav")
 
 	diag := readLog(t, logDir, "diagnostics_log.txt")
-	for _, marker := range []string{"transcription", "provider=parakeet", "inference_ms", "rss_mb", "audio_s"} {
+	for _, marker := range []string{"transcription", "provider=" + m.Engine, "inference_ms", "rss_mb", "audio_s"} {
 		if !strings.Contains(diag, marker) {
 			t.Errorf("diagnostics missing %q marker\n--- diagnostics ---\n%s", marker, diag)
 		}
