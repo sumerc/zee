@@ -24,6 +24,9 @@ func Info(msg string) {
 // in the source.
 
 func Confirm(msg, action string) bool {
+	if underTest {
+		return false
+	}
 	const script = `on run argv
 		display dialog (item 1 of argv) with title "Zee" buttons {"Cancel", item 2 of argv} default button (item 2 of argv) with icon note
 	end run`
@@ -35,6 +38,9 @@ func Confirm(msg, action string) bool {
 }
 
 func show(msg, icon string) {
+	if underTest {
+		return
+	}
 	script := `on run argv
 		display dialog (item 1 of argv) with title "Zee" buttons {"OK"} default button "OK" with icon ` + icon + `
 	end run`

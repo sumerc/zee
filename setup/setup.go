@@ -207,7 +207,10 @@ func stepMic(r *results) {
 			return
 		}
 		r.testPCM = pcm
+		settled := notifyIfSlow(1500*time.Millisecond,
+			"  Still warming up the model (first run compiles GPU pipelines)...")
 		text, err := transcribePCM(tr, pcm, lang)
+		settled()
 		if err != nil {
 			fmt.Printf("  "+cross()+" transcription failed: %v\n", err)
 			return
@@ -387,6 +390,23 @@ func testEngine() (transcriber.ProviderInfo, string, bool) {
 		return p, "en", true
 	}
 	return transcriber.ProviderInfo{}, "", false
+}
+
+// notifyIfSlow prints msg once if the returned func isn't called within d, so a
+// first-run model load (the GPU pipeline compile) reads as "warming up" rather
+// than a hung transcription. Deliberately time-based: asking the engine whether
+// it is ready would mean a readiness signal on the Transcriber interface for
+// one cosmetic line. A warm transcribe of the 4 s test clip is well under d.
+func notifyIfSlow(d time.Duration, msg string) (settled func()) {
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-stop:
+		case <-time.After(d):
+			fmt.Println(msg)
+		}
+	}()
+	return func() { close(stop) }
 }
 
 // transcribePCM pushes pcm through the provider's normal session path and

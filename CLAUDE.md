@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Rules
 - **CHANGELOG.md** — only log code/behavior changes. No docs, README, or comment-only updates. Be concise.
+- **docs/design-notes.md** — the *why* behind non-obvious choices, and the record of what was measured (including options tried and rejected). Read it before revisiting an engine/model/backend decision; a surprising line of code usually has its reason there. Add an entry when a decision rests on a measurement or a rejected alternative — facts, not narrative. When new evidence supersedes an entry, mark the old one superseded rather than deleting it; the code often still reflects why it *used* to be true.
 - **Clean package interface** — every package must expose a single, platform-neutral interface describing *what it provides*, defined once (typically in `<pkg>.go`). Public API, shared types, and guard logic live there; platform/provider files (build-tag variants) only implement the backend hooks. Never duplicate the public API across build-tag files (see `audio/`: `audio.go` owns the capture interface plus `PlayStart/PlayEnd/...`, platform files provide only the backends — `initSound`/`playOne` for playback, the malgo/pulse capture impls).
 
 ## Build & Run

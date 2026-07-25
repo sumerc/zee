@@ -3,9 +3,6 @@
 package tray
 
 import (
-	"os/exec"
-	"strings"
-
 	"github.com/energye/systray"
 	"golang.design/x/hotkey/mainthread"
 
@@ -51,35 +48,21 @@ func Init() <-chan struct{} {
 	return quitCh
 }
 
-// darkMenuBar caches the menu bar appearance, read once at startup
-// (detectMenuBarAppearance). Reading it costs a `defaults` subprocess fork,
-// which is cheap at launch but very expensive once a multi-GB local model is
-// resident (fork is copy-on-write over the whole process) — so it must never
-// run on the icon hot path, where it would stall the run loop and delay hotkey
-// events. A mid-session light/dark flip is picked up on the next relaunch.
-var darkMenuBar bool
-
-func detectMenuBarAppearance() {
-	out, _ := exec.Command("defaults", "read", "-g", "AppleInterfaceStyle").Output()
-	darkMenuBar = strings.TrimSpace(string(out)) == "Dark" // key is absent in light mode
-}
-
-// themedIcon picks the colored-state variant for the current menu bar
-// appearance: Hi (white glyph) on a dark bar, Lo (dark glyph) on a light one.
-// The colored icons can't be templates (template mode discards the state dot's
-// color), so the variant is chosen from the cached appearance.
-func themedIcon(hi, lo []byte) []byte {
-	if darkMenuBar {
-		return hi
-	}
-	return lo
+// setIcon installs a menu-bar icon. Every icon is a template image, so AppKit
+// derives the colour from the bar itself — there is no appearance to detect and
+// nothing to cache. This replaced a `defaults read -g AppleInterfaceStyle`
+// probe that was both wrong on Tahoe (the glass bar follows the wallpaper, not
+// the Light/Dark setting) and expensive to re-read, since forking is
+// copy-on-write over a process holding a multi-GB model.
+func setIcon(icon []byte) {
+	systray.SetTemplateIcon(icon, icon)
 }
 
 func updateRecordingIcon(rec bool) {
 	if rec {
-		systray.SetIcon(themedIcon(iconRecHi, iconRecLo))
+		setIcon(iconRec)
 	} else {
-		systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
+		setIcon(iconIdle)
 	}
 	if mRecord != nil {
 		mRecord.SetTitle(recordTitle(rec))
@@ -136,17 +119,17 @@ func enableDevices() {
 
 func updateWarningIcon(on bool) {
 	if on {
-		systray.SetIcon(themedIcon(iconWarnHi, iconWarnLo))
+		setIcon(iconWarn)
 	} else {
-		systray.SetIcon(themedIcon(iconRecHi, iconRecLo))
+		setIcon(iconRec)
 	}
 }
 
 func updateTranscribingIcon(on bool) {
 	if on {
-		systray.SetIcon(themedIcon(iconBusyHi, iconBusyLo))
+		setIcon(iconBusy)
 	} else {
-		systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
+		setIcon(iconIdle)
 	}
 }
 
@@ -227,8 +210,7 @@ func RefreshDevices(names []string, selected string) {
 }
 
 func onReady() {
-	detectMenuBarAppearance() // once, before a big model is resident (see darkMenuBar)
-	systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
+	setIcon(iconIdle)
 	systray.SetTooltip("zee – push to talk")
 
 	mStatus = systray.AddMenuItem(statusText(), "")
