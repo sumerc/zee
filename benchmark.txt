@@ -252,3 +252,56 @@ BenchmarkTranscribe/whisper-turbo-q5/len60s/en
 BenchmarkTranscribe/whisper-turbo-q5/len60s/en-10           	       3	3234945680 ns/op	        60.03 audio_s	        18.56 xRT
 PASS
 ok  	zee/internal/localbench	75.926s
+
+################################################################################
+## MACHINE:  Apple M1 Pro, 10 cores, 16 GB RAM, macOS 26.5.1
+## CORPUS:   /private/tmp/claude-501/-Users-supo-Desktop-p-zee/9337372d-4843-4640-9e25-64e5c9bb406a/scratchpad/bench-corpus
+## RUNS:     3
+## COMMIT:   eef361a (dirty)
+## MODELS:   v2
+## DATE:     2026-07-26T02:45:04+0300
+################################################################################
+
+# zee/internal/localbench.test
+goos: darwin
+goarch: arm64
+pkg: zee/internal/localbench
+cpu: Apple M1 Pro
+BenchmarkTranscribe
+BenchmarkTranscribe/parakeet-110m-en
+BenchmarkTranscribe/parakeet-110m-en/len02s
+BenchmarkTranscribe/parakeet-110m-en/len02s-10  	       3	  39972070 ns/op	         2.497 audio_s	        62.47 xRT
+BenchmarkTranscribe/parakeet-110m-en/len11s
+BenchmarkTranscribe/parakeet-110m-en/len11s-10  	       3	 124161014 ns/op	        11.49 audio_s	        92.54 xRT
+BenchmarkTranscribe/parakeet-110m-en/len27s
+BenchmarkTranscribe/parakeet-110m-en/len27s-10  	       3	 287870208 ns/op	        27.04 audio_s	        93.93 xRT
+BenchmarkTranscribe/parakeet-110m-en/len60s
+BenchmarkTranscribe/parakeet-110m-en/len60s-10  	       3	 755420695 ns/op	        60.03 audio_s	        79.47 xRT
+BenchmarkTranscribe/parakeet-v3-multi
+BenchmarkTranscribe/parakeet-v3-multi/len02s
+BenchmarkTranscribe/parakeet-v3-multi/len02s-10 	       3	  70197750 ns/op	         2.497 audio_s	        35.57 xRT
+BenchmarkTranscribe/parakeet-v3-multi/len11s
+BenchmarkTranscribe/parakeet-v3-multi/len11s-10 	       3	 220401528 ns/op	        11.49 audio_s	        52.13 xRT
+BenchmarkTranscribe/parakeet-v3-multi/len27s
+BenchmarkTranscribe/parakeet-v3-multi/len27s-10 	       3	 525904806 ns/op	        27.04 audio_s	        51.42 xRT
+BenchmarkTranscribe/parakeet-v3-multi/len60s
+BenchmarkTranscribe/parakeet-v3-multi/len60s-10 	       3	1294661861 ns/op	        60.03 audio_s	        46.37 xRT
+BenchmarkTranscribe/whisper-turbo-q5
+BenchmarkTranscribe/whisper-turbo-q5/len02s/auto
+BenchmarkTranscribe/whisper-turbo-q5/len02s/auto-10         	       3	1744380375 ns/op	         2.497 audio_s	         1.431 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len02s/en
+BenchmarkTranscribe/whisper-turbo-q5/len02s/en-10           	       3	 892407097 ns/op	         2.497 audio_s	         2.798 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len11s/auto
+BenchmarkTranscribe/whisper-turbo-q5/len11s/auto-10         	       3	1824521903 ns/op	        11.49 audio_s	         6.298 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len11s/en
+BenchmarkTranscribe/whisper-turbo-q5/len11s/en-10           	       3	 966656097 ns/op	        11.49 audio_s	        11.89 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len27s/auto
+BenchmarkTranscribe/whisper-turbo-q5/len27s/auto-10         	       3	2150971611 ns/op	        27.04 audio_s	        12.57 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len27s/en
+BenchmarkTranscribe/whisper-turbo-q5/len27s/en-10           	       3	1255482917 ns/op	        27.04 audio_s	        21.54 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len60s/auto
+BenchmarkTranscribe/whisper-turbo-q5/len60s/auto-10         	       3	4316135014 ns/op	        60.03 audio_s	        13.91 xRT
+BenchmarkTranscribe/whisper-turbo-q5/len60s/en
+BenchmarkTranscribe/whisper-turbo-q5/len60s/en-10           	       3	3322141292 ns/op	        60.03 audio_s	        18.07 xRT
+PASS
+ok  	zee/internal/localbench	83.162s

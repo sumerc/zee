@@ -44,10 +44,12 @@ against concurrent init/uninit across the two malgo contexts.
 
 ## Why Parakeet (local default), CPU, and which model
 
-> **Partly superseded** — Parakeet is still the local *English* default, but the
-> multilingual role moved from Parakeet v3 to Whisper in models-v2. The v3/v2
-> model claims below are kept as the reasoning that held at the time; see
-> "Why Whisper for multilingual" for what replaced them.
+> **Partly superseded** — Parakeet is still the local *English* default. The
+> multilingual role moved from Parakeet v3 to Whisper in models-v2, then split:
+> v3 is back as the opt-in *fast* multilingual model and Whisper is the coverage
+> default. The v2 claims below are kept as the reasoning that held at the time;
+> see "Why Whisper for multilingual" and "Parakeet v3 back as the fast
+> multilingual option" for what replaced them.
 
 zee runs NVIDIA NeMo **Parakeet** locally (via `parakeet.cpp`/`libparakeet`/ggml)
 as the default engine, with cloud providers (Groq, OpenAI, …) as accuracy/noise
@@ -76,7 +78,9 @@ model that used to crash) transcribe cleanly on Metal.
   8→**21x** (~2.6x). Per-utterance warm-daemon on a 10s clip: 110m 0.45→0.26 s,
   v3 1.25→**0.48 s**. The win scales with model size, so it's **marginal for the
   English 110m default** (both already sub-perceptible; fixed overhead dominates)
-  but **real for multilingual** (v3/Turkish) — the case that justifies Metal.
+  but **real for multilingual** (v3) — the case that justifies Metal. (This
+  entry originally wrote that as "v3/Turkish"; wrong — Turkish is not among v3's
+  25 languages. The Metal win on v3 is real, the Turkish framing never was.)
 - **Cold-start is paid once, not per utterance.** Shaders are embedded in
   `libggml-metal.a` (no shipped `.metallib` — single-binary intact) and the OS
   caches compiled pipelines, so the two-point fit put fixed overhead at ~0–0.3 s.
@@ -115,7 +119,10 @@ is ~4 MB and a relink when the C side changes — worth it for a drop-in app.
 - **Keep the multilingual model warm** — its ~2.4 s load must never land
   per-utterance. Load once at startup, transcribe per clip.
 - **Don't quantize for speed.** q4_k is ~26% *slower* on CPU (per-matmul dequant
-  vs the f16 Accelerate/AMX path); it's a footprint/load-time win only.
+  vs the f16 Accelerate/AMX path); it's a footprint/load-time win only. **Scoped
+  to CPU** — on the Metal backend the dequant penalty is gone, which is why
+  v3-q4_k is now both the smaller *and* the fast multilingual model (see
+  "Parakeet v3 back as the fast multilingual option").
 
 **What we tested (so read the WER as relative, not absolute):** a 9-sample
 corpus, 539 reference words — a mix of dictation-length clips plus one 350-word
@@ -188,6 +195,12 @@ icon's position in the bar already identifies the app, and the colour is the
 information.
 
 ## Why Whisper for multilingual (models-v2)
+
+> **Partly superseded** — the "Whisper strictly replaces v3" premise below did
+> not survive measurement. Whisper is still the multilingual *default* and the
+> coverage engine, but v3 came back as an opt-in fast path; see "Parakeet v3 back
+> as the fast multilingual option". Everything else here (auto-detect, q5_0, the
+> one-ggml-two-engines build, the `retiredIDs` hazard) still holds.
 
 Parakeet v3 was the offline multilingual model; **whisper large-v3-turbo q5_0**
 replaced it. Two models, two roles:
@@ -454,6 +467,82 @@ push-to-talk audio never trips the thresholds, so the ladder never runs.
 Kept enabled because it only costs when it fires, and when it fires it is
 rescuing quality on hard audio. Revisit if diagnostics ever show an
 `inference_ms` far above its `audio_s` peers (the stall signature).
+
+## Parakeet v3 back as the fast multilingual option (2026-07-26)
+
+models-v2 retired `parakeet-v3-multi` on the premise that Whisper *strictly*
+replaced it. That premise was never benchmarked head-to-head on M1 — the v3
+numbers in `benchmark.txt` were M5 only, and the M1 block above has Parakeet 110m
+and Whisper columns but no v3. Measured, the premise is wrong: v3 is **3–25×
+faster than Whisper** and only ~1.8× slower than the 110m English default. So v3
+is back, as an **opt-in download** (643 MB, `PreFetch: false` — install payload
+unchanged), and the registry is now three models in three *roles*:
+
+```
++-------------------+----------+--------+-------+----------+-------------------------+
+| Model             | Engine   | Size   | Langs | Fetch    | Role                    |
++-------------------+----------+--------+-------+----------+-------------------------+
+| parakeet-110m-en  | parakeet | 267 MB | en    | pre      | startup default, instant|
+| parakeet-v3-multi | parakeet | 643 MB | 25    | opt-in   | multilingual, fast      |
+| whisper-turbo-q5  | whisper  | 547 MB | ~99   | pre      | multilingual, coverage  |
++-------------------+----------+--------+-------+----------+-------------------------+
+```
+
+M1 Pro (10 cores), Metal, warm, best of 3, synthetic clips at the same durations
+as the M1 block above so the two are comparable. Whisper reproduced that block
+within noise (892 vs 947 ms at 2.5 s; 2151 vs 2164 ms auto at 27 s), which is
+what makes the v3 column trustworthy:
+
+```
++--------+---------------+-------------+--------------+----------------+
+| Audio  | parakeet-110m | parakeet-v3 | whisper (en) | whisper (auto) |
++--------+---------------+-------------+--------------+----------------+
+| 2.5 s  |     40 ms     |    70 ms    |    892 ms    |    1744 ms     |
+| 11.5 s |    124 ms     |   220 ms    |    967 ms    |    1825 ms     |
+| 27 s   |    288 ms     |   526 ms    |   1255 ms    |    2151 ms     |
+| 60 s   |    755 ms     |  1295 ms    |   3322 ms    |    4316 ms     |
++--------+---------------+-------------+--------------+----------------+
+| v3 is  |   1.7–1.8x    |      —      |   2.4–12.7x  |   3.3–24.8x    |
+|        |    slower     |             |    faster    |     faster     |
++--------+---------------+-------------+--------------+----------------+
+```
+
+**The gap is widest exactly where dictation lives.** v3 scales ~linearly with
+audio length; Whisper is dominated by fixed cost per 30 s window, so at 2.5 s v3
+is 25× faster and at 60 s only 3.3×. For a 2–10 s utterance v3 is sub-perceptible
+(70–220 ms) where Whisper auto is 1.7–1.8 s — the difference between "instant"
+and "waiting".
+
+**Quantization is not the speed story here.** The older "don't quantize for
+speed — q4_k is ~26% *slower* on CPU" entry still holds *for CPU*: it measured
+per-matmul dequant against the f16 Accelerate/AMX path. On Metal that penalty is
+gone, so v3-q4_k being both the small *and* the fast multilingual option is not a
+contradiction with that entry — it is the Metal backend changing which axis
+dominates. Labels never mention quantization; users pick a role.
+
+**Why Whisper still owns the default.** Coverage, and it is not close: v3 does 25
+European languages, Whisper ~99. **Turkish is not in v3's 25** — a Turkish clip
+comes back as phonetic English mush ("Merhaba, bugün yerel…" → "Malhaba, Bugunieral
+Transcription Motor Larna…"), which is the failure mode to expect for any
+unsupported language: not an error, not a mislabel, just confident garbage. Since
+Turkish is a primary dictation language for this project's author, v3 cannot be
+the multilingual default. On languages v3 *does* cover it matched Whisper exactly
+on the repo fixtures (`test/data/fr.wav`, `ru.wav`, `en.wav` — one short sentence
+each, so this proves the language path works, it is not a WER ranking).
+
+Net: role-based labels rather than engine names, because the choice a user makes
+is "fast, or every language?" — not "Parakeet or Whisper?".
+
+**Picking a language explicitly is free quality and ~0.85 s of latency
+(re-verified 2026-07-26).** The models-v2 entry above found `-l tr` identical to
+`-l auto` on Turkish-with-English audio; re-checked on a fresh 37.7 s Turkish
+dictation with embedded English terms (`branch`, `pull rebase`, `Benchmark text`,
+`design notes`), `-lang tr` was **byte-identical** to auto-detect — and to the
+transcript the tray had already saved on auto. Cost of auto on the same clip:
+5072 ms vs 4231 ms best-of-3 (whole-process, so load included), an ~840 ms delta
+that matches the ~1.0 s detect pass measured earlier. Auto stays the default
+because the language is unknown before the user speaks, but a user who always
+dictates one language should set it: same text, ~0.85 s cheaper.
 
 ## Why whisper runs *with* timestamps, even though we only want text
 
