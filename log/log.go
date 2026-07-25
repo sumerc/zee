@@ -232,6 +232,18 @@ func HotkeyPress(downToUpMs float64, mode string) {
 	diagLog.Info().Float64("down_to_up_ms", downToUpMs).Str("mode", mode).Msg("hotkey_press")
 }
 
+// ReleaseToText records the one latency the user actually feels: hotkey release
+// (or silence auto-close) → text delivered to the clipboard/paste. It spans the
+// whole tail — mic tail-wait, device stop, encode, inference, network, paste — so
+// it is the number to watch for "why did that feel slow", and it is emitted for
+// batch and streaming providers alike, unlike the per-mode metrics lines.
+func ReleaseToText(ms float64) {
+	if !logReady.Load() {
+		return
+	}
+	diagLog.Info().Float64("release_to_text_ms", ms).Msg("felt_latency")
+}
+
 func TranscriptionText(text string) {
 	if !logReady.Load() || transcribeFile == nil {
 		return

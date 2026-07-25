@@ -107,6 +107,7 @@ type recordingConfig struct {
 	autoPaste       bool
 	tailWait        time.Duration // mic kept open after release so a fast keyup doesn't clip the last word
 	pressToRecordMs float64       // press→mic-live, filled at record start; logged with the transcription metrics
+	releasedAt      time.Time     // recording end, filled once it happens; start of the felt-latency metric
 }
 
 var configMu sync.Mutex
@@ -1165,6 +1166,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		cfg.pressToRecordMs = float64(time.Since(sess.PressedAt).Milliseconds())
 	}
 	rec.Wait()
+	cfg.releasedAt = rec.ReleasedAt()
 
 	if rec.totalFrames < uint64(encoder.SampleRate/10) {
 		tSess.Close()
@@ -1218,6 +1220,14 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 
 	if closeErr == nil && !cfg.stream && result.HasText && cfg.autoPaste && !skipPaste {
 		clip.PasteText(result.Text)
+	}
+
+	// The text is delivered by here on both paths — streamed pastes were joined
+	// at updatesDone above, the batch paste just happened — so this is the end of
+	// the wait the user perceives, whether it ended in a paste or in text they
+	// still have to hit Cmd+V for.
+	if closeErr == nil && result.HasText && !cfg.releasedAt.IsZero() {
+		log.ReleaseToText(float64(time.Since(cfg.releasedAt).Microseconds()) / 1000)
 	}
 
 	if cfg.autoPaste && !skipPaste {

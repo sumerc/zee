@@ -48,21 +48,17 @@ func Init() <-chan struct{} {
 	return quitCh
 }
 
-// setIcon installs a menu-bar icon. Every icon is a template image, so AppKit
-// derives the colour from the bar itself — there is no appearance to detect and
-// nothing to cache. This replaced a `defaults read -g AppleInterfaceStyle`
-// probe that was both wrong on Tahoe (the glass bar follows the wallpaper, not
-// the Light/Dark setting) and expensive to re-read, since forking is
-// copy-on-write over a process holding a multi-GB model.
-func setIcon(icon []byte) {
-	systray.SetTemplateIcon(icon, icon)
+// setIdleIcon installs the idle glyph. It is a template image, so AppKit picks
+// the contrast colour itself and it is correct on every bar without asking.
+func setIdleIcon() {
+	systray.SetTemplateIcon(iconIdle, iconIdle)
 }
 
 func updateRecordingIcon(rec bool) {
 	if rec {
-		setIcon(iconRec)
+		systray.SetIcon(iconRec)
 	} else {
-		setIcon(iconIdle)
+		setIdleIcon()
 	}
 	if mRecord != nil {
 		mRecord.SetTitle(recordTitle(rec))
@@ -119,17 +115,17 @@ func enableDevices() {
 
 func updateWarningIcon(on bool) {
 	if on {
-		setIcon(iconWarn)
+		systray.SetIcon(iconWarn)
 	} else {
-		setIcon(iconRec)
+		systray.SetIcon(iconRec)
 	}
 }
 
 func updateTranscribingIcon(on bool) {
 	if on {
-		setIcon(iconBusy)
+		systray.SetIcon(iconBusy)
 	} else {
-		setIcon(iconIdle)
+		setIdleIcon()
 	}
 }
 
@@ -210,7 +206,7 @@ func RefreshDevices(names []string, selected string) {
 }
 
 func onReady() {
-	setIcon(iconIdle)
+	setIdleIcon()
 	systray.SetTooltip("zee – push to talk")
 
 	mStatus = systray.AddMenuItem(statusText(), "")

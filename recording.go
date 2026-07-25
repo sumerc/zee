@@ -24,8 +24,14 @@ type recordingSession struct {
 	totalFrames uint64
 	stopped     bool
 	autoClosed  atomic.Bool
-	done        chan struct{}
-	closeOnce   sync.Once
+	// releasedAt (unix nanos) is when the user stopped talking — hotkey release,
+	// or the silence auto-close, whichever ended the recording. It is the start
+	// of the latency the user actually feels, so everything after it (tail wait,
+	// device stop, encode, inference, paste) is measured from here. Atomic
+	// because awaitStop and monitorSilence can reach the stop path concurrently.
+	releasedAt atomic.Int64
+	done       chan struct{}
+	closeOnce  sync.Once
 }
 
 func newRecordingSession(capture audio.CaptureDevice, stop <-chan struct{}, sess transcriber.Session, silenceClose *atomic.Bool, tailWait time.Duration) (*recordingSession, error) {
@@ -88,6 +94,7 @@ func (r *recordingSession) monitorSilence() {
 				log.Info("silence_during_warning")
 				audio.PlayError()
 			case SilenceAutoClose:
+				r.markReleased()
 				log.Info("silence_auto_close")
 				audio.PlayEnd()
 				tray.SetRecording(false)
@@ -105,6 +112,7 @@ func (r *recordingSession) awaitStop() {
 	case <-r.done:
 		return
 	}
+	r.markReleased()
 	log.Info("recording_stop")
 	audio.PlayEnd() // reflexive: sound the release before the tray/icon update (playOne is non-blocking)
 	tray.SetRecording(false)
@@ -118,6 +126,21 @@ func (r *recordingSession) awaitStop() {
 
 func (r *recordingSession) close() {
 	r.closeOnce.Do(func() { close(r.done) })
+}
+
+// markReleased stamps the moment recording ended, first writer wins: both stop
+// paths can run, and the earlier one is the instant the user stopped talking.
+func (r *recordingSession) markReleased() {
+	r.releasedAt.CompareAndSwap(0, time.Now().UnixNano())
+}
+
+// ReleasedAt reports when recording ended, or the zero time if it never did.
+func (r *recordingSession) ReleasedAt() time.Time {
+	ns := r.releasedAt.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
 }
 
 func (r *recordingSession) Wait() {
