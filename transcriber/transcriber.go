@@ -186,13 +186,15 @@ type ModelStatus struct {
 // provider is special-cased: New() and the tray treat them all through these
 // fields. Download is nil for providers that have nothing to fetch (cloud).
 type ProviderInfo struct {
-	Name      string
-	Label     string
-	Models    []ModelInfo
-	Available func() bool        // at least one model usable right now
-	New       func() Transcriber // keyless: closes over the key / model dir
-	Status    func(modelID string) ModelStatus
-	Download  func(modelID string, progress func(fraction float64)) error
+	Name         string
+	Label        string
+	Models       []ModelInfo
+	Local        bool               // on-device engine: keyless, models on disk
+	DefaultModel string             // the model a fresh instance loads (local only)
+	Available    func() bool        // at least one model usable right now
+	New          func() Transcriber // keyless: closes over the key / model dir
+	Status       func(modelID string) ModelStatus
+	Download     func(modelID string, progress func(fraction float64)) error
 }
 
 // keySource resolves a provider's API key by provider name (e.g. "groq" →

@@ -91,13 +91,14 @@ func step(n int, title string) {
 
 // results collects what each step actually proved, for the final summary.
 type results struct {
-	micGranted bool
-	micTested  bool
-	testPCM    []byte // the mic-test recording, reused to test cloud providers
-	combo      hotkey.Combo
-	comboFired bool
-	autoPaste  bool
-	axGranted  bool
+	micGranted  bool
+	micTested   bool
+	micProvider string // local provider the mic test verified ("" if none)
+	testPCM     []byte // the mic-test recording, reused to test cloud providers
+	combo       hotkey.Combo
+	comboFired  bool
+	autoPaste   bool
+	axGranted   bool
 }
 
 // begin is the shared Run/Doctor preamble: refuse to run alongside a live
@@ -166,6 +167,23 @@ func Run() int {
 
 func stepMic(r *results) {
 	step(1, "Microphone (required)")
+	// Kick the test engine load first, before any prompt: the model read and
+	// first-run GPU pipeline compile run in the background while the user works
+	// through the permission prompt, device choice, and the recording itself —
+	// so the transcription after "Heard:" feels instant instead of stalling.
+	// The engine is reused across retries — no reload per attempt.
+	var (
+		tr   transcriber.Transcriber
+		prov transcriber.ProviderInfo
+		lang string
+	)
+	if parakeet.Available() { // both offline engines share the darwin/arm64 gate
+		if p, l, ok := testEngine(); ok {
+			prov, lang = p, l
+			tr = p.New()
+			defer closeTranscriber(tr)
+		}
+	}
 	r.micGranted = micPermission()
 	chooseDevice()
 	if !r.micGranted {
@@ -175,10 +193,12 @@ func stepMic(r *results) {
 		fmt.Println("  No offline engine on this machine — skipping the live mic test.")
 		return
 	}
-	p, ok := providerByName("parakeet")
-	if !ok || !ensureModel(p, localmodel.ID110mEN) {
+	if tr == nil {
 		fmt.Println("  Skipping the live mic test (no local model).")
 		return
+	}
+	if lang == "" {
+		fmt.Println("  Speak in any language — Whisper (auto-detect)")
 	}
 	for {
 		pcm, err := record(4 * time.Second)
@@ -187,7 +207,7 @@ func stepMic(r *results) {
 			return
 		}
 		r.testPCM = pcm
-		text, err := transcribeLocal(p, pcm)
+		text, err := transcribePCM(tr, pcm, lang)
 		if err != nil {
 			fmt.Printf("  "+cross()+" transcription failed: %v\n", err)
 			return
@@ -198,6 +218,7 @@ func stepMic(r *results) {
 			fmt.Printf("  Heard: %q\n", text)
 			if askYesNo("  Is that roughly what you said?", true) {
 				r.micTested = true
+				r.micProvider = prov.Name
 				fmt.Println("  " + tick() + " microphone verified")
 				return
 			}
@@ -353,13 +374,19 @@ func closeTranscriber(tr transcriber.Transcriber) {
 	}
 }
 
-// transcribeLocal runs pcm through the local English model (loaded for the
-// test, freed right after — the gguf holds C memory the GC can't reclaim).
-func transcribeLocal(p transcriber.ProviderInfo, pcm []byte) (string, error) {
-	tr := p.New()
-	tr.SetModel(localmodel.ID110mEN)
-	defer closeTranscriber(tr)
-	return transcribePCM(tr, pcm, "en")
+// testEngine picks the engine for the live mic test: Whisper with auto-detect
+// (speak any language, and the one-time GPU warm-up is paid here in setup, not
+// on the first real dictation), falling back to the English Parakeet when the
+// whisper model is missing and the user declines the download. The returned
+// lang is "" for auto-detect, "en" for the fallback.
+func testEngine() (transcriber.ProviderInfo, string, bool) {
+	if p, ok := providerByName("whisper"); ok && ensureModel(p, localmodel.IDWhisperQ5) {
+		return p, "", true
+	}
+	if p, ok := providerByName("parakeet"); ok && ensureModel(p, localmodel.ID110mEN) {
+		return p, "en", true
+	}
+	return transcriber.ProviderInfo{}, "", false
 }
 
 // transcribePCM pushes pcm through the provider's normal session path and
@@ -570,12 +597,16 @@ func stepProviders(r *results) {
 	fmt.Println("  Settings → Edit Credentials… (re-run `zee setup` to add a tested provider).")
 	providers := transcriber.Providers()
 	// tested marks providers proven with real audio this run: the tick in the
-	// menu means "verified", not merely "configured". Parakeet earned its tick
-	// in the mic step; every cloud key already on disk is verified right here,
-	// before the menu shows, so the ticks reflect reality from the start.
-	tested := map[string]bool{"parakeet": r.micTested}
+	// menu means "verified", not merely "configured". The local engine used in
+	// the mic step earned its tick there; every cloud key already on disk is
+	// verified right here, before the menu shows, so the ticks reflect reality
+	// from the start.
+	tested := map[string]bool{}
+	if r.micProvider != "" {
+		tested[r.micProvider] = r.micTested
+	}
 	for _, p := range providers {
-		if p.Name != "parakeet" && config.HasAPIKey(p.Name) {
+		if !p.Local && config.HasAPIKey(p.Name) {
 			tested[p.Name] = testProvider(p, r.testPCM)
 		}
 	}
@@ -587,9 +618,9 @@ func stepProviders(r *results) {
 			switch {
 			case tested[p.Name] && p.Available():
 				label += " " + tick() // verified this run; says it all
-			case p.Name == "parakeet" && p.Available():
+			case p.Local && p.Available():
 				label += " — offline, ready"
-			case p.Name == "parakeet":
+			case p.Local:
 				label += " — offline, no key needed"
 			case config.HasAPIKey(p.Name):
 				label += " — key set"
@@ -609,12 +640,12 @@ func stepProviders(r *results) {
 			break
 		}
 		p := providers[idx]
-		if p.Name == "parakeet" {
-			if !parakeet.Available() {
-				fmt.Println("  The offline engine needs Apple Silicon; use a cloud provider on this machine.")
+		if p.Local {
+			if !parakeet.Available() { // one flag covers both offline engines
+				fmt.Println("  The offline engines need Apple Silicon; use a cloud provider on this machine.")
 				continue
 			}
-			ensureModel(p, defaultLocalModelID())
+			ensureModel(p, localDefaultModel(p))
 			continue
 		}
 		changed, backedOut := promptAPIKey(p)
@@ -704,11 +735,14 @@ func testProvider(p transcriber.ProviderInfo, pcm []byte) bool {
 
 // defaultLocalModelID is the saved model when it's a local one, else the 110M
 // English default.
-func defaultLocalModelID() string {
-	if id := config.Get().Model; id != "" && config.Get().Provider == "parakeet" {
+// localDefaultModel is the model the wizard ensures for a local provider: the
+// user's persisted choice when it belongs to this provider, else the
+// provider's own default.
+func localDefaultModel(p transcriber.ProviderInfo) string {
+	if id := config.Get().Model; id != "" && config.Get().Provider == p.Name {
 		return id
 	}
-	return localmodel.ID110mEN
+	return p.DefaultModel
 }
 
 func providerByName(name string) (transcriber.ProviderInfo, bool) {

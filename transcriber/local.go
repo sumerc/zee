@@ -81,9 +81,11 @@ func localProviderInfo(name, label, defaultID, defaultLang string, compiledIn bo
 
 	models := localModels(name)
 	return ProviderInfo{
-		Name:   name,
-		Label:  label,
-		Models: modelInfos(models, langsFor),
+		Name:         name,
+		Label:        label,
+		Models:       modelInfos(models, langsFor),
+		Local:        true,
+		DefaultModel: defaultID,
 		Available: func() bool {
 			m, ok := localmodel.ByID(defaultID)
 			return compiledIn && ok && localmodel.Present(m)

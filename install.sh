@@ -139,8 +139,18 @@ MANIFEST_URL="https://raw.githubusercontent.com/${REPO}/main/localmodel/manifest
 prefetch_models() {
   mkdir -p "$MODELS_DIR" || err "cannot create ${MODELS_DIR}"
   local manifest f sum dest
-  manifest="$(curl -fsSL "$MANIFEST_URL")" \
-    || err "model manifest unavailable: ${MANIFEST_URL}"
+  # Dev flow (DMG_PATH): read the manifest from the checkout next to this
+  # script, not from main — the local manifest matches the locally built
+  # binary's registry, while main's may describe an older or newer model set.
+  # Under `curl | bash` BASH_SOURCE is unset/not a file, so this never fires.
+  local local_manifest="$(dirname "${BASH_SOURCE[0]:-/nonexistent}")/localmodel/manifest.txt"
+  if [[ -n "$DMG_PATH" && -f "$local_manifest" ]]; then
+    log "Using local model manifest (dev install)"
+    manifest="$(cat "$local_manifest")"
+  else
+    manifest="$(curl -fsSL "$MANIFEST_URL")" \
+      || err "model manifest unavailable: ${MANIFEST_URL}"
+  fi
   # Each prefetch=true row: download the gguf from the release, verify its sha.
   while read -r f sum; do
     [[ -n "$f" ]] || continue
