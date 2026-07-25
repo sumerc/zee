@@ -224,7 +224,10 @@ func Providers() []ProviderInfo {
 	return []ProviderInfo{
 		// Local is first so it's the default on a fresh machine even when cloud
 		// keys are set; cloud is opt-in via the tray (the choice persists).
+		// Parakeet leads Whisper: it is the English fast path (4–9× faster) and
+		// the startup default, with Whisper the multilingual option next to it.
 		parakeetProvider(),
+		whisperProvider(),
 		cloudProvider("deepgram", "Deepgram", DeepgramModels, func(k string) Transcriber { return NewDeepgram(k) }),
 		cloudProvider("openai", "OpenAI", OpenAIModels, func(k string) Transcriber { return NewOpenAI(k) }),
 		cloudProvider("groq", "Groq", GroqModels, func(k string) Transcriber { return NewGroq(k) }),

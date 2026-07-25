@@ -3,7 +3,7 @@
 // of that registry:
 //
 //	localmodels download   fetch the prefetch models into the dev folder
-//	                       (models/parakeet/<Version>); used by `make build`.
+//	                       (models/local/<Version>); used by `make build`.
 //	localmodels manifest   print the registry as flat text (filename, sha256,
 //	                       prefetch) — written to localmodel/manifest.txt by
 //	                       `make manifest`, which install.sh reads.
@@ -38,7 +38,7 @@ func main() {
 // a failure warns but never fails the build (a dev may copy the ggufs in
 // manually, or the release isn't up yet).
 func download() {
-	dir := filepath.Join("models", "parakeet", localmodel.Version)
+	dir := filepath.Join("models", "local", localmodel.Version)
 	os.Setenv("ZEE_MODELS_DIR", dir) // force the dev folder regardless of cwd state
 
 	for _, m := range localmodel.All() {

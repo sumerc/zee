@@ -127,7 +127,7 @@ fi
 # The registry — filenames, hashes, and which models to pre-fetch — is generated
 # from localmodel.go into localmodel/manifest.txt and read here from main, so
 # nothing is hardcoded. Columns: filename<TAB>sha256<TAB>prefetch.
-MODELS_TAG="models-v1"
+MODELS_TAG="models-v2"
 MODELS_BASE="https://github.com/${REPO}/releases/download/${MODELS_TAG}"
 MODELS_DIR="${HOME}/Library/Application Support/zee/models"
 MANIFEST_URL="https://raw.githubusercontent.com/${REPO}/main/localmodel/manifest.txt"

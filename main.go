@@ -562,7 +562,12 @@ func run() {
 	})
 
 	tray.SetLanguage(*langFlag, func(code string, persist bool) {
-		if guardBusy("Can't change the language while recording or transcribing.") {
+		// Only a real user choice can be denied. Derived changes arrive with
+		// persist=false — a model-constraint fallback, a config-file reload,
+		// the language list being rebuilt — and must apply silently: they are
+		// just a string assignment (the in-flight session already captured its
+		// language), and denying one pops a modal at a user who did nothing.
+		if persist && guardBusy("Can't change the language while recording or transcribing.") {
 			return
 		}
 		configMu.Lock()
@@ -881,6 +886,10 @@ func guardBusy(warning string) bool {
 	if !isRecording.Load() {
 		return false
 	}
+	// Log every denial. Without this a dialog that appears without the user
+	// touching anything is untraceable: the alert names the action but nothing
+	// records which caller fired it or what the engine state was.
+	log.Warnf("denied (recording=true transcribing=%v): %s", isTranscribing.Load(), warning)
 	audio.PlayDenied()
 	if busyAlert.CompareAndSwap(false, true) {
 		go func() {

@@ -435,10 +435,10 @@ func TestClipboardRestoreOnError(t *testing.T) {
 // green on machines/CI without the local models.
 
 // localModelsDir is the dev gguf location relative to the test working dir
-// (<repo>/test): models live at <repo>/models/parakeet/<Version>.
+// (<repo>/test): models live at <repo>/models/local/<Version>.
 func localModelsDir(t *testing.T) string {
 	t.Helper()
-	dir, err := filepath.Abs(filepath.Join("..", "models", "parakeet", localmodel.Version))
+	dir, err := filepath.Abs(filepath.Join("..", "models", "local", localmodel.Version))
 	if err != nil {
 		t.Fatalf("resolve models dir: %v", err)
 	}

@@ -9,15 +9,35 @@ import (
 	"testing"
 	"time"
 	"zee/encoder"
+	"zee/localmodel"
 )
 
-// TestParakeetModelsMethodMatchesFunc pins the delegation: the (*Parakeet).Models
-// method and the package ParakeetModels function must return identical lists so
-// the tray and a loaded provider can never disagree on the model set.
+// TestParakeetModelsMethodMatchesFunc pins the delegation: a loaded Parakeet
+// provider's Models method and the package ParakeetModels function must return
+// identical lists so the tray and a loaded provider can never disagree on the
+// model set.
 func TestParakeetModelsMethodMatchesFunc(t *testing.T) {
-	p := &Parakeet{}
+	p := &localProvider{name: localmodel.EngineParakeet, langsFor: parakeetLanguages}
 	if got, want := p.Models(), ParakeetModels(); !reflect.DeepEqual(got, want) {
-		t.Errorf("Parakeet.Models() = %v, want %v (must delegate to ParakeetModels)", got, want)
+		t.Errorf("localProvider.Models() = %v, want %v (must delegate to ParakeetModels)", got, want)
+	}
+}
+
+// TestModelsAreEngineScoped guards the split introduced with Whisper: each local
+// provider must expose only its own engine's models, or the tray would offer a
+// gguf to the engine that cannot load it.
+func TestModelsAreEngineScoped(t *testing.T) {
+	for _, tc := range []struct{ engine string }{
+		{localmodel.EngineParakeet}, {localmodel.EngineWhisper},
+	} {
+		for _, m := range localModels(tc.engine) {
+			if m.Engine != tc.engine {
+				t.Errorf("localModels(%q) returned %q with engine %q", tc.engine, m.ID, m.Engine)
+			}
+		}
+	}
+	if len(localModels(localmodel.EngineWhisper)) == 0 {
+		t.Error("no whisper models in the registry")
 	}
 }
 
@@ -158,7 +178,10 @@ func TestBatchSessionFeedAndClose(t *testing.T) {
 	}
 
 	// Drain updates — channel closed by Close()
-	go func() { for range bs.Updates() {} }()
+	go func() {
+		for range bs.Updates() {
+		}
+	}()
 
 	nSamples := encoder.BlockSize + encoder.BlockSize/2
 	pcm := make([]byte, nSamples*2)

@@ -1,6 +1,6 @@
 //go:build darwin && arm64
 
-package parakeet_test
+package localbench_test
 
 import (
 	"os"
@@ -11,12 +11,14 @@ import (
 
 	"zee/audio"
 	"zee/internal/parakeet"
+	"zee/internal/whisper"
 	"zee/localmodel"
 )
 
-// Benchmarks the local Parakeet engine directly — model load + Transcribe, with
-// no capture, encoder, network or CLI in the way. This is the isolated-inference
-// counterpart to the end-to-end `zee -benchmark` flow.
+// Benchmarks the on-device engines directly — model load + Transcribe, with no
+// capture, encoder, network or CLI in the way. This is the isolated-inference
+// counterpart to the end-to-end `zee -benchmark` flow. Every registry model is
+// covered, Parakeet and Whisper alike, each loaded by its own backend.
 //
 //	make bench-local                      # bundled test/data/short.wav
 //	make bench-local WAV=~/clips/a.wav    # one custom clip
@@ -101,6 +103,51 @@ func loadPCM(tb testing.TB, path string) []float32 {
 	return audio.PCMToF32(pcm)
 }
 
+// transcribeFn runs one inference at the given language. Parakeet ignores lang
+// (its C-API has no such parameter); whisper honours it.
+type transcribeFn func(pcm []float32, lang string) (string, error)
+
+// openEngine loads a model with whichever backend owns it, returning a uniform
+// transcribe closure plus a cleanup, so the timing loop below is identical for
+// both engines. New() warms up in both cases, so every timed run is steady state.
+func openEngine(b *testing.B, m localmodel.Model) (transcribeFn, func()) {
+	b.Helper()
+	switch m.Engine {
+	case localmodel.EngineWhisper:
+		ctx, err := whisper.New(localmodel.Path(m))
+		if err != nil {
+			b.Fatalf("load %s: %v", m.ID, err)
+		}
+		return ctx.Transcribe, ctx.Close
+	default:
+		ctx, err := parakeet.New(localmodel.Path(m))
+		if err != nil {
+			b.Fatalf("load %s: %v", m.ID, err)
+		}
+		return func(pcm []float32, _ string) (string, error) {
+			return ctx.Transcribe(pcm, m.Decoder)
+		}, ctx.Close
+	}
+}
+
+// variant is one language mode to measure for a model.
+type variant struct {
+	label string // "" = no extra sub-benchmark level
+	lang  string
+}
+
+// variantsFor decides which language modes to time. Parakeet has exactly one.
+// Whisper is measured twice on purpose: "auto" is what actually ships (and pays
+// a second encoder pass to detect the language), while "en" is the only number
+// comparable with parakeet's single pass. Reporting just one of them would
+// either hide the shipped cost or make the engines look falsely far apart.
+func variantsFor(m localmodel.Model) []variant {
+	if m.Engine == localmodel.EngineWhisper {
+		return []variant{{"auto", ""}, {"en", "en"}}
+	}
+	return []variant{{"", ""}}
+}
+
 func BenchmarkTranscribe(b *testing.B) {
 	clips := benchClips(b)
 
@@ -110,33 +157,34 @@ func BenchmarkTranscribe(b *testing.B) {
 			continue
 		}
 		b.Run(m.ID, func(b *testing.B) {
-			// Load once per model, outside the timer: New() also warms up
-			// (a throwaway transcribe), so every timed run is steady-state.
-			ctx, err := parakeet.New(localmodel.Path(m))
-			if err != nil {
-				b.Fatalf("load %s: %v", m.ID, err)
-			}
-			defer ctx.Close()
+			transcribe, closeEngine := openEngine(b, m)
+			defer closeEngine()
 
 			for _, clip := range clips {
-				b.Run(clipName(clip), func(b *testing.B) {
-					// Loaded inside the sub-benchmark so an unusable clip skips
-					// only itself, and reset below so decode isn't timed.
-					pcm := loadPCM(b, clip)
-					audioSec := float64(len(pcm)) / 16000
-					b.ResetTimer()
-					for i := 0; i < b.N; i++ {
-						if _, err := ctx.Transcribe(pcm, m.Decoder); err != nil {
-							b.Fatalf("transcribe: %v", err)
-						}
+				for _, v := range variantsFor(m) {
+					name := clipName(clip)
+					if v.label != "" {
+						name += "/" + v.label
 					}
-					b.StopTimer()
-					// Realtime factor: audio seconds processed per wall second.
-					// Higher is faster; comparable across clips of any length.
-					secPerOp := b.Elapsed().Seconds() / float64(b.N)
-					b.ReportMetric(audioSec/secPerOp, "xRT")
-					b.ReportMetric(audioSec, "audio_s")
-				})
+					b.Run(name, func(b *testing.B) {
+						// Loaded inside the sub-benchmark so an unusable clip skips
+						// only itself, and reset below so decode isn't timed.
+						pcm := loadPCM(b, clip)
+						audioSec := float64(len(pcm)) / 16000
+						b.ResetTimer()
+						for i := 0; i < b.N; i++ {
+							if _, err := transcribe(pcm, v.lang); err != nil {
+								b.Fatalf("transcribe: %v", err)
+							}
+						}
+						b.StopTimer()
+						// Realtime factor: audio seconds processed per wall second.
+						// Higher is faster; comparable across clips of any length.
+						secPerOp := b.Elapsed().Seconds() / float64(b.N)
+						b.ReportMetric(audioSec/secPerOp, "xRT")
+						b.ReportMetric(audioSec, "audio_s")
+					})
+				}
 			}
 		})
 	}

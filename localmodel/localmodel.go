@@ -27,29 +27,46 @@ import (
 // Version is the pinned model-set version. It drives BOTH the download tag and
 // the dev folder, so they never drift (decision #5: models are pinned to the
 // binary, never "latest"). Bump it when the parakeet.cpp commit changes.
-const Version = "v1"
+const Version = "v2"
 
 // baseURL hosts the immutable models-<Version> release assets.
 const baseURL = "https://github.com/sumerc/zee/releases/download/models-" + Version + "/"
 
-// Model IDs (stable; persisted in config.json and shown in the tray).
+// Engine names the local backend that loads a model. It picks the cgo wrapper
+// (internal/parakeet vs internal/whisper) and, with it, the model's language
+// behaviour — parakeet has no language parameter at all, whisper takes one.
 const (
-	ID110mEN  = "parakeet-110m-en"     // default, English-only, loaded at startup
-	IDV3Multi = "parakeet-v3-multi"    // multilingual (25 lang), pre-fetched
-	IDV2Large = "parakeet-v2-en-large" // English long-form, opt-in download
+	EngineParakeet = "parakeet"
+	EngineWhisper  = "whisper"
 )
 
-// Model is one downloadable GGUF plus everything zee needs to load, route to,
-// and verify it.
+// Model IDs (stable; persisted in config.json and shown in the tray).
+const (
+	ID110mEN    = "parakeet-110m-en" // default, English-only, loaded at startup
+	IDWhisperQ5 = "whisper-turbo-q5" // multilingual, pre-fetched
+)
+
+// retiredIDs maps model IDs that no longer exist to their successor, so a
+// config.json written by an older build still resolves instead of erroring on
+// the user's first recording. The successor keeps the same role — a
+// multilingual user must not be silently downgraded to an English-only model.
+var retiredIDs = map[string]string{
+	"parakeet-v3-multi":    IDWhisperQ5, // multilingual slot, retired in models-v2
+	"parakeet-v2-en-large": ID110mEN,    // English slot, retired in models-v2
+}
+
+// Model is one downloadable model file plus everything zee needs to load, route
+// to, and verify it.
 type Model struct {
 	ID           string
 	Label        string
+	Engine       string // EngineParakeet | EngineWhisper
 	Filename     string
 	SHA256       string
 	SizeBytes    int64
-	Decoder      int  // parakeet head: 0=default, 1=ctc, 2=tdt
-	Multilingual bool // true => non-English supported (v3); false => English-only
-	PreFetch     bool // install.sh pre-fetches it (110m + v3); v2 never
+	Decoder      int  // parakeet head: 0=default, 1=ctc, 2=tdt (ignored by whisper)
+	Multilingual bool // true => non-English supported; false => English-only
+	PreFetch     bool // install.sh pre-fetches it (currently every model)
 }
 
 // URL is where the gguf is hosted under the pinned models tag.
@@ -63,12 +80,20 @@ func (m Model) HumanSize() string {
 	return fmt.Sprintf("%d MB", m.SizeBytes>>20)
 }
 
-// models is ordered: default first, then the pre-fetched multilingual option,
-// then the opt-in large English model.
+// models is ordered: default first, then the multilingual option. Two models,
+// two roles, both pre-fetched: Parakeet is the instant English path, Whisper
+// covers every other language (and English when accuracy beats latency).
+//
+// models-v2 retired the other parakeets (see retiredIDs): v3-multi because
+// Whisper strictly replaces it, v2-en-large because the 110m already covers
+// English well. Whisper is quantized q5_0: measured against f16 on real saved
+// clips it is a wash on both latency and transcription quality, while being
+// ~1 GB smaller.
 var models = []Model{
 	{
 		ID:        ID110mEN,
 		Label:     "Parakeet 110M (English)",
+		Engine:    EngineParakeet,
 		Filename:  "tdt_ctc-110m-f16.gguf",
 		SHA256:    "7f9a6376edde6a74592ace48b2ebdc27a1ac972d0be9dfcc29e668d99381faf1",
 		SizeBytes: 267452544,
@@ -76,23 +101,14 @@ var models = []Model{
 		PreFetch:  true,
 	},
 	{
-		ID:           IDV3Multi,
-		Label:        "Parakeet 0.6B v3 (multilingual)",
-		Filename:     "tdt-0.6b-v3-q4_k.gguf",
-		SHA256:       "993d73feb4206dadda865ab25bd64b50c48dc4d013c3bf6126a721f28b1d5ee8",
-		SizeBytes:    675200864,
-		Decoder:      0, // default head
+		ID:           IDWhisperQ5,
+		Label:        "Whisper large-v3 turbo (multilingual)",
+		Engine:       EngineWhisper,
+		Filename:     "ggml-large-v3-turbo-q5_0.bin",
+		SHA256:       "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+		SizeBytes:    574041195,
 		Multilingual: true,
 		PreFetch:     true,
-	},
-	{
-		ID:        IDV2Large,
-		Label:     "Parakeet 0.6B v2 (English, large)",
-		Filename:  "tdt-0.6b-v2-f16.gguf",
-		SHA256:    "f8df7f5dc7b9ceb5cd0637a81194aab5d93022ace555ce81c8969c7a694b8f3d",
-		SizeBytes: 1404218656,
-		Decoder:   0, // default head
-		PreFetch:  false,
 	},
 }
 
@@ -114,8 +130,12 @@ func Manifest() string {
 	return b.String()
 }
 
-// ByID looks up a model by its stable ID.
+// ByID looks up a model by its stable ID, following retiredIDs first so a saved
+// config from an older build still resolves.
 func ByID(id string) (Model, bool) {
+	if successor, ok := retiredIDs[id]; ok {
+		id = successor
+	}
 	for _, m := range models {
 		if m.ID == id {
 			return m, true
@@ -130,7 +150,7 @@ func Default() Model { m, _ := ByID(ID110mEN); return m }
 // Dir is where ggufs live, in priority order:
 //   - $ZEE_MODELS_DIR override (set by `make download-models` and the tests);
 //   - dev builds: the versioned folder next to the binary,
-//     <exe dir>/models/parakeet/<Version>, when it exists (populated by
+//     <exe dir>/models/local/<Version>, when it exists (populated by
 //     `make download-models`) — resolved against the executable, not the cwd, so
 //     `./zee` finds it from any working directory;
 //   - otherwise the stable per-user <config dir>/models (the .app bundle and
@@ -141,7 +161,7 @@ func Dir() string {
 	}
 	if !config.IsAppBundle() {
 		if exe, err := os.Executable(); err == nil {
-			dev := filepath.Join(filepath.Dir(exe), "models", "parakeet", Version)
+			dev := filepath.Join(filepath.Dir(exe), "models", "local", Version)
 			if fi, err := os.Stat(dev); err == nil && fi.IsDir() {
 				return dev
 			}
