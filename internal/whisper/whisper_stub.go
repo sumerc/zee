@@ -17,6 +17,6 @@ var errUnavailable = errors.New("whisper: local transcription is only available 
 
 func New(string) (*Ctx, error) { return nil, errUnavailable }
 
-func (c *Ctx) Transcribe([]float32, string) (string, error) { return "", errUnavailable }
+func (c *Ctx) Transcribe([]float32, string, string) (string, error) { return "", errUnavailable }
 
 func (c *Ctx) Close() {}

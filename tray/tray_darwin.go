@@ -248,6 +248,12 @@ func onReady() {
 		}
 	})
 
+	// systray can only put a real separator in the top-level menu, so submenus
+	// draw their own from a disabled item (see the divider below Credentials).
+	// This one closes off the toggles, leaving the file editors below it.
+	sepToggles := mSettings.AddSubMenuItem("─────────", "")
+	sepToggles.Disable()
+
 	mEditHints = mSettings.AddSubMenuItem("Edit Hints…", "Edit vocabulary hints file")
 	mEditHints.Click(func() {
 		if editHintsCb != nil {
