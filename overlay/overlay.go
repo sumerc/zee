@@ -45,8 +45,8 @@ const Levels = 30
 // Show reveals the overlay, expanding it out of the notch with an empty meter
 // and back in the Recording state — a session that ended while silent must not
 // reopen still saying so. It is idempotent and safe from any goroutine, as is
-// every other call in this package. The panel always opens top-centre on the
-// main display; the user can drag it elsewhere for the life of that session.
+// every other call in this package. The panel is fixed top-centre on the main
+// display and ignores the mouse.
 func Show() {
 	SetState(Recording)
 	show()

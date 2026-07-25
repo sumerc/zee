@@ -183,7 +183,10 @@ static void buildPanel(void) {
 	gPanel.backgroundColor = [NSColor clearColor];
 	gPanel.hasShadow = NO;
 	gPanel.level = NSScreenSaverWindowLevel;
-	gPanel.movableByWindowBackground = YES; // user drags it wherever they like
+	// Fixed under the menu bar, and transparent to the mouse: it has nothing to
+	// click and nowhere to go, so it must never take a click from the window
+	// it happens to be covering.
+	gPanel.ignoresMouseEvents = YES;
 	gPanel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
 	                            NSWindowCollectionBehaviorStationary |
 	                            NSWindowCollectionBehaviorFullScreenAuxiliary |

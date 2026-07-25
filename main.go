@@ -942,7 +942,6 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		}
 		if done != nil {
 			isTranscribing.Store(true)
-			tray.SetTranscribing(true) // blue status dot while inference runs
 			overlay.SetState(overlay.Transcribing)
 			<-done // hold isRecording too — blocks re-record
 			isTranscribing.Store(false)

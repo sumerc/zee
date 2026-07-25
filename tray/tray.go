@@ -35,14 +35,13 @@ var (
 	recordFn   func()
 	stopFn     func()
 
-	// trayMu guards all mutable tray state below (recording/warning, the device
+	// trayMu guards all mutable tray state below (recording, the device
 	// list, the model list, the language fields, the hints toggle). It is held
 	// only around field reads/writes — never across a systray update or a
 	// callback, both of which re-enter these accessors and would deadlock.
 	trayMu sync.Mutex
 
 	recording bool
-	warning   bool
 
 	deviceNames []string
 	deviceSel   string
@@ -95,12 +94,15 @@ func SetLogin(on bool) {
 	updateLoginItem(on)
 }
 
+// SetRecording flips the menu between start and stop, and locks the device and
+// backend pickers for the duration — switching either mid-recording would pull
+// the ground out from under the session. The menu bar glyph does not change:
+// the overlay is what tells the user a recording is running.
 func SetRecording(rec bool) {
 	trayMu.Lock()
 	recording = rec
-	warning = false
 	trayMu.Unlock()
-	updateRecordingIcon(rec)
+	updateRecordItem(rec)
 	if rec {
 		disableDevices()
 		disableBackend()
@@ -108,23 +110,6 @@ func SetRecording(rec bool) {
 		enableDevices()
 		enableBackend()
 	}
-}
-
-func SetWarning(on bool) {
-	trayMu.Lock()
-	if !recording {
-		trayMu.Unlock()
-		return
-	}
-	warning = on
-	trayMu.Unlock()
-	updateWarningIcon(on)
-}
-
-// SetTranscribing shows the "transcription in progress" icon (a blue status
-// dot). The icon returns to idle on the next SetRecording(false).
-func SetTranscribing(on bool) {
-	updateTranscribingIcon(on)
 }
 
 func SetError(msg string) {

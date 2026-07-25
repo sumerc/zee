@@ -301,11 +301,9 @@ func (r *recordingSession) monitorSilence() {
 			switch r.mon.Tick(r.vp.HasSpeechTick()) {
 			case SilenceWarn:
 				log.Info("no_voice_warning")
-				tray.SetWarning(true)
 				overlay.SetState(overlay.Silent)
 				audio.PlayError()
 			case SilenceWarnClear:
-				tray.SetWarning(false)
 				overlay.SetState(overlay.Recording)
 			case SilenceRepeat:
 				log.Info("silence_during_warning")

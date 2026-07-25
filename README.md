@@ -118,7 +118,7 @@ If permissions aren't granted, zee will fail silently or the hotkey won't regist
 ```bash
 make test                                      # unit tests
 make test-integration                          # integration tests (builds binary, requires GROQ_API_KEY)
-make integration-test WAV=test/data/short.wav  # single-file integration test (requires GROQ_API_KEY)
+make test-integration                          # end-to-end tests (requires GROQ_API_KEY)
 make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 ```
 

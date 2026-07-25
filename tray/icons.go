@@ -4,20 +4,10 @@ package tray
 
 import _ "embed"
 
-// Idle is a template image (shape only — AppKit tints it to match the bar). The
-// state icons are the opposite: a single saturated dot, which reads on a light
-// and a dark bar alike, so they ship untinted and unvaried. Regenerate with
-// `go run ./packaging/mktrayicons`.
-var (
-	//go:embed icon_idle.png
-	iconIdle []byte
-
-	//go:embed icon_rec.png
-	iconRec []byte
-
-	//go:embed icon_warn.png
-	iconWarn []byte
-
-	//go:embed icon_busy.png
-	iconBusy []byte
-)
+// The tray shows one glyph and never changes it. What the app is doing is the
+// overlay's job now — it says so in words, in front of the user, instead of
+// asking them to notice a coloured dot in the menu bar. This is a template
+// image, so AppKit tints it to match the bar without being asked.
+//
+//go:embed icon.png
+var icon []byte

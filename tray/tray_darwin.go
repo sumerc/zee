@@ -48,18 +48,7 @@ func Init() <-chan struct{} {
 	return quitCh
 }
 
-// setIdleIcon installs the idle glyph. It is a template image, so AppKit picks
-// the contrast colour itself and it is correct on every bar without asking.
-func setIdleIcon() {
-	systray.SetTemplateIcon(iconIdle, iconIdle)
-}
-
-func updateRecordingIcon(rec bool) {
-	if rec {
-		systray.SetIcon(iconRec)
-	} else {
-		setIdleIcon()
-	}
+func updateRecordItem(rec bool) {
 	if mRecord != nil {
 		mRecord.SetTitle(recordTitle(rec))
 	}
@@ -110,22 +99,6 @@ func disableDevices() {
 func enableDevices() {
 	if mDevices != nil {
 		mDevices.Enable()
-	}
-}
-
-func updateWarningIcon(on bool) {
-	if on {
-		systray.SetIcon(iconWarn)
-	} else {
-		systray.SetIcon(iconRec)
-	}
-}
-
-func updateTranscribingIcon(on bool) {
-	if on {
-		systray.SetIcon(iconBusy)
-	} else {
-		setIdleIcon()
 	}
 }
 
@@ -206,7 +179,7 @@ func RefreshDevices(names []string, selected string) {
 }
 
 func onReady() {
-	setIdleIcon()
+	systray.SetTemplateIcon(icon, icon)
 	systray.SetTooltip("zee – push to talk")
 
 	mStatus = systray.AddMenuItem(statusText(), "")

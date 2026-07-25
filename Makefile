@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark bench-local bench-save integration-test clean bump-version release icns app parakeet-lib whisper-lib download-models manifest model-release
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark bench-local bench-save clean bump-version release icns app parakeet-lib whisper-lib download-models manifest model-release
 
 # --match 'v*' keeps model-release tags (models-vN) out of the app version.
 VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo "dev")
@@ -97,12 +97,6 @@ build-linux-arm64:
 
 test: whisper-lib
 	$(CGO_ENV) go test -race -v ./...
-
-integration-test: whisper-lib
-	@test -n "$(WAV)" || (echo "Usage: make integration-test WAV=file.wav" && exit 1)
-	@if [ -f .env ]; then export $$(grep -v '^#' .env | xargs); fi; \
-	test -n "$$GROQ_API_KEY" || (echo "Error: GROQ_API_KEY not set (create .env or export it)" && exit 1); \
-	$(CGO_ENV) go run test/integration_test.go $(WAV)
 
 benchmark: build
 	@test -n "$(WAV)" || (echo "Usage: make benchmark WAV=file.wav [RUNS=5]" && exit 1)

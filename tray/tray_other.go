@@ -5,9 +5,7 @@ package tray
 func Init() <-chan struct{}                          { return make(chan struct{}) }
 func RefreshDevices(names []string, selected string) {}
 func refreshLanguageMenu()                           {}
-func updateRecordingIcon(bool)                       {}
-func updateWarningIcon(bool)                         {}
-func updateTranscribingIcon(bool)                    {}
+func updateRecordItem(bool)                          {}
 func updateTooltip(string)                           {}
 func updateCopyLastTitle(string)                     {}
 func addUpdateMenuItem(string)                       {}

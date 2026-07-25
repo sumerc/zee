@@ -33,7 +33,7 @@ Local dev DMG: `make app` produces `Zee-<version>.dmg`; drag to `/Applications`.
 
 ```bash
 make test                             # unit tests
-make integration-test WAV=test/data/short.wav  # requires GROQ_API_KEY
+make test-integration                 # end-to-end tests (requires GROQ_API_KEY)
 make benchmark WAV=file.wav RUNS=5    # end-to-end (encode + provider + network)
 make bench-local                      # local inference only, no network
 ```
