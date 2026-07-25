@@ -42,17 +42,20 @@ const (
 
 // Model IDs (stable; persisted in config.json and shown in the tray).
 const (
-	ID110mEN    = "parakeet-110m-en" // default, English-only, loaded at startup
-	IDWhisperQ5 = "whisper-turbo-q5" // multilingual, pre-fetched
+	ID110mEN    = "parakeet-110m-en"  // default, English-only, loaded at startup
+	IDWhisperQ5 = "whisper-turbo-q5"  // multilingual, pre-fetched
+	IDV3Multi   = "parakeet-v3-multi" // multilingual fast path, opt-in download
 )
 
 // retiredIDs maps model IDs that no longer exist to their successor, so a
 // config.json written by an older build still resolves instead of erroring on
 // the user's first recording. The successor keeps the same role — a
 // multilingual user must not be silently downgraded to an English-only model.
+// (v3-multi was retired in models-v2, then un-retired: on Metal it transcribes
+// dictation-length clips 8–17× faster than Whisper, which matters most on
+// M1-class machines. A config that migrated to Whisper meanwhile keeps Whisper.)
 var retiredIDs = map[string]string{
-	"parakeet-v3-multi":    IDWhisperQ5, // multilingual slot, retired in models-v2
-	"parakeet-v2-en-large": ID110mEN,    // English slot, retired in models-v2
+	"parakeet-v2-en-large": ID110mEN, // English slot, retired in models-v2
 }
 
 // Model is one downloadable model file plus everything zee needs to load, route
@@ -80,19 +83,21 @@ func (m Model) HumanSize() string {
 	return fmt.Sprintf("%d MB", m.SizeBytes>>20)
 }
 
-// models is ordered: default first, then the multilingual option. Two models,
-// two roles, both pre-fetched: Parakeet is the instant English path, Whisper
-// covers every other language (and English when accuracy beats latency).
+// models is ordered fastest-first, which is also the tray's display order.
+// Labels are role-based (what the model is *for*), not model names — users
+// pick "English, fastest" or "Multilingual", not a parakeet variant; the model
+// name rides along in parentheses for the few who know it. Three models, three
+// roles: Parakeet 110m is the instant English default, Parakeet v3 the fast
+// multilingual option (25 languages, opt-in download), Whisper the coverage
+// engine (~99 languages, and English when accuracy beats latency).
 //
-// models-v2 retired the other parakeets (see retiredIDs): v3-multi because
-// Whisper strictly replaces it, v2-en-large because the 110m already covers
-// English well. Whisper is quantized q5_0: measured against f16 on real saved
-// clips it is a wash on both latency and transcription quality, while being
-// ~1 GB smaller.
+// Quantization is deliberately absent from labels: v3 is q4_k (identical WER
+// to f32 on the parity clip, see parakeet.cpp docs/quantization.md), Whisper
+// q5_0 (measured a wash against f16 on latency and quality, ~1 GB smaller).
 var models = []Model{
 	{
 		ID:        ID110mEN,
-		Label:     "Parakeet 110M (English)",
+		Label:     "English — fastest (Parakeet 110M)",
 		Engine:    EngineParakeet,
 		Filename:  "tdt_ctc-110m-f16.gguf",
 		SHA256:    "7f9a6376edde6a74592ace48b2ebdc27a1ac972d0be9dfcc29e668d99381faf1",
@@ -101,8 +106,18 @@ var models = []Model{
 		PreFetch:  true,
 	},
 	{
+		ID:           IDV3Multi,
+		Label:        "Multilingual — fast (Parakeet v3, 25 languages)",
+		Engine:       EngineParakeet,
+		Filename:     "tdt-0.6b-v3-q4_k.gguf",
+		SHA256:       "993d73feb4206dadda865ab25bd64b50c48dc4d013c3bf6126a721f28b1d5ee8",
+		SizeBytes:    675200864,
+		Decoder:      0, // default head
+		Multilingual: true,
+	},
+	{
 		ID:           IDWhisperQ5,
-		Label:        "Whisper large-v3 turbo (multilingual)",
+		Label:        "Multilingual — most languages (Whisper, 99)",
 		Engine:       EngineWhisper,
 		Filename:     "ggml-large-v3-turbo-q5_0.bin",
 		SHA256:       "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",

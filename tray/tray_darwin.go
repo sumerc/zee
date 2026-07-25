@@ -321,17 +321,18 @@ func onReady() {
 	if len(models) > 0 {
 		mBackend = mSettings.AddSubMenuItem("Model", "Select transcription model")
 		modelItems = make([]*systray.MenuItem, len(models))
-		// models are grouped by provider (contiguous); one submenu per provider.
+		// models are grouped by Group (contiguous); one submenu per group. Both
+		// local engines share the "Local" group, each cloud provider is its own.
 		for i := 0; i < len(models); {
-			prov := models[i].Provider
+			group := models[i].Group
 			j, anyUsable := i, false
-			for j < len(models) && models[j].Provider == prov {
+			for j < len(models) && models[j].Group == group {
 				if models[j].State != ModelUnavailable {
 					anyUsable = true
 				}
 				j++
 			}
-			label := models[i].ProviderLabel
+			label := group
 			if !anyUsable {
 				label += " (no API key)"
 			}
@@ -359,6 +360,12 @@ func onReady() {
 					cb(mm.Provider, mm.ModelID)
 				})
 				modelItems[idx] = item
+			}
+			// Divide Local from the cloud providers (submenus can't hold real
+			// separators, so a disabled item stands in — same trick as Settings).
+			if group == "Local" && j < len(models) {
+				sep := mBackend.AddSubMenuItem("─────────", "")
+				sep.Disable()
 			}
 			i = j
 		}

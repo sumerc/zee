@@ -20,6 +20,7 @@ const (
 type Model struct {
 	Provider      string // e.g. "groq", "openai", "parakeet"
 	ProviderLabel string // e.g. "Groq"
+	Group         string // menu heading; contiguous entries sharing it render as one submenu (both local engines under "Local")
 	ModelID       string // e.g. "whisper-large-v3-turbo"
 	Label         string // model display name
 	State         ModelState
@@ -320,7 +321,7 @@ func statusText() string {
 	var provider, model string
 	for _, m := range models {
 		if m.Active {
-			provider = m.ProviderLabel
+			provider = m.Group
 			model = m.Label
 			break
 		}

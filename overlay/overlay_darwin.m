@@ -158,10 +158,14 @@ static void applyAccent(void) {
 	}
 }
 
-static void buildPanel(void) {
-	if (gPanel) return;
-
+// syncToScreen (re)computes everything that depends on which display is
+// primary: the notch strip, the panel frame, and the layer tree sized to it.
+// Runs on every show, not just at build — the screen list changes when
+// monitors are plugged or unplugged, and a frame computed for the old primary
+// display leaves the panel floating mid-screen on the new one.
+static void syncToScreen(void) {
 	NSScreen *screen = [NSScreen screens].firstObject;
+	if (!screen) return;
 	NSRect sf = screen.frame;
 	CGFloat menuBarH = NSMaxY(sf) - NSMaxY(screen.visibleFrame);
 	CGFloat safeTop = 0;
@@ -174,8 +178,27 @@ static void buildPanel(void) {
 	gTopBase = safeTop;
 	gPanelH = gTopBase + BODY_H;
 
-	NSRect frame = NSMakeRect(NSMidX(sf) - PANEL_W / 2, NSMaxY(sf) - gPanelH, PANEL_W, gPanelH);
-	gPanel = [[NSPanel alloc] initWithContentRect:frame
+	[gPanel setFrame:NSMakeRect(NSMidX(sf) - PANEL_W / 2, NSMaxY(sf) - gPanelH, PANEL_W, gPanelH)
+	         display:NO];
+
+	CGRect bounds = CGRectMake(0, 0, PANEL_W, gPanelH);
+	[CATransaction begin];
+	[CATransaction setDisableActions:YES];
+	gPanel.contentView.frame = bounds;
+	gPanel.contentView.layer.frame = bounds;
+	gShape.frame = bounds;
+	gContent.frame = bounds;
+	gMeter.frame = bounds;
+	gLabel.contentsScale = screen.backingScaleFactor;
+	layoutStatus((NSString *)gLabel.string ?: @"Recording");
+	layoutBars();
+	[CATransaction commit];
+}
+
+static void buildPanel(void) {
+	if (gPanel) return;
+
+	gPanel = [[NSPanel alloc] initWithContentRect:NSZeroRect
 	                                    styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
 	                                      backing:NSBackingStoreBuffered
 	                                        defer:NO];
@@ -193,18 +216,12 @@ static void buildPanel(void) {
 	                            NSWindowCollectionBehaviorIgnoresCycle;
 
 	CALayer *root = [CALayer layer];
-	root.frame = CGRectMake(0, 0, PANEL_W, gPanelH);
 
 	gShape = [CAShapeLayer layer];
-	gShape.frame = root.frame;
 	gShape.fillColor = [NSColor blackColor].CGColor;
-	CGPathRef collapsed = collapsedPath();
-	gShape.path = collapsed;
-	CGPathRelease(collapsed);
 	[root addSublayer:gShape];
 
 	gContent = [CALayer layer];
-	gContent.frame = root.frame;
 	gContent.opacity = 0;
 	[root addSublayer:gContent];
 
@@ -215,14 +232,12 @@ static void buildPanel(void) {
 	[gContent addSublayer:gDot];
 
 	gLabel = [CATextLayer layer];
-	gLabel.contentsScale = screen.backingScaleFactor;
 	gLabel.font = (CFTypeRef)labelFont();
 	gLabel.fontSize = FONT_SIZE;
 	gLabel.foregroundColor = [NSColor colorWithWhite:1.0 alpha:0.85].CGColor;
 	[gContent addSublayer:gLabel];
 
 	gMeter = [CALayer layer];
-	gMeter.frame = root.frame;
 	[gContent addSublayer:gMeter];
 
 	for (int i = 0; i < NBARS; i++) {
@@ -232,13 +247,16 @@ static void buildPanel(void) {
 	}
 
 	applyAccent();
-	layoutStatus(@"Recording");
-	layoutBars();
 
-	NSView *v = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, PANEL_W, gPanelH)];
+	NSView *v = [[NSView alloc] initWithFrame:NSZeroRect];
 	v.layer = root;
 	v.wantsLayer = YES;
 	gPanel.contentView = v;
+
+	syncToScreen();
+	CGPathRef collapsed = collapsedPath();
+	gShape.path = collapsed;
+	CGPathRelease(collapsed);
 }
 
 void zeeOverlayShow(void) {
@@ -247,6 +265,7 @@ void zeeOverlayShow(void) {
 		buildPanel();
 		if (gVisible) return;
 		gVisible = YES;
+		syncToScreen();
 
 		// Start from an empty meter — otherwise the panel reopens still showing
 		// the tail of the previous recording.

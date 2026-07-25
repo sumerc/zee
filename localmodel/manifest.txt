@@ -1,4 +1,5 @@
 # zee local model manifest — generated from localmodel.go (make manifest); do not edit by hand
 # filename	sha256	prefetch
 tdt_ctc-110m-f16.gguf	7f9a6376edde6a74592ace48b2ebdc27a1ac972d0be9dfcc29e668d99381faf1	true
+tdt-0.6b-v3-q4_k.gguf	993d73feb4206dadda865ab25bd64b50c48dc4d013c3bf6126a721f28b1d5ee8	false
 ggml-large-v3-turbo-q5_0.bin	394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2	true

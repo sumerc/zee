@@ -460,11 +460,18 @@ func run() {
 	var trayModels []tray.Model
 	modelIndex := map[string]transcriber.ModelInfo{}
 	for _, p := range transcriber.Providers() {
+		// Both local engines render under one "Local" heading in the tray —
+		// users pick a role ("English, fastest"), not an engine.
+		group := p.Label
+		if p.Local {
+			group = "Local"
+		}
 		for _, m := range p.Models {
 			st := p.Status(m.ID)
 			trayModels = append(trayModels, tray.Model{
 				Provider:      p.Name,
 				ProviderLabel: p.Label,
+				Group:         group,
 				ModelID:       m.ID,
 				Label:         m.Label,
 				State:         trayModelState(st),
