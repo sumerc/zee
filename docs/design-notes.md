@@ -376,3 +376,140 @@ push-to-talk audio never trips the thresholds, so the ladder never runs.
 Kept enabled because it only costs when it fires, and when it fires it is
 rescuing quality on hard audio. Revisit if diagnostics ever show an
 `inference_ms` far above its `audio_s` peers (the stall signature).
+
+## Why whisper runs *with* timestamps, even though we only want text
+
+`whisper_full` was called with `no_timestamps = true` — the obvious setting when
+the caller joins segment text and throws timings away. It silently drops audio.
+
+Under `no_timestamps`, whisper.cpp cannot recover from a decode that stops early:
+on EOT it forces `seek_delta = 30 s` (`whisper.cpp:7401`), so the window always
+jumps a full chunk no matter how little the model emitted, and it skips the
+"decoder failed → retry at a higher temperature" branch (`:7392`). With
+timestamps on, `seek_delta` comes from the last emitted timestamp token
+(`:7363`), so audio the model skipped is re-decoded by the next window — the
+loop self-heals. Known upstream, still open: whisper.cpp#2186.
+
+Measured on a 131 s Turkish dictation (`whisper-turbo-q5`, auto-detect). The
+final window (120 → 130.92 s) decoded into a 2-second hallucination and the loop
+moved on; 11 s of speech were gone. Deterministic, 3/3 runs.
+
+```
++---------------------------------------+-----------------------------------+
+| Variant                               | Result                            |
++---------------------------------------+-----------------------------------+
+| production (no_timestamps)            | tail lost, 3/3 runs               |
+| only change: timestamps on            | complete and clean                |
+| forced lang=tr                        | tail lost -> not a language issue |
+| failing window decoded alone          | correct -> audio is fine          |
+| q8_0 model, same params               | tail present but stutters         |
+| Groq cloud turbo (no such flag)       | complete                          |
+| English TTS, 131 s, no_timestamps     | repetition loop x15               |
++---------------------------------------+-----------------------------------+
+```
+
+Whole-file volume, same clip: 1593 chars with `no_timestamps` vs 1792 with
+timestamps — 11% of the transcript was missing, tail included but not only.
+
+Speed is a wash, and clip-dependent (wall, model load included, mean of 3):
+
+```
++----------+-----------------+--------------+---------+
+| Clip     | no_timestamps   | timestamps   | Delta   |
++----------+-----------------+--------------+---------+
+| 160 s    |     3.78 s      |    4.08 s    |  +8%    |
+| 131 s    |     4.24 s      |    3.57 s    | -16%    |
+| 27 s     |     1.55 s      |    1.55 s    |   0     |
++----------+-----------------+--------------+---------+
+```
+
+The 131 s clip is the one that was failing: its bad decode burned
+temperature-fallback retries, so fixing correctness also removed that work.
+Timestamp tokens otherwise cost a few percent on clean audio.
+
+Ruled out as causes: language, capture/VAD (per-second RMS over the lost span is
+a steady 190–350, i.e. continuous speech), cross-chunk prompt (`no_context` is
+already `true` by default), and quantization — q8_0 only makes the bad decode
+less likely, it does not remove the trap.
+
+No regression test ships with this: the failure is content-dependent, and a
+synthetic long clip (a short sample repeated to 131 s) reproduces nothing —
+whisper collapses repeated content in *both* modes. A fixture would have to be
+a real multi-minute recording. The manual reproducer lives in
+`whisper-tail-truncate-issue/` (probe harness + `findings.md`).
+
+`single_segment` shares the same `seek_delta = 30 s` branch and would resurrect
+this bug; do not set it.
+
+## Why hints reach Whisper but not Parakeet
+
+`hints.txt` used to stop at the cloud providers; the tray greyed the entry out
+for anything local. That conflated two different questions — "is this on-device?"
+and "can this engine be biased?" — so the gate is now `SupportsHints`, a
+per-engine capability. Whisper takes the same comma-separated string the cloud
+providers send as `prompt`, as `initial_prompt`. Parakeet cannot: a greedy
+CTC/TDT decode has no prompt to condition on.
+
+`carry_initial_prompt = true` goes with it. Without it whisper.cpp drops the
+hint into the *rolling* context (`whisper.cpp:6958`), where decoded text pushes
+it out — so a two-minute dictation is biased for its first 30 s and unbiased for
+the remaining 90. With it, the hint is pinned to the front of every window's
+prompt (`:6946`).
+
+Measured A/B on two saved Turkish dictations, same model, same audio, hints file
+the only difference:
+
+```
++-------------------------------+---------------------------+
+| No hints                      | With hints                |
++-------------------------------+---------------------------+
+| hangi *app'leri* kullanacağız | hangi *API'leri*          |
+| GitHub *Işığlarına* bakabilir | GitHub *issue'larına*     |
+| Whisper *Auto Detect*         | whisper *auto-detect*     |
++-------------------------------+---------------------------+
+```
+
+**The prompt's style bleeds into the transcript** — the same behaviour OpenAI
+documents for its `prompt` parameter, so this is not a local-only quirk. An
+all-lowercase hints file pulled "Z'nin Whisper" down to "zinin whisper"; a list
+of capitalised terms pushes mid-sentence capitals the other way. Punctuation
+follows the same rule. Write `hints.txt` the way the output should look.
+
+Ordinary prompt-conditioning side effects come with it (a repeated word at the
+end of one clip, a dropped comma). Biasing is a trade, not a free win — which is
+why it stays opt-in per user rather than being seeded with defaults.
+
+## Why whisper.cpp's built-in VAD is not enabled
+
+whisper.cpp v1.9 can run Silero VAD before decoding (`params.vad` +
+`vad_model_path`, an extra 864 KB ggml model): it detects speech, rebuilds the
+sample buffer with only the speech regions, and decodes that
+(`whisper.cpp:7779`). It is fully automatic — no segmentation code on our side.
+
+It buys nothing here. Measured on the saved dictations, best of 3, wall clock:
+
+```
++--------------------------+--------+--------+--------+-------------------+
+| Clip                     | no-VAD | VAD    | Delta  | Speech kept (VAD) |
++--------------------------+--------+--------+--------+-------------------+
+| 159.9 s                  | 4.10 s | 4.60 s | +12%   | 81%               |
+| 130.9 s                  | 4.09 s | 4.09 s |   0%   | 74%               |
+|  26.6 s                  | 1.58 s | 1.58 s |   0%   | 74%               |
+| 26.6 s + 30 s dead air   | 2.08 s | 2.08 s |   0%   | ~47%              |
++--------------------------+--------+--------+--------+-------------------+
+```
+
+VAD really does cut 19–26% of the audio, and on the synthetic clip more than
+half — and the decode still takes exactly as long. Whisper's cost tracks the
+number of *tokens decoded*, not the number of 30 s windows: a silent window
+emits EOT almost immediately and is nearly free, while the words spoken are the
+same either way. The Silero pass then adds its own cost on top, which is why the
+longest clip got *slower*.
+
+Transcript quality is unchanged (1762 vs 1792 chars on the 131 s clip, same
+content, tail intact both ways).
+
+So: no latency win, plus it would mean shipping and versioning a third model
+file. Revisit only if a use case appears where most of the audio is silence
+*and* the silence is at window granularity — dictation is not that; zee's own
+silence auto-close already prevents long dead air in the first place.

@@ -50,7 +50,7 @@ func TestTranscribeKnownClips(t *testing.T) {
 			if err != nil {
 				t.Skipf("decode: %v", err)
 			}
-			got, err := ctx.Transcribe(audio.PCMToF32(pcm), "en")
+			got, err := ctx.Transcribe(audio.PCMToF32(pcm), "en", "")
 			if err != nil {
 				t.Fatalf("transcribe: %v", err)
 			}

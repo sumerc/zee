@@ -44,16 +44,32 @@ static void zee_wsp_hush(void) {
 // the param setup and segment join here keeps the Go side to a two-argument
 // call and avoids marshalling whisper_full_params' nested structs through cgo.
 static char *zee_wsp_transcribe(struct whisper_context *ctx, const float *pcm,
-                                int n, const char *lang, int audio_ctx) {
+                                int n, const char *lang, const char *prompt,
+                                int audio_ctx) {
     struct whisper_full_params p = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     p.print_progress   = false;
     p.print_realtime   = false;
     p.print_timestamps = false;
     p.print_special    = false;
-    p.no_timestamps    = true;
+    // no_timestamps stays FALSE even though we only want text: it selects a
+    // decoder path that silently drops audio. See audioCtxFor's sibling note
+    // below and docs/design-notes.md — with it set, whisper advances the window
+    // a fixed 30 s per decode and skips the retry-on-failed-decode path, so
+    // whatever the model does not emit in a window is lost for good.
     p.translate        = false;   // transcribe in-language, never translate to English
     p.language         = lang;    // "auto" => detect (costs one extra encoder pass)
     p.audio_ctx        = audio_ctx;  // 0 = full window; see audioCtxFor
+
+    // Vocabulary hints ride in as the initial prompt — the same string the
+    // cloud providers send as `prompt`. carry_initial_prompt keeps it pinned to
+    // the front of EVERY window's prompt (whisper.cpp:6946); without it the
+    // hint lands in the rolling context and is diluted away after the first
+    // 30 s, which for a two-minute dictation means most of the audio decodes
+    // unbiased.
+    if (prompt != NULL && prompt[0] != '\0') {
+        p.initial_prompt       = prompt;
+        p.carry_initial_prompt = true;
+    }
 
     if (whisper_full(ctx, p, pcm, n) != 0) {
         return NULL;
@@ -141,7 +157,7 @@ func New(path string) (*Ctx, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.Transcribe(make([]float32, sampleRate), "") // 1s of silence; ignore result
+	c.Transcribe(make([]float32, sampleRate), "", "") // 1s of silence; ignore result
 	return c, nil
 }
 
@@ -165,14 +181,17 @@ func newNoWarm(path string) (*Ctx, error) {
 // transcript. lang is an ISO-639-1 code; "" means auto-detect, which costs one
 // extra encoder pass but is the only mode that survives code-switching — a
 // wrong forced language garbles the output rather than merely mislabelling it.
-func (c *Ctx) Transcribe(pcm []float32, lang string) (string, error) {
-	return c.transcribeAt(pcm, lang, audioCtxFor(len(pcm)))
+//
+// hints is optional vocabulary biasing (the same comma-separated string the
+// cloud providers take as `prompt`); "" disables it.
+func (c *Ctx) Transcribe(pcm []float32, lang, hints string) (string, error) {
+	return c.transcribeAt(pcm, lang, hints, audioCtxFor(len(pcm)))
 }
 
 // transcribeAt is Transcribe with an explicit audio_ctx (0 = full window).
 // Production always goes through Transcribe/audioCtxFor; tests use this to
 // exercise reduced windows directly.
-func (c *Ctx) transcribeAt(pcm []float32, lang string, audioCtx int) (string, error) {
+func (c *Ctx) transcribeAt(pcm []float32, lang, hints string, audioCtx int) (string, error) {
 	if len(pcm) == 0 {
 		return "", nil
 	}
@@ -187,10 +206,12 @@ func (c *Ctx) transcribeAt(pcm []float32, lang string, audioCtx int) (string, er
 	}
 	cLang := C.CString(lang)
 	defer C.free(unsafe.Pointer(cLang))
+	cHints := C.CString(hints)
+	defer C.free(unsafe.Pointer(cHints))
 
 	out := C.zee_wsp_transcribe(c.ptr,
 		(*C.float)(unsafe.Pointer(&pcm[0])), C.int(len(pcm)),
-		cLang, C.int(audioCtx))
+		cLang, cHints, C.int(audioCtx))
 	if out == nil {
 		return "", fmt.Errorf("whisper: transcribe failed")
 	}

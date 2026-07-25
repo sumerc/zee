@@ -8,5 +8,5 @@ package whisper
 var NewNoWarm = newNoWarm
 
 func (c *Ctx) TranscribeAt(pcm []float32, lang string, audioCtx int) (string, error) {
-	return c.transcribeAt(pcm, lang, audioCtx)
+	return c.transcribeAt(pcm, lang, "", audioCtx)
 }

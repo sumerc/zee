@@ -17,6 +17,7 @@ import (
 type localSession struct {
 	engine  localEngine
 	lang    string
+	hints   string
 	mu      sync.Mutex
 	pcm     []byte
 	updates chan string
@@ -50,7 +51,7 @@ func (s *localSession) Close() (SessionResult, error) {
 	audioData := audio.PCMToWAV(raw)
 
 	start := time.Now()
-	text, err := s.engine.Transcribe(f32, s.lang)
+	text, err := s.engine.Transcribe(f32, s.lang, s.hints)
 	if err != nil {
 		return SessionResult{AudioData: audioData, AudioFormat: "wav"}, err
 	}

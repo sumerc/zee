@@ -118,7 +118,9 @@ func openEngine(b *testing.B, m localmodel.Model) (transcribeFn, func()) {
 		if err != nil {
 			b.Fatalf("load %s: %v", m.ID, err)
 		}
-		return ctx.Transcribe, ctx.Close
+		return func(pcm []float32, lang string) (string, error) {
+			return ctx.Transcribe(pcm, lang, "")
+		}, ctx.Close
 	default:
 		ctx, err := parakeet.New(localmodel.Path(m))
 		if err != nil {

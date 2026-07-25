@@ -38,10 +38,10 @@ const settingsFile = "config.json"
 
 // defaultTailWaitMs is the default mic tail-wait after hotkey release (ms):
 // long enough to catch the last word on a fast keyup, short enough not to feel
-// like lag before inference. Was 100, halved because it is pure dead time in the
-// felt latency (release → text, see log.ReleaseToText) and 50 ms still covers a
-// fast keyup. See Settings.TailWaitMs.
-const defaultTailWaitMs = 50
+// like lag before inference. Briefly halved to 50 to shave dead time off the
+// felt latency (release → text, see log.ReleaseToText); reverted after that
+// clipped the end of real recordings. See Settings.TailWaitMs.
+const defaultTailWaitMs = 100
 
 var (
 	mu       sync.Mutex

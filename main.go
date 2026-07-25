@@ -24,6 +24,7 @@ import (
 	"zee/hotkey"
 	"zee/log"
 	"zee/login"
+	"zee/overlay"
 	"zee/permissions"
 	"zee/setup"
 	"zee/shutdown"
@@ -499,7 +500,7 @@ func run() {
 			activeFormat = *formatFlag
 		}
 		langs := activeTranscriber.SupportedLanguages()
-		local := transcriber.IsLocal(activeTranscriber)
+		hints := transcriber.SupportsHints(activeTranscriber)
 		configMu.Unlock()
 
 		// Only Parakeet has a provider-level Close (frees the gguf); cloud
@@ -512,7 +513,7 @@ func run() {
 
 		config.Update(func(s *config.Settings) { s.Provider = p.Name; s.Model = model })
 		tray.SetLanguages(langs)
-		tray.SetHintsEnabled(!local)
+		tray.SetHintsEnabled(hints)
 		tray.SetActiveModel(p.Name, model)
 	}
 
@@ -580,7 +581,7 @@ func run() {
 			config.Update(func(s *config.Settings) { s.Language = code })
 		}
 	})
-	tray.SetHintsEnabled(!transcriber.IsLocal(activeTranscriber))
+	tray.SetHintsEnabled(transcriber.SupportsHints(activeTranscriber))
 	tray.SetLogin(login.Enabled())
 	tray.SetVersion(version)
 	tray.OnSaveAudio(saveLastRecording)
@@ -932,6 +933,7 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		log.Info("recording_device: " + capture.DeviceName())
 		isRecording.Store(true)
 		tray.SetRecording(true)
+		overlay.Show() // every path — hotkey, toggle, tray — funnels through here
 
 		done, err := handleRecording(capture, sess)
 		if err != nil {
@@ -941,11 +943,13 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		if done != nil {
 			isTranscribing.Store(true)
 			tray.SetTranscribing(true) // blue status dot while inference runs
-			<-done                     // hold isRecording too — blocks re-record
+			overlay.SetState(overlay.Transcribing)
+			<-done // hold isRecording too — blocks re-record
 			isTranscribing.Store(false)
 		}
 		isRecording.Store(false)
 		tray.SetRecording(false)
+		overlay.Hide()       // one exit for the whole cycle: record, then inference
 		applyPendingReload() // apply any config-file reload deferred during this cycle
 		if afterRecordCycle != nil {
 			afterRecordCycle()

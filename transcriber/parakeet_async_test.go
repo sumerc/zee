@@ -17,7 +17,7 @@ import (
 // a model on disk the lock paths are the same (a missing model just surfaces as
 // a NewSession error).
 func TestLocalProviderConcurrentAccess(t *testing.T) {
-	p := newLocalProvider(localmodel.EngineParakeet, localmodel.ID110mEN, "en",
+	p := newLocalProvider(localmodel.EngineParakeet, localmodel.ID110mEN, "en", false,
 		openParakeet, parakeetLanguages)
 	defer p.Close()
 

@@ -133,3 +133,52 @@ BenchmarkTranscribe/whisper-turbo-q5/2026-07-24T16-24-44/en
 BenchmarkTranscribe/whisper-turbo-q5/2026-07-24T16-24-44/en-15      	       3	2449742972 ns/op	       182.7 audio_s	        74.58 xRT
 PASS
 ok  	zee/internal/localbench	39.311s
+
+################################################################################
+## MACHINE:  Apple M5 Pro, 15 cores, 24 GB RAM, macOS 26.5.2
+## CORPUS:   /Users/supo/Desktop/p/personal/zee/.zee/samples
+## RUNS:     3
+## COMMIT:   6c2db8c (dirty)
+## MODELS:   v2
+## DATE:     2026-07-25T22:46:36+0300
+## NOTE:     First baseline after the whisper tail-truncation fix — `no_timestamps`
+##           is no longer set on whisper_full. That flag made whisper.cpp advance a
+##           fixed 30 s per window and skip the failed-decode retry, so audio the
+##           model did not emit was dropped (11 s lost on 21-50-06; 11% of that whole
+##           transcript). Upstream whisper.cpp#2186; see docs/design-notes.md.
+##           Speed impact measured separately (wall, model load in, mean of 3):
+##             160 s clip  3.78 -> 4.08 s (+8%)
+##             131 s clip  4.24 -> 3.57 s (-16%, its bad decode burned fallback retries)
+##              27 s clip  1.55 -> 1.55 s (0)
+##           So this block is NOT comparable with pre-fix blocks above: whisper here
+##           decodes timestamp tokens the earlier runs skipped. Parakeet is unaffected.
+################################################################################
+
+# zee/internal/localbench.test
+goos: darwin
+goarch: arm64
+pkg: zee/internal/localbench
+cpu: Apple M5 Pro
+BenchmarkTranscribe
+BenchmarkTranscribe/parakeet-110m-en
+BenchmarkTranscribe/parakeet-110m-en/2026-07-25T15-49-53
+BenchmarkTranscribe/parakeet-110m-en/2026-07-25T15-49-53-15         	       3	1133793069 ns/op	       159.9 audio_s	       141.0 xRT
+BenchmarkTranscribe/parakeet-110m-en/2026-07-25T21-50-06
+BenchmarkTranscribe/parakeet-110m-en/2026-07-25T21-50-06-15         	       3	 876192486 ns/op	       130.9 audio_s	       149.4 xRT
+BenchmarkTranscribe/parakeet-110m-en/2026-07-25T21-52-43
+BenchmarkTranscribe/parakeet-110m-en/2026-07-25T21-52-43-15         	       3	 117598889 ns/op	        26.61 audio_s	       226.3 xRT
+BenchmarkTranscribe/whisper-turbo-q5
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T15-49-53/auto
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T15-49-53/auto-15    	       3	3492357903 ns/op	       159.9 audio_s	        45.79 xRT
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T15-49-53/en
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T15-49-53/en-15      	       3	6654080792 ns/op	       159.9 audio_s	        24.03 xRT
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T21-50-06/auto
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T21-50-06/auto-15    	       3	2849334722 ns/op	       130.9 audio_s	        45.95 xRT
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T21-50-06/en
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T21-50-06/en-15      	       3	6671312639 ns/op	       130.9 audio_s	        19.62 xRT
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T21-52-43/auto
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T21-52-43/auto-15    	       3	 678105472 ns/op	        26.61 audio_s	        39.24 xRT
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T21-52-43/en
+BenchmarkTranscribe/whisper-turbo-q5/2026-07-25T21-52-43/en-15      	       3	 866616014 ns/op	        26.61 audio_s	        30.71 xRT
+PASS
+ok  	zee/internal/localbench	99.189s

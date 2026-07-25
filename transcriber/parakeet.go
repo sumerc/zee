@@ -15,13 +15,14 @@ import (
 
 // parakeetEngine adapts a loaded gguf to localEngine. The decoder head is fixed
 // per model, so it is captured here rather than threaded through the shared
-// code; lang is ignored because the C-API has nowhere to put it.
+// code; lang and hints are ignored because the C-API has nowhere to put them —
+// a greedy CTC/TDT decode has no prompt to bias.
 type parakeetEngine struct {
 	ctx     *parakeet.Ctx
 	decoder int
 }
 
-func (e parakeetEngine) Transcribe(pcm []float32, _ string) (string, error) {
+func (e parakeetEngine) Transcribe(pcm []float32, _, _ string) (string, error) {
 	return e.ctx.Transcribe(pcm, e.decoder)
 }
 
@@ -48,7 +49,7 @@ func parakeetProvider() ProviderInfo {
 	return localProviderInfo(
 		localmodel.EngineParakeet, "Local (Parakeet)",
 		localmodel.ID110mEN, "en",
-		parakeet.Available(),
+		parakeet.Available(), false, // hints: no prompt surface in a greedy decode
 		openParakeet, parakeetLanguages,
 	)
 }

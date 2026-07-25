@@ -18,8 +18,8 @@ import (
 // whisperEngine adapts a loaded ggml model to localEngine.
 type whisperEngine struct{ ctx *whisper.Ctx }
 
-func (e whisperEngine) Transcribe(pcm []float32, lang string) (string, error) {
-	return e.ctx.Transcribe(pcm, lang)
+func (e whisperEngine) Transcribe(pcm []float32, lang, hints string) (string, error) {
+	return e.ctx.Transcribe(pcm, lang, hints)
 }
 
 func (e whisperEngine) Close() { e.ctx.Close() }
@@ -40,7 +40,7 @@ func whisperProvider() ProviderInfo {
 	return localProviderInfo(
 		localmodel.EngineWhisper, "Local (Whisper)",
 		localmodel.IDWhisperQ5, "", // "" = auto-detect
-		whisper.Available(),
+		whisper.Available(), true, // hints: fed in as whisper's initial prompt
 		openWhisper, whisperLanguages,
 	)
 }

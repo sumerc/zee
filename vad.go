@@ -22,6 +22,7 @@ type vadProcessor struct {
 	buf           []byte
 	voiceDetected bool
 	lastVoiceTime time.Time
+	lastActiveAt  time.Time // last frame the VAD called speech, before debounce
 	speechRun     int
 	totalFrames   int
 	speechFrames  int
@@ -59,6 +60,7 @@ func (p *vadProcessor) Process(data []byte) {
 		if active {
 			p.speechFrames++
 			p.speechRun++
+			p.lastActiveAt = time.Now()
 			if p.voiceDetected {
 				p.lastVoiceTime = time.Now()
 			} else if p.speechRun >= vadDebounce {
@@ -69,6 +71,18 @@ func (p *vadProcessor) Process(data []byte) {
 			p.speechRun = 0
 		}
 	}
+}
+
+// SpeakingNow reports whether the VAD called speech within the last window.
+// It deliberately skips the debounce VoiceDetected applies: this drives the
+// level meter, where reacting to the first frame of a word matters more than
+// being sure. The window bridges the gaps inside a phrase — stops and
+// consonants are silence to the VAD, and the meter should not blink out
+// mid-sentence because of them.
+func (p *vadProcessor) SpeakingNow(window time.Duration) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.lastActiveAt.IsZero() && time.Since(p.lastActiveAt) <= window
 }
 
 func (p *vadProcessor) VoiceDetected() bool {
@@ -117,5 +131,6 @@ func (p *vadProcessor) Reset() {
 	p.buf = p.buf[:0]
 	p.voiceDetected = false
 	p.lastVoiceTime = time.Time{}
+	p.lastActiveAt = time.Time{}
 	p.speechRun = 0
 }

@@ -16,9 +16,11 @@ import (
 //
 // lang is an ISO-639-1 code, "" meaning auto-detect. Parakeet has no language
 // parameter at all and ignores it (its models are single-language by build);
-// whisper honours it.
+// whisper honours it. hints is vocabulary biasing — the same string the cloud
+// providers send as `prompt`; whisper feeds it in as the initial prompt,
+// parakeet has nowhere to put it. "" for either means "unset".
 type localEngine interface {
-	Transcribe(pcm []float32, lang string) (string, error)
+	Transcribe(pcm []float32, lang, hints string) (string, error)
 	Close()
 }
 
@@ -37,6 +39,7 @@ type localProvider struct {
 	lang     string
 
 	name     string                                      // provider name, e.g. "parakeet"
+	hints    bool                                        // engine can bias decoding toward a vocabulary
 	open     func(localmodel.Model) (localEngine, error) // load a model with this engine
 	langsFor func(localmodel.Model) []Language
 }
@@ -46,7 +49,7 @@ type localProvider struct {
 // only loadMu (not mu) while it reads the model, so metadata accessors stay
 // responsive; the first NewSession waits for it via load()'s idempotent fast
 // path. A missing or failed model surfaces at NewSession as an error.
-func newLocalProvider(name, defaultID, defaultLang string,
+func newLocalProvider(name, defaultID, defaultLang string, hints bool,
 	open func(localmodel.Model) (localEngine, error),
 	langsFor func(localmodel.Model) []Language) *localProvider {
 
@@ -54,6 +57,7 @@ func newLocalProvider(name, defaultID, defaultLang string,
 		modelID:  defaultID,
 		lang:     defaultLang,
 		name:     name,
+		hints:    hints,
 		open:     open,
 		langsFor: langsFor,
 	}
@@ -75,7 +79,7 @@ func localModels(engine string) []localmodel.Model {
 // localProviderInfo is the registry entry shared by every local engine:
 // availability is "default model on disk", status is per-file presence, and
 // missing models are downloadable. compiledIn is the engine's cgo gate.
-func localProviderInfo(name, label, defaultID, defaultLang string, compiledIn bool,
+func localProviderInfo(name, label, defaultID, defaultLang string, compiledIn, hints bool,
 	open func(localmodel.Model) (localEngine, error),
 	langsFor func(localmodel.Model) []Language) ProviderInfo {
 
@@ -91,7 +95,7 @@ func localProviderInfo(name, label, defaultID, defaultLang string, compiledIn bo
 			return compiledIn && ok && localmodel.Present(m)
 		},
 		New: func() Transcriber {
-			return newLocalProvider(name, defaultID, defaultLang, open, langsFor)
+			return newLocalProvider(name, defaultID, defaultLang, hints, open, langsFor)
 		},
 		Status: func(id string) ModelStatus {
 			m, ok := localmodel.ByID(id)
@@ -162,11 +166,20 @@ func (p *localProvider) load() {
 	p.mu.Unlock()
 }
 
-// IsLocal reports whether tr is an on-device provider. Local decode has no hint
-// biasing, no streaming, and no audio encoding, so the UI greys those out.
+// IsLocal reports whether tr is an on-device provider. Local decode has no
+// streaming and no audio encoding, so the UI greys those out. Hints are a
+// per-engine capability, not a local/cloud one — ask SupportsHints.
 func IsLocal(tr Transcriber) bool {
 	_, ok := tr.(*localProvider)
 	return ok
+}
+
+// SupportsHints reports whether tr can bias decoding toward the vocabulary in
+// hints.txt, so the tray greys the hints entry out for the engines that cannot
+// (parakeet). Every cloud provider takes hints in some form.
+func SupportsHints(tr Transcriber) bool {
+	p, ok := tr.(*localProvider)
+	return !ok || p.hints
 }
 
 func (p *localProvider) Name() string { return p.name }
@@ -205,9 +218,9 @@ func (p *localProvider) SetModel(id string) {
 
 // Transcribe decodes a WAV file to PCM and runs one batch inference, satisfying
 // the same direct-transcribe interface as the cloud providers so the file path
-// (-transcribe) has a single shape. Local decode accepts WAV only and ignores
-// hints (greedy decode has no biasing).
-func (p *localProvider) Transcribe(audioData []byte, format, lang, _ string) (*Result, error) {
+// (-transcribe) has a single shape. Local decode accepts WAV only; hints reach
+// whichever engine can use them.
+func (p *localProvider) Transcribe(audioData []byte, format, lang, hints string) (*Result, error) {
 	if format != "wav" {
 		return nil, fmt.Errorf("local transcription supports WAV files only (got %s)", format)
 	}
@@ -215,7 +228,7 @@ func (p *localProvider) Transcribe(audioData []byte, format, lang, _ string) (*R
 	if err != nil {
 		return nil, fmt.Errorf("cannot read WAV: %w", err)
 	}
-	sess, err := p.NewSession(context.Background(), SessionConfig{Language: lang})
+	sess, err := p.NewSession(context.Background(), SessionConfig{Language: lang, Hints: hints})
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +267,7 @@ func (p *localProvider) NewSession(_ context.Context, cfg SessionConfig) (Sessio
 	if cfg.Language != "" {
 		lang = cfg.Language
 	}
-	return &localSession{engine: eng, lang: lang, updates: make(chan string)}, nil
+	return &localSession{engine: eng, lang: lang, hints: cfg.Hints, updates: make(chan string)}, nil
 }
 
 // Close frees the loaded model. It waits out any in-flight background load
