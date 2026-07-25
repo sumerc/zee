@@ -324,10 +324,21 @@ or fresh `whisper_state` per utterance, could revisit;
 `internal/whisper/audioctx_matrix_test.go` (`ZEE_AC_DEBUG=1`) re-validates any
 attempt in seconds.
 
+**Re-verified 2026-07-26**, after `no_timestamps` was turned off, in case the
+decoder-loop fix had also cleared this: the matrix is unchanged (D/F/G/H/I/J/L
+garble, A/B/C/E/K pass). Different layer — that fix is in the decoder loop,
+this fault is in the encoder state. Nor is it language-specific: `lang=en`
+shrinks garble exactly as auto does (0→400, 400→200, 1500→400 all fail with a
+fixed language). Auto-detect is only special in that it makes the shrink
+*unavoidable* — case H garbles on a fresh context, one call, no prior encode.
+Upstream has not fixed it either: v1.9.1 is still the newest tag and none of
+the 154 commits since it touch `exp_n_audio_ctx`.
+
 Ruled out while chasing it (each tested, not assumed): sampling strategy (beam
 search — whisper-cli's actual default at `beam_size=5` — garbles identically),
-`no_timestamps`, `flash_attn`/`use_gpu`, `no_context`, warm-up content, and
-audio length varying between calls.
+`no_timestamps` (not a cause *here* — but a serious bug in its own right, see
+"Why whisper runs *with* timestamps" below), `flash_attn`/`use_gpu`,
+`no_context`, warm-up content, and audio length varying between calls.
 
 **The POC's exit-134 abort did not follow us.** whisper+parakeet in one process
 aborted on exit in the C driver; in zee both engines load and tear down cleanly
@@ -342,13 +353,38 @@ encoder pads every clip to the fixed 1500-frame/30 s window, so trimming
 silence out of a ≤30 s dictation changes the encode cost by exactly nothing.
 It pays for Handy because their *default* models are Parakeet/Nemotron/Canary,
 which have no fixed window — compute scales with actual audio, every trimmed
-second is a saved second. For whisper it only helps at the margins: clips
->30 s (one encoder pass per 30 s window, so trimming can drop a window) and
-fewer hallucinated tokens to decode. The real whisper benefit is *quality*,
-not speed: silence is what produces the "thank you for watching" class of
-hallucinations. Not adopted: zee's clips are mostly speech (push-to-talk),
-the mic tail is deliberate (added to stop last-word clipping), and silence
-hallucinations haven't shown up in the logs. Revisit only if they do.
+second is a saved second. The expectation was that it still helps at the margins on
+clips >30 s — one encoder pass per window, so trimming can drop a window.
+
+**Measured 2026-07-26, and the margin win is not there either.** whisper.cpp
+v1.9 does the trimming itself (`params.vad` + an 864 KB Silero ggml model): it
+detects speech, rebuilds the buffer with speech only, and decodes that
+(`whisper.cpp:7779`) — no capture-side work needed. Best of 3, timestamps on,
+turbo-q5, M5 Pro:
+
+```
++--------------------------+--------+--------+--------+-------------+
+| Clip                     | no-VAD | VAD    | Delta  | Speech kept |
++--------------------------+--------+--------+--------+-------------+
+| 159.9 s (6 windows -> 5) | 4.10 s | 4.60 s | +12%   | 81%         |
+| 130.9 s (5 windows -> 4) | 4.09 s | 4.09 s |   0%   | 74%         |
+|  26.6 s                  | 1.58 s | 1.58 s |   0%   | 74%         |
+| 26.6 s + 30 s dead air   | 2.08 s | 2.08 s |   0%   | ~47%        |
++--------------------------+--------+--------+--------+-------------+
+```
+
+Dropping a whole window saves nothing: whisper's cost tracks *tokens decoded*,
+not windows encoded — a silent window emits EOT almost immediately and is
+nearly free, while the words spoken are identical either way. Silero's own pass
+then adds cost, which is why the longest clip got slower. Quality was unchanged
+too (1762 vs 1792 chars on the 131 s clip, same content, tail intact both ways),
+so the predicted hallucination benefit did not appear on this corpus.
+
+Not adopted: zee's clips are mostly speech (push-to-talk), the mic tail is
+deliberate (added to stop last-word clipping), silence hallucinations haven't
+shown up in the logs, and enabling it would mean hosting, checksumming and
+versioning a third model file for a 0% win. Revisit only if silence
+hallucinations appear.
 
 **flash_attn: on by default, verified worth ~12% on M5 (2026-07-25).**
 whisper.cpp defaults `flash_attn=true` since v1.8.0 and zee passes default
@@ -479,37 +515,3 @@ Ordinary prompt-conditioning side effects come with it (a repeated word at the
 end of one clip, a dropped comma). Biasing is a trade, not a free win — which is
 why it stays opt-in per user rather than being seeded with defaults.
 
-## Why whisper.cpp's built-in VAD is not enabled
-
-whisper.cpp v1.9 can run Silero VAD before decoding (`params.vad` +
-`vad_model_path`, an extra 864 KB ggml model): it detects speech, rebuilds the
-sample buffer with only the speech regions, and decodes that
-(`whisper.cpp:7779`). It is fully automatic — no segmentation code on our side.
-
-It buys nothing here. Measured on the saved dictations, best of 3, wall clock:
-
-```
-+--------------------------+--------+--------+--------+-------------------+
-| Clip                     | no-VAD | VAD    | Delta  | Speech kept (VAD) |
-+--------------------------+--------+--------+--------+-------------------+
-| 159.9 s                  | 4.10 s | 4.60 s | +12%   | 81%               |
-| 130.9 s                  | 4.09 s | 4.09 s |   0%   | 74%               |
-|  26.6 s                  | 1.58 s | 1.58 s |   0%   | 74%               |
-| 26.6 s + 30 s dead air   | 2.08 s | 2.08 s |   0%   | ~47%              |
-+--------------------------+--------+--------+--------+-------------------+
-```
-
-VAD really does cut 19–26% of the audio, and on the synthetic clip more than
-half — and the decode still takes exactly as long. Whisper's cost tracks the
-number of *tokens decoded*, not the number of 30 s windows: a silent window
-emits EOT almost immediately and is nearly free, while the words spoken are the
-same either way. The Silero pass then adds its own cost on top, which is why the
-longest clip got *slower*.
-
-Transcript quality is unchanged (1762 vs 1792 chars on the 131 s clip, same
-content, tail intact both ways).
-
-So: no latency win, plus it would mean shipping and versioning a third model
-file. Revisit only if a use case appears where most of the audio is silence
-*and* the silence is at window granularity — dictation is not that; zee's own
-silence auto-close already prevents long dead air in the first place.

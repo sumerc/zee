@@ -132,6 +132,12 @@ const sampleRate = 16000
 // At ac=0 every pass uses the full grid, sizes never change, and the bug cannot
 // trigger. A future grow-only or fresh-state-per-utterance scheme could revisit
 // this; re-run the fault matrix (ZEE_AC_DEBUG=1) before believing anything.
+//
+// Re-verified 2026-07-26 after no_timestamps was turned off: the matrix is
+// UNCHANGED (D/F/G/H/I/J/L garble, A/B/C/E/K pass). Different layer — that fix
+// is in the decoder loop, this fault is in the encoder state. Upstream has not
+// fixed it either: 154 commits since v1.9.1 (still the newest tag), none
+// touching exp_n_audio_ctx.
 func audioCtxFor(int) int { return 0 }
 
 // Available reports whether local Whisper transcription is compiled in.
