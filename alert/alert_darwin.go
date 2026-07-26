@@ -2,9 +2,7 @@
 
 package alert
 
-import (
-	"os/exec"
-)
+import "os/exec"
 
 func Error(msg string) {
 	show(msg, "stop")

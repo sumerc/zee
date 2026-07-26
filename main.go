@@ -1225,6 +1225,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 			}
 			if dir, err := persistLastRecording(); err == nil {
 				msg += "\n\nRecording saved to:\n" + dir
+				pruneFailedSamples()
 			}
 			go alert.Error(msg)
 		}
@@ -1378,6 +1379,49 @@ func persistLastRecording() (string, error) {
 	os.WriteFile(filepath.Join(dir, "info.json"), info, 0644)
 
 	return dir, nil
+}
+
+// maxFailedSamples caps how many auto-saved failed recordings are kept. A user
+// dictating all day against a revoked key would otherwise fill the disk with
+// WAVs nobody asked for (a minute of audio is ~2 MB).
+const maxFailedSamples = 20
+
+// pruneFailedSamples deletes the oldest auto-saved failures beyond the cap.
+// Only failures: a sample whose info.json records no error was saved
+// deliberately from the tray (it may be someone's benchmark corpus) and is
+// never touched. Directory names are sortable timestamps, so "oldest" is just
+// lexical order.
+func pruneFailedSamples() {
+	entries, err := os.ReadDir(filepath.Join(config.Dir(), "samples"))
+	if err != nil {
+		return
+	}
+	var failed []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(config.Dir(), "samples", e.Name())
+		data, err := os.ReadFile(filepath.Join(dir, "info.json"))
+		if err != nil {
+			continue // no metadata: not ours to judge, leave it
+		}
+		var info struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(data, &info) == nil && info.Error != "" {
+			failed = append(failed, dir)
+		}
+	}
+	if len(failed) <= maxFailedSamples {
+		return
+	}
+	slices.Sort(failed)
+	for _, dir := range failed[:len(failed)-maxFailedSamples] {
+		if err := os.RemoveAll(dir); err == nil {
+			log.Info("pruned failed sample " + filepath.Base(dir))
+		}
+	}
 }
 
 // directTranscriber transcribes encoded audio bytes in one call. Every provider

@@ -1,8 +1,6 @@
 package clipboard
 
-import (
-	cb "github.com/atotto/clipboard"
-)
+import cb "github.com/atotto/clipboard"
 
 func Read() (string, error) {
 	return cb.ReadAll()
