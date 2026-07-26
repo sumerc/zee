@@ -317,6 +317,10 @@ func onReady() {
 	}
 	trayMu.Unlock()
 
+	// Divide the input device from the transcription pair (Model + Language).
+	sepDevice := mSettings.AddSubMenuItem("─────────", "")
+	sepDevice.Disable()
+
 	trayMu.Lock()
 	if len(models) > 0 {
 		mBackend = mSettings.AddSubMenuItem("Model", "Select transcription model")
