@@ -2,33 +2,28 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
+	"zee/hotkey"
 	"zee/log"
 )
 
 // Hotkey is the saved push-to-talk combination. Key is the platform-native
-// keycode; an empty Hotkey (no Mods) means "use the built-in default".
-type Hotkey struct {
-	Mods  []string `json:"mods"`
-	Key   int      `json:"key"`
-	Label string   `json:"label"`
-}
-
+// keycode; an empty Hotkey (no Mods) means "use the built-in default"
+// (hotkey.Combo.OrDefault resolves that).
 type Settings struct {
-	Language  string `json:"language"`
-	Device    string `json:"device"`
-	Provider  string `json:"provider"`
-	Model     string `json:"model"`
-	Hotkey    Hotkey `json:"hotkey"`
-	AutoPaste bool   `json:"auto_paste"`
-	AutoStart bool   `json:"auto_start"`
+	Language  string       `json:"language"`
+	Device    string       `json:"device"`
+	Provider  string       `json:"provider"`
+	Model     string       `json:"model"`
+	Hotkey    hotkey.Combo `json:"hotkey"`
+	AutoPaste bool         `json:"auto_paste"`
+	AutoStart bool         `json:"auto_start"`
 	// TailWaitMs keeps the mic open this many ms after the hotkey is released so
 	// a fast keyup doesn't clip the last word. 0 disables the wait.
 	TailWaitMs int `json:"tail_wait_ms"`
@@ -120,16 +115,30 @@ func settingsPath() string {
 // item to open in an editor).
 func SettingsPath() string { return settingsPath() }
 
+// AppBundlePath returns the <...>.app directory containing this executable and
+// whether it is one at all. It owns the single ".app/Contents/MacOS/" marker in
+// the codebase — setup (relaunching the installed app) and update (swapping the
+// bundle) both ask here rather than re-deriving it.
+func AppBundlePath() (string, bool) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", false
+	}
+	const marker = ".app/Contents/MacOS/"
+	i := strings.Index(exe, marker)
+	if i < 0 {
+		return "", false
+	}
+	return exe[:i+len(".app")], true
+}
+
 // IsAppBundle reports whether this binary is the installed Zee.app rather than a
 // local dev build, keyed off the executable path (not cwd). It's the single
 // "am I the installed app?" signal — used to pick app-vs-dev locations
 // consistently (login-item plist, local models dir).
 func IsAppBundle() bool {
-	exe, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(exe, ".app/Contents/MacOS/")
+	_, ok := AppBundlePath()
+	return ok
 }
 
 func Load() error {
@@ -163,61 +172,26 @@ func Get() Settings {
 	return s
 }
 
-// Watch polls config.json once per second and reloads it when the file changes
-// on disk — the live half of the tray "Edit Settings…" flow. onChange runs on
-// the watcher goroutine with the freshly loaded settings; the app's own saves
-// and content-identical rewrites are suppressed (compared against the in-memory
-// settings, so only real external edits fire). The returned func stops the
-// watcher — the app never needs it, but tests must stop leaked pollers.
-func Watch(onChange func(Settings)) (stop func()) {
-	var lastMod time.Time
-	if fi, err := os.Stat(settingsPath()); err == nil {
-		lastMod = fi.ModTime()
-	}
-	done := make(chan struct{})
-	go func() {
-		tick := time.NewTicker(time.Second)
-		defer tick.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-tick.C:
-			}
-			fi, err := os.Stat(settingsPath())
-			if err != nil || fi.ModTime().Equal(lastMod) {
-				continue
-			}
-			lastMod = fi.ModTime()
-			if s, changed := reload(); changed {
-				onChange(s)
-			}
-		}
-	}()
-	return func() { close(done) }
-}
-
-// reload re-reads config.json into the live settings. Read + compare + swap all
-// happen under the lock, serialized with Update, so a concurrent save can't be
-// overwritten by stale file contents. Reports whether anything changed.
-func reload() (Settings, bool) {
+// Reload re-reads config.json into the live settings — the user-initiated
+// tray "Reload Config" flow (there is deliberately no file watcher: a manual
+// reload runs under the same busy-guard as every other engine op and can
+// report a parse failure to the user's face). Read + compare + swap all happen
+// under the lock, serialized with Update, so a concurrent save can't be
+// overwritten by stale file contents. A missing or corrupt file leaves the
+// live settings untouched and is returned as an error for the UI to show.
+func Reload() (Settings, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	data, err := os.ReadFile(settingsPath())
 	if err != nil {
-		log.Warnf("settings: reload: %v", err)
-		return current, false
+		return current, err
 	}
 	s := defaults
 	if err := json.Unmarshal(data, &s); err != nil {
-		log.Warnf("settings: reload: corrupt config.json ignored: %v", err)
-		return current, false
-	}
-	if reflect.DeepEqual(s, current) {
-		return current, false
+		return current, fmt.Errorf("invalid config.json: %w", err)
 	}
 	current = s
-	return s, true
+	return s, nil
 }
 
 func Update(fn func(*Settings)) {

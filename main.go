@@ -173,6 +173,42 @@ func gracefulShutdown() {
 	})
 }
 
+// runUpdate is the `zee update` verb: check, download+verify+swap, then hand
+// off to setup. It returns the process exit code.
+func runUpdate() int {
+	if version == "dev" {
+		fmt.Println("Dev build — cannot check for updates.")
+		return 0
+	}
+	fmt.Printf("zee %s — checking for updates...\n", version)
+	rel, err := update.CheckLatest(version)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return 1
+	}
+	if rel == nil {
+		fmt.Println("Already up to date.")
+		return 0
+	}
+	fmt.Printf("Updating %s → %s...\n", version, rel.Version)
+	app, err := update.Install(*rel)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return 1
+	}
+	// The swap changed the (ad-hoc) code signature, so macOS dropped the TCC
+	// grants — setup re-grants and re-verifies as the new binary. Its exit code
+	// is the update's: an updated app that can't hear is not a successful update.
+	fmt.Println("Update installed. macOS resets permissions when the app changes — running setup to restore them.")
+	code, err := setup.SpawnSetupAt(app)
+	if err != nil {
+		fmt.Printf("Zee %s is installed, but setup could not start: %v\n", rel.Version, err)
+		fmt.Printf("Run it manually: %s/Contents/MacOS/zee setup\n", app)
+		return 1
+	}
+	return code
+}
+
 func run() {
 	// Bare subcommands, parsed before the flag set (like git/go verbs). The
 	// -setup flag below stays as an alias so install.sh and older docs keep
@@ -184,38 +220,7 @@ func run() {
 		case "doctor":
 			os.Exit(setup.Doctor())
 		case "update":
-			if version == "dev" {
-				fmt.Println("Dev build — cannot check for updates.")
-				os.Exit(0)
-			}
-			fmt.Printf("zee %s — checking for updates...\n", version)
-			rel, err := update.CheckLatest(version)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				os.Exit(1)
-			}
-			if rel == nil {
-				fmt.Println("Already up to date.")
-				os.Exit(0)
-			}
-			fmt.Printf("Updating %s → %s...\n", version, rel.Version)
-			app, err := update.Install(*rel)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				os.Exit(1)
-			}
-			// The swap changed the (ad-hoc) code signature, so macOS dropped
-			// the TCC grants — setup re-grants and re-verifies as the new
-			// binary. Its exit code is the update's: an updated app that can't
-			// hear is not a successful update.
-			fmt.Println("Update installed. macOS resets permissions when the app changes — running setup to restore them.")
-			code, err := setup.SpawnSetupAt(app)
-			if err != nil {
-				fmt.Printf("Zee %s is installed, but setup could not start: %v\n", rel.Version, err)
-				fmt.Printf("Run it manually: %s/Contents/MacOS/zee setup\n", app)
-				os.Exit(1)
-			}
-			os.Exit(code)
+			os.Exit(runUpdate())
 		}
 	}
 
@@ -570,14 +575,15 @@ func run() {
 		}
 	})
 
-	tray.SetLanguage(*langFlag, func(code string, persist bool) {
+	tray.SetLanguage(*langFlag, func(code string, persist bool) bool {
 		// Only a real user choice can be denied. Derived changes arrive with
-		// persist=false — a model-constraint fallback, a config-file reload,
-		// the language list being rebuilt — and must apply silently: they are
+		// persist=false — a model-constraint fallback, a config reload, the
+		// language list being rebuilt — and must apply silently: they are
 		// just a string assignment (the in-flight session already captured its
 		// language), and denying one pops a modal at a user who did nothing.
+		// The return value tells the tray whether to move its checkmark.
 		if persist && guardBusy("Can't change the language while recording or transcribing.") {
-			return
+			return false
 		}
 		configMu.Lock()
 		activeTranscriber.SetLanguage(code)
@@ -587,6 +593,7 @@ func run() {
 		if persist {
 			config.Update(func(s *config.Settings) { s.Language = code })
 		}
+		return true
 	})
 	tray.SetHintsEnabled(transcriber.SupportsHints(activeTranscriber))
 	tray.SetLogin(login.Enabled())
@@ -600,23 +607,23 @@ func run() {
 		// shows a readable combo (⌃⇧Space) instead of "key": 0 / empty label.
 		// config.Update also creates config.json if it's missing — open needs a file.
 		config.Update(func(s *config.Settings) {
-			if len(s.Hotkey.Mods) == 0 && s.Hotkey.Key == 0 {
-				d := hotkey.DefaultCombo()
-				s.Hotkey = config.Hotkey{Mods: d.Mods, Key: d.Key, Label: d.Label}
+			if s.Hotkey.IsZero() {
+				s.Hotkey = hotkey.DefaultCombo()
 			}
 		})
 		exec.Command("open", "-t", config.SettingsPath()).Run()
 	})
 	tray.OnEditCredentials(func() {
-		// Keys are read fresh on every APIKey() call, so an edit takes effect
-		// on the next transcription — no watcher, no restart.
+		// A cloud transcriber bakes its key in at construction, so an edit here
+		// takes effect via "Reload Config" (rebuilds the active provider and
+		// refreshes menu states) — or on the next provider switch.
 		if err := config.EnsureCredentials(); err != nil {
 			alert.Warn("Could not create the credentials file.\n\n" + err.Error())
 			return
 		}
 		exec.Command("open", "-t", config.CredentialsPath()).Run()
 	})
-	tray.SetHotkeyLabel(currentHotkeyCombo(cfg).Display())
+	tray.SetHotkeyLabel(cfg.Hotkey.OrDefault().Display())
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
@@ -719,21 +726,22 @@ func run() {
 
 	go audio.InitBeep()
 
-	hk := hotkey.New(currentHotkeyCombo(cfg))
+	hk := hotkey.New(cfg.Hotkey.OrDefault())
 	if err := hk.Register(); err != nil {
 		log.Errorf("hotkey register error: %v", err)
 		// A bad saved combo (unknown modifier, unregistrable chord) must not
 		// brick every launch. If it wasn't the default, fall back to the
 		// default and warn — the user can re-bind from Settings; only a failing
 		// default is fatal (nothing left to try).
+		const hotkeyFatal = "Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security."
 		def := hotkey.DefaultCombo()
-		if currentHotkeyCombo(cfg).Equal(def) {
-			fatal("Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security.", err)
+		if cfg.Hotkey.OrDefault().Equal(def) {
+			fatal(hotkeyFatal, err)
 		}
 		log.Warnf("falling back to default hotkey %s", def.Label)
 		hk = hotkey.New(def)
 		if err := hk.Register(); err != nil {
-			fatal("Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security.", err)
+			fatal(hotkeyFatal, err)
 		}
 		tray.SetHotkeyLabel(def.Display())
 		tray.SetError("Saved hotkey couldn't be registered — using " + def.Display() + ". Re-bind it in Settings.")
@@ -741,12 +749,13 @@ func run() {
 	defer hk.Unregister()
 
 	sessions := make(chan recSession, 1)
-	go listenHotkey(hk, longPressDuration(), sessions)
+	go listenHotkey(hk, hotkey.LongPress(), sessions)
 
-	// Live-reload external config.json edits (tray "Edit Settings…"), applying
-	// each changed field through the same path its tray callback uses. A reload
-	// landing mid record/inference cycle is deferred to cycle end, like model
-	// switches. The watcher itself suppresses the app's own saves.
+	// Apply a re-read config.json (tray "Reload Config") field by field, each
+	// through the same path its tray callback uses. Reload is user-initiated
+	// and busy-guarded like every other engine op — there is no file watcher,
+	// so an edit takes effect when the user says so and a parse error is shown
+	// instead of silently ignored.
 	applyCfg := func(s config.Settings) {
 		configMu.Lock()
 		curProv, curModel := activeTranscriber.Name(), activeTranscriber.GetModel()
@@ -765,9 +774,8 @@ func run() {
 		}
 		if reqProv != "" && reqModel != "" && (reqProv != curProv || reqModel != curModel) {
 			// Only a ready model is applied — a file edit must not trigger a download.
-			// applySwitch (raw), not switchModel: this reload path is internal and
-			// already deferred to an idle moment by config.Watch → pendingReload, so
-			// it must apply unconditionally rather than re-checking the busy guard.
+			// applySwitch (raw), not switchModel: the caller (Reload Config) already
+			// passed the busy guard, so re-checking it here would be redundant.
 			if p, ok := providerByName(reqProv); ok && p.Status(reqModel).Ready {
 				applySwitch(p, reqModel)
 			} else {
@@ -824,7 +832,7 @@ func run() {
 			}
 		}
 
-		if want := currentHotkeyCombo(s); !want.Equal(hk.Current()) {
+		if want := s.Hotkey.OrDefault(); !want.Equal(hk.Current()) {
 			if err := hk.Rebind(want); err != nil {
 				log.Errorf("settings reload: hotkey %s: %v", want.Label, err)
 				tray.SetError("Hotkey " + want.Display() + " rejected — keeping " + hk.Current().Display())
@@ -834,14 +842,37 @@ func run() {
 			}
 		}
 	}
-	config.Watch(func(s config.Settings) {
-		if isRecording.Load() {
-			pendingMu.Lock()
-			pendingReload = func() { applyCfg(s) }
-			pendingMu.Unlock()
+	tray.OnReloadConfig(func() {
+		if guardBusy("Can't reload the config while recording or transcribing.") {
+			return
+		}
+		s, err := config.Reload()
+		if err != nil {
+			alert.Warn("Config reload failed — keeping current settings.\n\n" + err.Error())
 			return
 		}
 		applyCfg(s)
+
+		// Credentials may have changed too: a cloud transcriber bakes its key in
+		// at construction, so rebuild the active one; then re-derive every
+		// provider's menu state (a newly added key flips its models to Ready,
+		// a removed one greys them out).
+		configMu.Lock()
+		if !transcriber.IsLocal(activeTranscriber) {
+			if p, ok := providerByName(activeTranscriber.Name()); ok {
+				nt := p.New()
+				nt.SetModel(activeTranscriber.GetModel())
+				nt.SetLanguage(activeTranscriber.GetLanguage())
+				activeTranscriber = nt
+			}
+		}
+		configMu.Unlock()
+		for _, p := range transcriber.Providers() {
+			for _, m := range p.Models {
+				st := p.Status(m.ID)
+				tray.UpdateModelState(p.Name, m.ID, trayModelState(st), st.Detail)
+			}
+		}
 	})
 
 	go func() {
@@ -861,25 +892,6 @@ func run() {
 // record+transcribe cycle. Test-only hook (lets the harness know a cycle ended).
 var afterRecordCycle func()
 
-// pendingReload holds a config-file reload deferred because the file changed
-// mid-cycle; applyPendingReload runs it at cycle end. A file edit can't be
-// denied (it already happened), so it defers — unlike user-initiated engine ops,
-// which guardBusy denies outright. pendingMu guards it across goroutines.
-var (
-	pendingMu     sync.Mutex
-	pendingReload func()
-)
-
-func applyPendingReload() {
-	pendingMu.Lock()
-	rl := pendingReload
-	pendingReload = nil
-	pendingMu.Unlock()
-	if rl != nil {
-		rl()
-	}
-}
-
 // busyAlert ensures at most one "busy" dialog is open at a time: a second denial
 // while it's showing only beeps, so rapid taps can't stack modal dialogs.
 var busyAlert atomic.Bool
@@ -895,6 +907,13 @@ func guardBusy(warning string) bool {
 	if !isRecording.Load() {
 		return false
 	}
+	denyBusy(warning)
+	return true
+}
+
+// denyBusy is the denial itself — beep, one dialog, one log line — split out so
+// tryStartSession can claim the cycle atomically and still deny identically.
+func denyBusy(warning string) {
 	// Log every denial. Without this a dialog that appears without the user
 	// touching anything is untraceable: the alert names the action but nothing
 	// records which caller fired it or what the engine state was.
@@ -906,7 +925,6 @@ func guardBusy(warning string) bool {
 			busyAlert.Store(false)
 		}()
 	}
-	return true
 }
 
 // tryStartSession enqueues a fresh recording session unless a cycle is already
@@ -915,7 +933,13 @@ func guardBusy(warning string) bool {
 // The hotkey and the tray "Start Recording" button both funnel through here, so
 // neither can queue an unattended recording that fires the instant inference ends.
 func tryStartSession(sessions chan<- recSession) *atomic.Bool {
-	if guardBusy("Already recording or transcribing.") {
+	// Claiming the cycle IS the guard: a plain check-then-send is not atomic
+	// (isRecording only went true once recordSessions picked the session up), so
+	// a hotkey press and a tray click landing together could both pass and both
+	// enqueue — the second firing unattended the moment the first cycle ended.
+	// recordSessions clears the flag at cycle end exactly as before.
+	if !isRecording.CompareAndSwap(false, true) {
+		denyBusy("Already recording or transcribing.")
 		return nil
 	}
 	sc := &atomic.Bool{}
@@ -938,7 +962,7 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		capture := getCapture()
 		log.Info("recording_start")
 		log.Info("recording_device: " + capture.DeviceName())
-		isRecording.Store(true)
+		isRecording.Store(true) // already set when the session came from tryStartSession
 		tray.SetRecording(true)
 		overlay.Show() // every path — hotkey, toggle, tray — funnels through here
 
@@ -955,33 +979,11 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		}
 		isRecording.Store(false)
 		tray.SetRecording(false)
-		overlay.Hide()       // one exit for the whole cycle: record, then inference
-		applyPendingReload() // apply any config-file reload deferred during this cycle
+		overlay.Hide() // one exit for the whole cycle: record, then inference
 		if afterRecordCycle != nil {
 			afterRecordCycle()
 		}
 	}
-}
-
-// currentHotkeyCombo maps the saved config hotkey to a hotkey.Combo, falling
-// back to the built-in default when nothing is saved.
-func currentHotkeyCombo(cfg config.Settings) hotkey.Combo {
-	c := hotkey.Combo{Mods: cfg.Hotkey.Mods, Key: cfg.Hotkey.Key, Label: cfg.Hotkey.Label}
-	if c.IsZero() {
-		return hotkey.DefaultCombo()
-	}
-	return c
-}
-
-func longPressDuration() time.Duration {
-	const def = hotkey.DefaultLongPress
-	if v := os.Getenv("ZEE_LONGPRESS_DURATION"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
-		log.Warnf("invalid ZEE_LONGPRESS_DURATION %q, using default %s", v, def)
-	}
-	return def
 }
 
 func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- recSession) {

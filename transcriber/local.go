@@ -99,8 +99,11 @@ func localProviderInfo(name, label, defaultID, defaultLang string, compiledIn, h
 		},
 		Status: func(id string) ModelStatus {
 			m, ok := localmodel.ByID(id)
-			if !ok || !compiledIn {
-				return ModelStatus{} // unknown, or not compiled in → Unavailable
+			// An ID belonging to the other engine is rejected, not reported ready:
+			// feeding whisper weights to the parakeet loader (a hand-edited config
+			// pair) has hung for 8+ minutes on CI rather than failing cleanly.
+			if !ok || !compiledIn || m.Engine != name {
+				return ModelStatus{} // unknown, wrong engine, or not compiled in → Unavailable
 			}
 			if localmodel.Present(m) {
 				return ModelStatus{Ready: true}
@@ -109,8 +112,8 @@ func localProviderInfo(name, label, defaultID, defaultLang string, compiledIn, h
 		},
 		Download: func(id string, progress func(float64)) error {
 			m, ok := localmodel.ByID(id)
-			if !ok {
-				return fmt.Errorf("unknown local model %q", id)
+			if !ok || m.Engine != name {
+				return fmt.Errorf("unknown %s model %q", name, id)
 			}
 			return localmodel.Download(m, progress)
 		},
@@ -153,8 +156,8 @@ func (p *localProvider) load() {
 		eng localEngine
 		err error
 	)
-	if m, ok := localmodel.ByID(want); !ok {
-		err = fmt.Errorf("unknown local model %q", want)
+	if m, ok := localmodel.ByID(want); !ok || m.Engine != p.name {
+		err = fmt.Errorf("unknown %s model %q", p.name, want)
 	} else if !localmodel.Present(m) {
 		err = fmt.Errorf("model %q not downloaded", m.Label)
 	} else {
@@ -261,6 +264,12 @@ func (p *localProvider) NewSession(_ context.Context, cfg SessionConfig) (Sessio
 	p.mu.Unlock()
 	if err != nil {
 		return nil, err
+	}
+	// A concurrent SetModel/Close between load() returning and the read above
+	// can null the engine with no error recorded. Refuse rather than hand the
+	// session a nil engine (which would panic mid-dictation).
+	if eng == nil {
+		return nil, fmt.Errorf("%s: model %q is reloading, try again", p.name, p.GetModel())
 	}
 	// An explicit per-session language (the -transcribe path) wins over the
 	// provider's current setting; the live hotkey path leaves it empty.

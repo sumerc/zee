@@ -61,7 +61,10 @@ var (
 
 	langCode   string // effective language shown for the active model ("" = auto-detect)
 	langIntent string // user's persisted choice; survives models that can't offer it
-	langCb     func(code string, persist bool)
+	// langCb reports whether the change was accepted; a user click that is
+	// denied (busy engine) must not move the menu's checkmark. Derived changes
+	// (persist=false) are always accepted.
+	langCb func(code string, persist bool) bool
 
 	appVersion     string
 	checkUpdateCb  func()
@@ -69,6 +72,7 @@ var (
 	editHintsCb    func()
 	editSettingsCb func()
 	editCredsCb    func()
+	reloadCfgCb    func()
 	hotkeyLabel    string // display-only current push-to-talk combo (e.g. "⌃⇧Space")
 )
 
@@ -222,6 +226,7 @@ func OnSaveAudio(fn func())       { saveAudioCb = fn }
 func OnEditHints(fn func())       { editHintsCb = fn }
 func OnEditSettings(fn func())    { editSettingsCb = fn }
 func OnEditCredentials(fn func()) { editCredsCb = fn }
+func OnReloadConfig(fn func())    { reloadCfgCb = fn }
 
 // SetHotkeyLabel sets the display-only current push-to-talk combo shown (and
 // disabled) in the menu, and the combo hint on the Start/Stop Recording item.
@@ -280,7 +285,7 @@ func applyLanguage() {
 	refreshLanguageMenu()
 }
 
-func SetLanguage(code string, onSwitch func(code string, persist bool)) {
+func SetLanguage(code string, onSwitch func(code string, persist bool) bool) {
 	trayMu.Lock()
 	langCode = code
 	langIntent = code

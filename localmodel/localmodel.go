@@ -26,8 +26,10 @@ import (
 
 // Version is the pinned model-set version. It drives BOTH the download tag and
 // the dev folder, so they never drift (decision #5: models are pinned to the
-// binary, never "latest"). Bump it when the parakeet.cpp commit changes.
-const Version = "v2"
+// binary, never "latest"). Bump it when the parakeet.cpp commit changes or the
+// model set changes (published releases are immutable — never add to one).
+// v3 = v2's two models + the re-added parakeet-v3-multi.
+const Version = "v3"
 
 // baseURL hosts the immutable models-<Version> release assets.
 const baseURL = "https://github.com/sumerc/zee/releases/download/models-" + Version + "/"

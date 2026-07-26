@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"zee/config"
 )
 
 var updateHTTPClient = &http.Client{Timeout: 10 * time.Minute}
@@ -32,6 +34,7 @@ func Install(rel Release) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	sweepStaleStaging(filepath.Dir(app))
 	work, err := os.MkdirTemp(filepath.Dir(app), ".zee-update-")
 	if err != nil {
 		return "", fmt.Errorf("stage update beside %s: %w", app, err)
@@ -81,20 +84,29 @@ func otherZeeRunning() bool {
 }
 
 func currentAppPath() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	const marker = ".app/Contents/MacOS/"
-	i := strings.Index(exe, marker)
-	if i < 0 {
+	app, ok := config.AppBundlePath()
+	if !ok {
 		return "", fmt.Errorf("updates require an installed Zee.app")
 	}
-	app := exe[:i+len(".app")]
 	if filepath.Base(app) != "Zee.app" {
 		return "", fmt.Errorf("unexpected app bundle %s", app)
 	}
 	return app, nil
+}
+
+// sweepStaleStaging removes .zee-update-* work dirs a previous update could not
+// clean up (SIGKILL, power loss) — os.RemoveAll's defer never runs then, and
+// each orphan holds a full extracted bundle beside /Applications/Zee.app.
+// Best-effort: a dir belonging to a concurrently running updater would be in
+// use, but two updaters swapping the same bundle is already broken.
+func sweepStaleStaging(dir string) {
+	matches, err := filepath.Glob(filepath.Join(dir, ".zee-update-*"))
+	if err != nil {
+		return
+	}
+	for _, m := range matches {
+		os.RemoveAll(m)
+	}
 }
 
 func download(url, dest string) error {

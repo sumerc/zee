@@ -102,6 +102,14 @@ func (d *Deepgram) startStream(ctx context.Context, cfg streamSessionConfig) (ra
 		conn = r.conn
 	case <-time.After(15 * time.Second):
 		cancel()
+		// cancel() aborts an in-flight dial, but one that *just* succeeded is
+		// already upgraded and immune — close it, or the socket leaks for the
+		// life of the process.
+		go func() {
+			if r := <-dialCh; r.conn != nil {
+				r.conn.Close(websocket.StatusGoingAway, "dial timed out")
+			}
+		}()
 		return nil, fmt.Errorf("deepgram: connect timed out after 15s")
 	}
 

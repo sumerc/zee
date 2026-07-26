@@ -2,10 +2,13 @@ package hotkey
 
 import (
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"zee/log"
 )
 
 // captureTimeout bounds how long Capture waits for the user to press a chord.
@@ -14,6 +17,23 @@ const captureTimeout = 20 * time.Second
 // DefaultLongPress separates the two press styles: held longer = push-to-talk
 // (release stops), shorter = toggle (next tap stops).
 const DefaultLongPress = 350 * time.Millisecond
+
+// LongPress is the effective threshold: DefaultLongPress unless overridden by
+// ZEE_LONGPRESS_DURATION (a Go duration, e.g. "500ms"). Every caller must use
+// this rather than the constant — `zee doctor` claims to exercise "the app's
+// own press semantics", which is only true if it reads the same override.
+func LongPress() time.Duration {
+	v := os.Getenv("ZEE_LONGPRESS_DURATION")
+	if v == "" {
+		return DefaultLongPress
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Warnf("invalid ZEE_LONGPRESS_DURATION %q, using default %s", v, DefaultLongPress)
+		return DefaultLongPress
+	}
+	return d
+}
 
 // AwaitRecord waits (up to timeout) for the combo to start a recording and
 // returns a stop channel driven by WaitStop — the exact press semantics of
@@ -92,6 +112,15 @@ type Combo struct {
 // IsZero reports whether c is unset (e.g. a config with no saved hotkey).
 func (c Combo) IsZero() bool { return len(c.Mods) == 0 && c.Key == 0 }
 
+// OrDefault is c, or the built-in default when nothing is saved — the one
+// "which combo is in effect?" answer, shared by the app and the wizard.
+func (c Combo) OrDefault() Combo {
+	if c.IsZero() {
+		return DefaultCombo()
+	}
+	return c
+}
+
 // Equal reports whether two combos bind the same chord. Modifier order is
 // ignored (a hand-edited config may list mods in any order); Label is display
 // only and not compared.
@@ -105,6 +134,29 @@ func (c Combo) Equal(o Combo) bool {
 	return slices.Equal(a, b)
 }
 
+// modOrder is the canonical modifier order in a label, and modGlyphs their
+// symbols. Both platforms build labels from these (and Display parses them
+// back), so the rendering of a combo is defined exactly once.
+var modOrder = []string{"ctrl", "option", "shift", "cmd"}
+
+var modGlyphs = map[string]string{"ctrl": "⌃", "option": "⌥", "shift": "⇧", "cmd": "⌘"}
+
+// modGlyphSet is modGlyphs' values as a string, for Display's rune scan.
+const modGlyphSet = "⌃⌥⇧⌘"
+
+// ComboLabel renders the compact label ("⌃⇧Space") for a set of modifier names
+// and an already-rendered key glyph, in canonical order regardless of the order
+// the modifiers arrive in.
+func ComboLabel(mods []string, keyGlyph string) string {
+	label := ""
+	for _, m := range modOrder {
+		if slices.Contains(mods, m) {
+			label += modGlyphs[m]
+		}
+	}
+	return label + keyGlyph
+}
+
 // Display renders the combo for humans as "⌃ + ⇧ + Space": the compact Label
 // ("⌃⇧Space") is split into its modifier symbols and key, joined with " + ".
 // Used everywhere a combo is shown (tray, setup/doctor prose).
@@ -113,7 +165,7 @@ func (c Combo) Display() string {
 	rest := c.Label
 	for len(rest) > 0 {
 		r, size := utf8.DecodeRuneInString(rest)
-		if !strings.ContainsRune("⌃⇧⌥⌘", r) {
+		if !strings.ContainsRune(modGlyphSet, r) {
 			break
 		}
 		parts = append(parts, string(r))

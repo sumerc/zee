@@ -84,7 +84,7 @@ func hotkeyDictation(combo hotkey.Combo) (fired bool, text string, err error) {
 	fmt.Printf("\nHold %s and speak, release to stop (or tap to start / tap to stop)…\n", combo.Display())
 	// The app's own press semantics, verbatim (hotkey.AwaitRecord/WaitStop):
 	// doctor must exercise the code the tray runs, not a reimplementation.
-	stop, fired := hotkey.AwaitRecord(hk, hotkey.DefaultLongPress, 30*time.Second)
+	stop, fired := hotkey.AwaitRecord(hk, hotkey.LongPress(), 30*time.Second)
 	if !fired {
 		return false, "", fmt.Errorf("hotkey did not fire within 30s")
 	}

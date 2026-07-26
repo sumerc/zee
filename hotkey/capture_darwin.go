@@ -79,24 +79,17 @@ func captureChord(cancel <-chan struct{}) (Combo, error) {
 
 func chordToCombo(c rawChord) Combo {
 	var mods []string
-	var glyph string
-	if c.mods&nsControl != 0 {
-		mods = append(mods, "ctrl")
-		glyph += "⌃"
+	for _, m := range []struct {
+		bit  uint64
+		name string
+	}{
+		{nsControl, "ctrl"}, {nsOption, "option"}, {nsShift, "shift"}, {nsCommand, "cmd"},
+	} {
+		if c.mods&m.bit != 0 {
+			mods = append(mods, m.name)
+		}
 	}
-	if c.mods&nsOption != 0 {
-		mods = append(mods, "option")
-		glyph += "⌥"
-	}
-	if c.mods&nsShift != 0 {
-		mods = append(mods, "shift")
-		glyph += "⇧"
-	}
-	if c.mods&nsCommand != 0 {
-		mods = append(mods, "cmd")
-		glyph += "⌘"
-	}
-	return Combo{Mods: mods, Key: c.key, Label: glyph + keyGlyph(c.key)}
+	return Combo{Mods: mods, Key: c.key, Label: ComboLabel(mods, keyGlyph(c.key))}
 }
 
 // keyGlyph maps a macOS virtual keycode to a display string. Unmapped keys fall

@@ -54,7 +54,7 @@ func TestCurrentComboUsesSaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	config.Update(func(s *config.Settings) {
-		s.Hotkey = config.Hotkey{Mods: []string{"option"}, Key: 49, Label: "⌥Space"}
+		s.Hotkey = hotkey.Combo{Mods: []string{"option"}, Key: 49, Label: "⌥Space"}
 	})
 	got := currentCombo()
 	if got.Label != "⌥Space" || got.Key != 49 || len(got.Mods) != 1 || got.Mods[0] != "option" {

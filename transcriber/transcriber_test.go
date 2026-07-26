@@ -4,24 +4,12 @@ import (
 	"encoding/binary"
 	"net/http"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 	"zee/encoder"
 	"zee/localmodel"
 )
-
-// TestParakeetModelsMethodMatchesFunc pins the delegation: a loaded Parakeet
-// provider's Models method and the package ParakeetModels function must return
-// identical lists so the tray and a loaded provider can never disagree on the
-// model set.
-func TestParakeetModelsMethodMatchesFunc(t *testing.T) {
-	p := &localProvider{name: localmodel.EngineParakeet, langsFor: parakeetLanguages}
-	if got, want := p.Models(), ParakeetModels(); !reflect.DeepEqual(got, want) {
-		t.Errorf("localProvider.Models() = %v, want %v (must delegate to ParakeetModels)", got, want)
-	}
-}
 
 // TestModelsAreEngineScoped guards the split introduced with Whisper: each local
 // provider must expose only its own engine's models, or the tray would offer a

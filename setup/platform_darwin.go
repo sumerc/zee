@@ -85,8 +85,8 @@ func SpawnSetupAt(appPath string) (int, error) {
 // without it, LaunchServices sees the still-running wizard (same bundle) and
 // merely activates it, so no tray would ever start.
 func launchInstalledApp() bool {
-	app := appBundlePath()
-	if app == "" {
+	app, ok := config.AppBundlePath()
+	if !ok {
 		return false
 	}
 	return exec.Command("open", "-n", "-a", app).Start() == nil
@@ -110,15 +110,3 @@ func otherZeeRunning() bool {
 	return false
 }
 
-// appBundlePath returns the <...>.app path containing this executable, or "".
-func appBundlePath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	const marker = ".app/Contents/MacOS/"
-	if i := strings.Index(exe, marker); i >= 0 {
-		return exe[:i+len(".app")]
-	}
-	return ""
-}

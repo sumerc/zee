@@ -26,7 +26,6 @@ import (
 	"zee/config"
 	"zee/encoder"
 	"zee/hotkey"
-	"zee/internal/parakeet"
 	"zee/localmodel"
 	"zee/permissions"
 	"zee/transcriber"
@@ -177,7 +176,7 @@ func stepMic(r *results) {
 		prov transcriber.ProviderInfo
 		lang string
 	)
-	if parakeet.Available() { // both offline engines share the darwin/arm64 gate
+	if transcriber.LocalSupported() { // both offline engines share the darwin/arm64 gate
 		if p, l, ok := testEngine(); ok {
 			prov, lang = p, l
 			tr = p.New()
@@ -189,7 +188,7 @@ func stepMic(r *results) {
 	if !r.micGranted {
 		return
 	}
-	if !parakeet.Available() {
+	if !transcriber.LocalSupported() {
 		fmt.Println("  No offline engine on this machine — skipping the live mic test.")
 		return
 	}
@@ -492,7 +491,7 @@ func stepHotkey(r *results) {
 	}
 	r.combo = combo
 	config.Update(func(s *config.Settings) {
-		s.Hotkey = config.Hotkey{Mods: combo.Mods, Key: combo.Key, Label: combo.Label}
+		s.Hotkey = combo
 	})
 	if r.comboFired {
 		fmt.Printf("  "+tick()+" hotkey %s saved\n", combo.Display())
@@ -661,7 +660,7 @@ func stepProviders(r *results) {
 		}
 		p := providers[idx]
 		if p.Local {
-			if !parakeet.Available() { // one flag covers both offline engines
+			if !transcriber.LocalSupported() { // one gate covers both offline engines
 				fmt.Println("  The offline engines need Apple Silicon; use a cloud provider on this machine.")
 				continue
 			}
@@ -753,8 +752,6 @@ func testProvider(p transcriber.ProviderInfo, pcm []byte) bool {
 	return true
 }
 
-// defaultLocalModelID is the saved model when it's a local one, else the 110M
-// English default.
 // localDefaultModel is the model the wizard ensures for a local provider: the
 // user's persisted choice when it belongs to this provider, else the
 // provider's own default.
@@ -854,11 +851,4 @@ func boolWord(b bool, yes, no string) string {
 }
 
 // currentCombo is the saved hotkey, or the built-in default when none is saved.
-func currentCombo() hotkey.Combo {
-	h := config.Get().Hotkey
-	c := hotkey.Combo{Mods: h.Mods, Key: h.Key, Label: h.Label}
-	if c.IsZero() {
-		return hotkey.DefaultCombo()
-	}
-	return c
-}
+func currentCombo() hotkey.Combo { return config.Get().Hotkey.OrDefault() }

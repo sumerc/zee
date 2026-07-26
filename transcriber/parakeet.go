@@ -45,6 +45,12 @@ func parakeetLanguages(m localmodel.Model) []Language {
 	return []Language{{Code: "en", Label: "English"}}
 }
 
+// LocalSupported reports whether this build can run the on-device engines at
+// all — darwin/arm64 with the cgo engines linked in. Parakeet and Whisper share
+// that one gate, so parakeet's answer covers both. Callers outside this package
+// ask here instead of importing internal/parakeet themselves.
+func LocalSupported() bool { return parakeet.Available() }
+
 func parakeetProvider() ProviderInfo {
 	return localProviderInfo(
 		localmodel.EngineParakeet, "Local (Parakeet)",
@@ -52,10 +58,4 @@ func parakeetProvider() ProviderInfo {
 		parakeet.Available(), false, // hints: no prompt surface in a greedy decode
 		openParakeet, parakeetLanguages,
 	)
-}
-
-// ParakeetModels lists the on-device Parakeet models as ModelInfo (for the tray)
-// without needing a loaded provider instance.
-func ParakeetModels() []ModelInfo {
-	return modelInfos(localModels(localmodel.EngineParakeet), parakeetLanguages)
 }

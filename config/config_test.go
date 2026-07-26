@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestSettingsDefaults(t *testing.T) {
@@ -147,7 +146,7 @@ func TestSettingsConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
-func TestWatchReloadsExternalEdits(t *testing.T) {
+func TestReloadExternalEdits(t *testing.T) {
 	d := t.TempDir()
 	SetDir(d)
 	if err := Load(); err != nil {
@@ -155,39 +154,31 @@ func TestWatchReloadsExternalEdits(t *testing.T) {
 	}
 	Update(func(s *Settings) { s.Language = "en" }) // create the file
 
-	ch := make(chan Settings, 4)
-	stop := Watch(func(s Settings) {
-		select {
-		case ch <- s:
-		default:
-		}
-	})
-	t.Cleanup(stop)
-
-	// An external edit (what "Edit Settings…" produces) must fire the callback
-	// and swap the in-memory settings.
+	// An external edit (what "Edit Settings…" produces) must swap the
+	// in-memory settings when the user hits "Reload Config".
 	data := []byte(`{"language": "fr", "auto_paste": false}`)
 	if err := os.WriteFile(filepath.Join(d, "config.json"), data, 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	select {
-	case s := <-ch:
-		if s.Language != "fr" || s.AutoPaste {
-			t.Fatalf("reloaded settings = %+v, want language fr, auto_paste false", s)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("watcher did not fire on external edit")
+	s, err := Reload()
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if s.Language != "fr" || s.AutoPaste {
+		t.Fatalf("reloaded settings = %+v, want language fr, auto_paste false", s)
 	}
 	if got := Get().Language; got != "fr" {
 		t.Fatalf("Get().Language = %q after reload, want fr", got)
 	}
 
-	// The app's own save rewrites the file but matches the in-memory settings —
-	// the watcher must suppress it (no echo).
-	Update(func(s *Settings) { s.Language = "fr" })
-	select {
-	case s := <-ch:
-		t.Fatalf("watcher fired on the app's own save: %+v", s)
-	case <-time.After(2 * time.Second):
+	// A corrupt file must error and leave the live settings untouched.
+	if err := os.WriteFile(filepath.Join(d, "config.json"), []byte("{nope"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Reload(); err == nil {
+		t.Fatal("Reload on corrupt file: want error, got nil")
+	}
+	if got := Get().Language; got != "fr" {
+		t.Fatalf("Get().Language = %q after failed reload, want fr (untouched)", got)
 	}
 }

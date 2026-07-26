@@ -87,7 +87,6 @@ func PCMToF32(pcm []byte) []float32 {
 // wrapped here. That's what the "Save Last Recording" feature (and the
 // auto-save-on-error path in main.go) writes to disk. Unlike WAVToPCM, this is
 // on the hot path, not test-only.
-// PCMToWAV wraps raw 16 kHz mono S16 PCM (the capture format) in a WAV header.
 func PCMToWAV(pcm []byte) []byte { return pcmWAV(pcm, 16000) }
 
 func pcmWAV(pcm []byte, sampleRate int) []byte {

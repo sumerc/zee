@@ -129,24 +129,23 @@ func (h *linuxHotkey) stopLocked() {
 	h.wg.Wait()
 }
 
-func (h *linuxHotkey) readEvents(f *os.File, modGroups [][]uint16, keyCode uint16, stop chan struct{}) {
-	defer h.wg.Done()
+// readKeyEvents pumps EV_KEY events off an evdev node until stop is closed, the
+// read fails, or fn returns false. Both consumers — the live hotkey listener
+// and the capture reader — differ only in the state machine they run on top, so
+// the record parsing (24-byte stride, type/code/value at offsets 16/18/20)
+// lives here once.
+func readKeyEvents(f *os.File, stop <-chan struct{}, fn func(code uint16, pressed, released bool) bool) {
 	buf := make([]byte, inputEventSize*16)
-	held := make([]bool, len(modGroups))
-	keyHeld := false
-
 	for {
 		select {
 		case <-stop:
 			return
 		default:
 		}
-
 		n, err := f.Read(buf)
 		if err != nil {
 			return
 		}
-
 		for i := 0; i+inputEventSize <= n; i += inputEventSize {
 			evType := binary.LittleEndian.Uint16(buf[i+16:])
 			evCode := binary.LittleEndian.Uint16(buf[i+18:])
@@ -154,46 +153,56 @@ func (h *linuxHotkey) readEvents(f *os.File, modGroups [][]uint16, keyCode uint1
 			if evType != evKey {
 				continue
 			}
-			pressed := evValue == keyPress
-			released := evValue == keyRel
-
-			for gi, codes := range modGroups {
-				for _, c := range codes {
-					if evCode == c {
-						if pressed {
-							held[gi] = true
-						} else if released {
-							held[gi] = false
-						}
-					}
-				}
-			}
-
-			if evCode != keyCode {
-				continue
-			}
-			allMods := true
-			for _, hh := range held {
-				if !hh {
-					allMods = false
-					break
-				}
-			}
-			if pressed && !keyHeld && allMods {
-				keyHeld = true
-				select {
-				case h.keydown <- struct{}{}:
-				default:
-				}
-			} else if released && keyHeld {
-				keyHeld = false
-				select {
-				case h.keyup <- struct{}{}:
-				default:
-				}
+			if !fn(evCode, evValue == keyPress, evValue == keyRel) {
+				return
 			}
 		}
 	}
+}
+
+func (h *linuxHotkey) readEvents(f *os.File, modGroups [][]uint16, keyCode uint16, stop chan struct{}) {
+	defer h.wg.Done()
+	held := make([]bool, len(modGroups))
+	keyHeld := false
+
+	readKeyEvents(f, stop, func(evCode uint16, pressed, released bool) bool {
+		for gi, codes := range modGroups {
+			for _, c := range codes {
+				if evCode == c {
+					if pressed {
+						held[gi] = true
+					} else if released {
+						held[gi] = false
+					}
+				}
+			}
+		}
+
+		if evCode != keyCode {
+			return true
+		}
+		allMods := true
+		for _, hh := range held {
+			if !hh {
+				allMods = false
+				break
+			}
+		}
+		if pressed && !keyHeld && allMods {
+			keyHeld = true
+			select {
+			case h.keydown <- struct{}{}:
+			default:
+			}
+		} else if released && keyHeld {
+			keyHeld = false
+			select {
+			case h.keyup <- struct{}{}:
+			default:
+			}
+		}
+		return true
+	})
 }
 
 func (h *linuxHotkey) Rebind(c Combo) error {
@@ -269,64 +278,43 @@ func (h *linuxHotkey) Capture(cancel <-chan struct{}) (Combo, error) {
 }
 
 func captureReader(f *os.File, result chan<- Combo, canceled chan<- struct{}, stop chan struct{}) {
-	buf := make([]byte, inputEventSize*16)
 	held := map[string]bool{}
 
-	for {
+	readKeyEvents(f, stop, func(evCode uint16, pressed, released bool) bool {
+		if name, ok := modName(evCode); ok {
+			if pressed {
+				held[name] = true
+			} else if released {
+				held[name] = false
+			}
+			return true
+		}
+		if !pressed {
+			return true
+		}
+		// A non-modifier key was pressed.
+		var mods []string
+		for _, name := range modOrder {
+			if held[name] {
+				mods = append(mods, name)
+			}
+		}
+		if len(mods) == 0 {
+			if evCode == keyEsc {
+				select {
+				case canceled <- struct{}{}:
+				default:
+				}
+				return false
+			}
+			return true // ignore unmodified keys
+		}
 		select {
-		case <-stop:
-			return
+		case result <- Combo{Mods: mods, Key: int(evCode), Label: comboLabel(mods, evCode)}:
 		default:
 		}
-		n, err := f.Read(buf)
-		if err != nil {
-			return
-		}
-		for i := 0; i+inputEventSize <= n; i += inputEventSize {
-			evType := binary.LittleEndian.Uint16(buf[i+16:])
-			evCode := binary.LittleEndian.Uint16(buf[i+18:])
-			evValue := int32(binary.LittleEndian.Uint32(buf[i+20:]))
-			if evType != evKey {
-				continue
-			}
-			pressed := evValue == keyPress
-			released := evValue == keyRel
-
-			if name, ok := modName(evCode); ok {
-				if pressed {
-					held[name] = true
-				} else if released {
-					held[name] = false
-				}
-				continue
-			}
-			if !pressed {
-				continue
-			}
-			// A non-modifier key was pressed.
-			var mods []string
-			for _, name := range []string{"ctrl", "option", "shift", "cmd"} {
-				if held[name] {
-					mods = append(mods, name)
-				}
-			}
-			if len(mods) == 0 {
-				if evCode == keyEsc {
-					select {
-					case canceled <- struct{}{}:
-					default:
-					}
-					return
-				}
-				continue // ignore unmodified keys
-			}
-			select {
-			case result <- Combo{Mods: mods, Key: int(evCode), Label: comboLabel(mods, evCode)}:
-			default:
-			}
-			return
-		}
-	}
+		return false
+	})
 }
 
 func modName(code uint16) (string, bool) {
@@ -341,18 +329,8 @@ func modName(code uint16) (string, bool) {
 }
 
 func comboLabel(mods []string, key uint16) string {
-	glyph := ""
-	for _, m := range []string{"ctrl", "option", "shift", "cmd"} {
-		for _, have := range mods {
-			if have == m {
-				glyph += modGlyphs[m]
-			}
-		}
-	}
-	return glyph + keyGlyph(key)
+	return ComboLabel(mods, keyGlyph(key))
 }
-
-var modGlyphs = map[string]string{"ctrl": "⌃", "option": "⌥", "shift": "⇧", "cmd": "⌘"}
 
 func keyGlyph(code uint16) string {
 	if g, ok := linuxKeyGlyphs[code]; ok {

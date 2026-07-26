@@ -177,7 +177,7 @@ bump-version:
 # Publish the offline Parakeet GGUF models as an immutable, never-"latest"
 # GitHub release. Prereq: each .gguf's entry (Filename + SHA256) already exists
 # in localmodel.go. Copy the ggufs into a folder, then:
-#   make model-release MODELS_DIR=./out MODELS_TAG=models-v2
+#   make model-release MODELS_DIR=./out MODELS_TAG=models-v3
 # It regenerates the manifest, verifies the local ggufs against the registry's
 # SHA256s, and uploads them with --latest=false so the app-release "latest"
 # pointer is never hijacked. install.sh reads localmodel/manifest.txt (from main)
@@ -198,10 +198,10 @@ model-release: manifest
 	  test "$$want" = "$$got" || { echo "ERROR: $$f sha mismatch (registry $$want, file $$got)" && exit 1; }; \
 	  echo "  ok $$f"; \
 	done
-	gh release create "$(MODELS_TAG)" --repo sumerc/zee --latest=false \
+	cd "$(MODELS_DIR)" && gh release create "$(MODELS_TAG)" --repo sumerc/zee --latest=false \
 	  --title "Local STT $(MODELS_TAG)" \
 	  --notes "Model files for zee local STT: NVIDIA NeMo Parakeet GGUF (CC-BY-4.0) and OpenAI Whisper ggml (MIT)." \
-	  $$(ls "$(MODELS_DIR)"/*.gguf "$(MODELS_DIR)"/*.bin 2>/dev/null)
+	  $$(ls *.gguf *.bin 2>/dev/null)
 	@echo "==> published $(MODELS_TAG) (not marked latest)."
 	@echo "==> commit: localmodel.go + localmodel/manifest.txt (+ install.sh MODELS_TAG if bumped)."
 

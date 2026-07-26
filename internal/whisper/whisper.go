@@ -84,10 +84,17 @@ static char *zee_wsp_transcribe(struct whisper_context *ctx, const float *pcm,
     if (out == NULL) {
         return NULL;
     }
-    out[0] = '\0';
+    // Append at a running offset rather than strcat, which rescans the whole
+    // destination on every segment — quadratic in transcript length, and a long
+    // dictation is thousands of segments.
+    char *w = out;
     for (int i = 0; i < ns; i++) {
-        strcat(out, whisper_full_get_segment_text(ctx, i));
+        const char *seg = whisper_full_get_segment_text(ctx, i);
+        size_t n = strlen(seg);
+        memcpy(w, seg, n);
+        w += n;
     }
+    *w = '\0';
     return out;
 }
 */

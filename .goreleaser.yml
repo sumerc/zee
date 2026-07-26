@@ -2,10 +2,11 @@ version: 2
 
 before:
   hooks:
-    # Init the parakeet.cpp submodule and build its static archives before the
+    # Init the parakeet.cpp submodule and build both static archives before the
     # arm64 cgo build links them (darwin/arm64 only; no-op elsewhere).
+    # whisper-lib depends on parakeet-lib, so this one target builds both.
     - git submodule update --init --recursive
-    - make parakeet-lib
+    - make whisper-lib
     - packaging/mkicns.sh packaging/appicon.png
 
 builds:

@@ -32,14 +32,39 @@ cleanup() {
   # If interrupted in the swap window (old already moved to BACKUP, new not yet
   # in place), restore the old app rather than leave nothing — data safety wins
   # over cleanliness. Only then discard leftovers.
+  # sudo is non-interactive here (run_or_sudo_n): the trap can fire on a closed
+  # terminal, where a password prompt would hang the shell forever. A leftover
+  # hidden dir is recoverable — a wedged install is not; the stale-dir sweep at
+  # startup clears whatever this could not.
   if [[ ! -e "${APP_DIR}/Zee.app" && -d "$BACKUP" ]]; then
-    run_or_sudo mv "$BACKUP" "${APP_DIR}/Zee.app" || true
+    run_or_sudo_n mv "$BACKUP" "${APP_DIR}/Zee.app" || true
   fi
-  [[ -e "$STAGE" ]] && run_or_sudo rm -rf "$STAGE" || true
-  [[ -e "$BACKUP" ]] && run_or_sudo rm -rf "$BACKUP" || true
+  [[ -e "$STAGE" ]] && run_or_sudo_n rm -rf "$STAGE" || true
+  [[ -e "$BACKUP" ]] && run_or_sudo_n rm -rf "$BACKUP" || true
 }
 run_or_sudo() {
   "$@" 2>/dev/null || { log "Need sudo: $*"; sudo "$@"; }
+}
+# run_or_sudo_n: same, but never prompts — for the EXIT trap (see cleanup).
+run_or_sudo_n() {
+  "$@" 2>/dev/null || sudo -n "$@" 2>/dev/null
+}
+# Sweep staging dirs an earlier run could not clean up (SIGKILL, power loss,
+# a sudo password the trap declined to ask for). They are PID-suffixed, so a
+# concurrent installer's dirs are the only false positive — and two installers
+# racing over /Applications/Zee.app is already broken.
+sweep_stale_staging() {
+  local d
+  for d in "${APP_DIR}"/.Zee.app.new-* "${APP_DIR}"/.Zee.app.old-*; do
+    [[ -e "$d" ]] || continue
+    # An orphaned .old- with no live app means a previous run died mid-swap:
+    # restore rather than delete (the bundle is the only copy left).
+    if [[ "$d" == *".Zee.app.old-"* && ! -e "${APP_DIR}/Zee.app" ]]; then
+      log "Restoring app bundle left by an interrupted install"
+      run_or_sudo mv "$d" "${APP_DIR}/Zee.app" && continue
+    fi
+    run_or_sudo rm -rf "$d" || true
+  done
 }
 # fetch <url> <dest> — download with a compact single-line progress display.
 # curl's --progress-bar is terminal-width and stacks lines when it wraps (and
@@ -105,6 +130,8 @@ if pgrep -x zee >/dev/null 2>&1; then
   err "Zee is running — quit it first (menu bar → Quit), then re-run the installer."
 fi
 
+sweep_stale_staging
+
 # DMG_PATH installs a locally built DMG (dev flow): version resolution,
 # download, and checksum are skipped — everything else (model prefetch, copy,
 # quarantine clear, setup handoff) runs identically.
@@ -127,7 +154,7 @@ fi
 # The registry — filenames, hashes, and which models to pre-fetch — is generated
 # from localmodel.go into localmodel/manifest.txt and read here from main, so
 # nothing is hardcoded. Columns: filename<TAB>sha256<TAB>prefetch.
-MODELS_TAG="models-v2"
+MODELS_TAG="models-v3"
 MODELS_BASE="https://github.com/${REPO}/releases/download/${MODELS_TAG}"
 MODELS_DIR="${HOME}/Library/Application Support/zee/models"
 MANIFEST_URL="https://raw.githubusercontent.com/${REPO}/main/localmodel/manifest.txt"
@@ -164,11 +191,18 @@ prefetch_models() {
       log "Model ${f} already present"; continue
     fi
     log "Downloading model ${f}..."
-    # Attempt 1 may resume a leftover .part; if the assembled file fails the
-    # checksum (stale/corrupt partial), retry once from scratch before erring.
+    # Attempt 1 may resume a leftover .part. Both failure modes retry once
+    # before erring: a dropped connection keeps its .part (attempt 2 resumes,
+    # so the retry is nearly free); a checksum mismatch (stale/corrupt
+    # partial) retries from scratch. On final failure the .part is kept — a
+    # rerun of the installer resumes it.
     for attempt in 1 2; do
-      fetch "${MODELS_BASE}/${f}" "${dest}.part" \
-        || { rm -f "${dest}.part"; err "model download failed: ${MODELS_BASE}/${f}"; }
+      if ! fetch "${MODELS_BASE}/${f}" "${dest}.part"; then
+        [[ "$attempt" -eq 1 ]] \
+          && log "Download failed for ${f} — retrying (resumes partial)..." \
+          || err "model download failed: ${MODELS_BASE}/${f}"
+        continue
+      fi
       if shasum -a 256 "${dest}.part" | grep -q "$sum"; then
         mv -f "${dest}.part" "$dest"
         log "Model ${f} OK"

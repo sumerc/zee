@@ -57,11 +57,18 @@ func (h *xHotkey) Register() error {
 // forward pumps the underlying hotkey's events into our stable channels until
 // stop is closed (on Rebind/Unregister), so the app's listener never restarts.
 func (h *xHotkey) forward(hk *hotkey.Hotkey, stop chan struct{}) {
+	// The sends select on stop too: a forwarder parked on a full channel would
+	// otherwise outlive close(stop) and deliver its stale event into the shared
+	// channel after a Rebind — one phantom keydown from the *old* combo.
 	go func() {
 		for {
 			select {
 			case <-hk.Keydown():
-				h.keydown <- struct{}{}
+				select {
+				case h.keydown <- struct{}{}:
+				case <-stop:
+					return
+				}
 			case <-stop:
 				return
 			}
@@ -71,7 +78,11 @@ func (h *xHotkey) forward(hk *hotkey.Hotkey, stop chan struct{}) {
 		for {
 			select {
 			case <-hk.Keyup():
-				h.keyup <- struct{}{}
+				select {
+				case h.keyup <- struct{}{}:
+				case <-stop:
+					return
+				}
 			case <-stop:
 				return
 			}

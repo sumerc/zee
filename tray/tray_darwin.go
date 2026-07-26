@@ -34,6 +34,15 @@ var (
 	mCheckUpdate *systray.MenuItem
 
 	modelItems []*systray.MenuItem
+	// modelGroups records each group submenu and its [start,end) slice of
+	// models, so a model-state change can re-derive the group's enabled state
+	// and "(no API key)" suffix (a key added via Reload Config re-enables its
+	// provider without rebuilding the menu).
+	modelGroups []struct {
+		item       *systray.MenuItem
+		label      string
+		start, end int
+	}
 )
 
 func Init() <-chan struct{} {
@@ -46,6 +55,14 @@ func Init() <-chan struct{} {
 	})
 	<-done
 	return quitCh
+}
+
+// addSubmenuSeparator draws a divider inside a submenu. systray can only put a
+// real separator in the top-level menu, so submenus fake one with a disabled
+// item.
+func addSubmenuSeparator(parent *systray.MenuItem) {
+	item := parent.AddSubMenuItem("─────────", "")
+	item.Disable()
 }
 
 func updateRecordItem(rec bool) {
@@ -248,11 +265,8 @@ func onReady() {
 		}
 	})
 
-	// systray can only put a real separator in the top-level menu, so submenus
-	// draw their own from a disabled item (see the divider below Credentials).
-	// This one closes off the toggles, leaving the file editors below it.
-	sepToggles := mSettings.AddSubMenuItem("─────────", "")
-	sepToggles.Disable()
+	// Closes off the toggles, leaving the file editors below it.
+	addSubmenuSeparator(mSettings)
 
 	mEditHints = mSettings.AddSubMenuItem("Edit Hints…", "Edit vocabulary hints file")
 	mEditHints.Click(func() {
@@ -267,7 +281,7 @@ func onReady() {
 		mEditHints.Disable()
 	}
 
-	mEditSettings = mSettings.AddSubMenuItem("Edit Settings…", "Open config.json (changes apply live)")
+	mEditSettings = mSettings.AddSubMenuItem("Edit Settings…", "Open config.json (apply with Reload Config)")
 	mEditSettings.Click(func() {
 		if editSettingsCb != nil {
 			go editSettingsCb()
@@ -281,8 +295,14 @@ func onReady() {
 		}
 	})
 
-	sep := mSettings.AddSubMenuItem("─────────", "")
-	sep.Disable()
+	mReload := mSettings.AddSubMenuItem("Reload Config", "Re-read config.json + credentials.json and apply the changes")
+	mReload.Click(func() {
+		if reloadCfgCb != nil {
+			go reloadCfgCb()
+		}
+	})
+
+	addSubmenuSeparator(mSettings)
 
 	trayMu.Lock()
 	hl := hotkeyLabel
@@ -318,8 +338,7 @@ func onReady() {
 	trayMu.Unlock()
 
 	// Divide the input device from the transcription pair (Model + Language).
-	sepDevice := mSettings.AddSubMenuItem("─────────", "")
-	sepDevice.Disable()
+	addSubmenuSeparator(mSettings)
 
 	trayMu.Lock()
 	if len(models) > 0 {
@@ -344,6 +363,11 @@ func onReady() {
 			if !anyUsable {
 				provMenu.Disable()
 			}
+			modelGroups = append(modelGroups, struct {
+				item       *systray.MenuItem
+				label      string
+				start, end int
+			}{provMenu, group, i, j})
 			for k := i; k < j; k++ {
 				idx := k
 				m := models[k]
@@ -365,11 +389,9 @@ func onReady() {
 				})
 				modelItems[idx] = item
 			}
-			// Divide Local from the cloud providers (submenus can't hold real
-			// separators, so a disabled item stands in — same trick as Settings).
+			// Divide Local from the cloud providers.
 			if group == "Local" && j < len(models) {
-				sep := mBackend.AddSubMenuItem("─────────", "")
-				sep.Disable()
+				addSubmenuSeparator(mBackend)
 			}
 			i = j
 		}
@@ -433,6 +455,35 @@ func updateModelItem(idx int) {
 	} else {
 		it.Disable()
 	}
+	refreshModelGroup(idx)
+}
+
+// refreshModelGroup re-derives the group submenu containing models[idx]:
+// enabled iff any of its models is usable, with the "(no API key)" suffix
+// tracking that state.
+func refreshModelGroup(idx int) {
+	for _, g := range modelGroups {
+		if idx < g.start || idx >= g.end {
+			continue
+		}
+		trayMu.Lock()
+		anyUsable := false
+		for k := g.start; k < g.end && k < len(models); k++ {
+			if models[k].State != ModelUnavailable {
+				anyUsable = true
+			}
+		}
+		trayMu.Unlock()
+		title := g.label
+		if !anyUsable {
+			title += " (no API key)"
+			g.item.Disable()
+		} else {
+			g.item.Enable()
+		}
+		g.item.SetTitle(title)
+		return
+	}
 }
 
 func addLangEntry(code, label string) {
@@ -444,18 +495,25 @@ func addLangEntry(code, label string) {
 	item.Click(func() {
 		// langEntries is built once in onReady and never mutated after, so it's
 		// safe to read here without the lock; only langCode/langIntent need it.
+		trayMu.Lock()
+		cb := langCb
+		code := langEntries[idx].code
+		trayMu.Unlock()
+		// Ask before touching any state: a busy engine denies the change, and
+		// the menu must keep showing the language the transcriber actually has
+		// (macOS closes the menu on click, so doing nothing here means the old
+		// checkmark is intact when it reopens).
+		if cb != nil && !cb(code, true) {
+			return
+		}
 		for _, e := range langEntries {
 			e.item.Uncheck()
 		}
 		langEntries[idx].item.Check()
 		trayMu.Lock()
-		langCode = langEntries[idx].code
-		langIntent = langCode // a user click is a real choice — remember it
-		cb, code := langCb, langCode
+		langCode = code
+		langIntent = code // a user click is a real choice — remember it
 		trayMu.Unlock()
-		if cb != nil {
-			cb(code, true)
-		}
 		updateStatus()
 	})
 	langEntries = append(langEntries, struct {

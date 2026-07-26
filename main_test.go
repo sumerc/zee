@@ -248,6 +248,10 @@ func TestTryStartSessionDeniesDuringCycle(t *testing.T) {
 // is enqueued and its SilenceClose handle returned.
 func TestTryStartSessionEnqueuesWhenIdle(t *testing.T) {
 	isRecording.Store(false)
+	// tryStartSession claims the cycle (isRecording=true) instead of leaving that
+	// to recordSessions, which isn't running here — release it like a real cycle
+	// end would, so later tests start idle.
+	defer isRecording.Store(false)
 
 	sessions := make(chan recSession, 1)
 	sc := tryStartSession(sessions)
@@ -258,26 +262,6 @@ func TestTryStartSessionEnqueuesWhenIdle(t *testing.T) {
 	case <-sessions:
 	default:
 		t.Fatal("tryStartSession should enqueue a session when idle")
-	}
-}
-
-// TestApplyPendingReloadRunsOnceAtCycleEnd pins the deferred-reload mechanism a
-// config-file change requested mid-cycle rides on: recordSessions calls
-// applyPendingReload at cycle end, which runs the deferred reload exactly once
-// (when no session is in flight).
-func TestApplyPendingReloadRunsOnceAtCycleEnd(t *testing.T) {
-	var ran int32
-	pendingMu.Lock()
-	pendingReload = func() { atomic.AddInt32(&ran, 1) }
-	pendingMu.Unlock()
-
-	applyPendingReload()
-	if atomic.LoadInt32(&ran) != 1 {
-		t.Fatalf("deferred reload ran %d times, want 1", ran)
-	}
-	applyPendingReload() // nothing pending now — must be a no-op
-	if atomic.LoadInt32(&ran) != 1 {
-		t.Fatalf("deferred reload ran again after being cleared (%d)", ran)
 	}
 }
 
