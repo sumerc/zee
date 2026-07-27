@@ -19,7 +19,7 @@
 - **Offline, on-device** — fully local on Apple Silicon, **no API key, no network**, from the first launch. Two Metal-accelerated engines: **Parakeet** for fast English, **Whisper** large-v3 turbo for **~99** languages with auto-detect.
 - **Two recording modes** — hold the hotkey to talk, or tap once to start and again to stop.
 - **Real-time streaming** — with a streaming model (Deepgram Nova-3), words appear and paste as you speak.
-- **Very fast** — under **~500 ms** from key release to clipboard, for most models, cloud ones included.
+- **Sub-second fast** — under **~500 ms** from key release to clipboard, for most models, cloud ones included.
 - **Auto-paste** — the transcript pastes into the focused window.
 - **Silence detection** — VAD warns when nothing is heard.
 - **Providers, switchable at runtime** — local Parakeet and Whisper, plus Groq, OpenAI, Mistral, ElevenLabs and Deepgram, all from the menu bar.
