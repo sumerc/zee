@@ -302,6 +302,10 @@ func onReady() {
 		}
 	})
 
+	// Reload Config acts on the three files above rather than being a fourth
+	// editor, so it sits on its own side of a separator.
+	addSubmenuSeparator(mSettings)
+
 	mReload := mSettings.AddSubMenuItem("Reload Config", "Re-read config.json + credentials.json and apply the changes")
 	mReload.Click(func() {
 		if reloadCfgCb != nil {
