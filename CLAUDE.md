@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Rules
 - **CHANGELOG.md** — only log code/behavior changes. No docs, README, or comment-only updates. Be concise.
+- **docs/design-notes.md** — the *why* behind non-obvious choices, and the record of what was measured (including options tried and rejected). Read it before revisiting an engine/model/backend decision; a surprising line of code usually has its reason there. Add an entry when a decision rests on a measurement or a rejected alternative — facts, not narrative. When new evidence supersedes an entry, mark the old one superseded rather than deleting it; the code often still reflects why it *used* to be true.
 - **Clean package interface** — every package must expose a single, platform-neutral interface describing *what it provides*, defined once (typically in `<pkg>.go`). Public API, shared types, and guard logic live there; platform/provider files (build-tag variants) only implement the backend hooks. Never duplicate the public API across build-tag files (see `audio/`: `audio.go` owns the capture interface plus `PlayStart/PlayEnd/...`, platform files provide only the backends — `initSound`/`playOne` for playback, the malgo/pulse capture impls).
 
 ## Build & Run
@@ -13,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make build                            # build binary
 make app                              # build macOS DMG (binary + icns + .app bundle)
-GROQ_API_KEY=xxx ./zee                # run (hold Ctrl+Shift+Space to record)
+GROQ_API_KEY=xxx ./zee                # run (hold Option+Space to record)
 ```
 
 ## Install
@@ -32,34 +33,61 @@ Local dev DMG: `make app` produces `Zee-<version>.dmg`; drag to `/Applications`.
 
 ```bash
 make test                             # unit tests
-make integration-test WAV=test/data/short.wav  # requires GROQ_API_KEY
-make benchmark WAV=file.wav RUNS=5
+make test-integration                 # end-to-end tests (requires GROQ_API_KEY)
+make benchmark WAV=file.wav RUNS=5    # end-to-end (encode + provider + network)
+make bench-local                      # local inference only, no network
 ```
+
+`make benchmark` measures the whole pipeline through a provider; `make bench-local`
+(`internal/parakeet/bench_test.go`) isolates local Parakeet inference — model load
++ `Transcribe`, no capture/encoder/network — so parakeet.cpp bumps, quantization
+changes and backend experiments are A/B-comparable. It runs every clip against
+every model present on disk (missing ones skip) and reports `ns/op` plus `xRT`
+(realtime factor: audio seconds per wall second, higher is faster). Sub-benchmarks
+are named `<model>/<clip>` so `benchstat old.txt new.txt` lines runs up.
+
+`WAV=` takes a file **or** a directory (default `test/data/short.wav`); pass an
+absolute path, since `go test` runs from the package dir. Point it at the saved
+samples to benchmark your own voice — a `<timestamp>/audio.wav` layout is walked
+automatically:
+
+```bash
+make bench-local WAV="$HOME/Library/Application Support/zee/samples" RUNS=5
+```
+
+Clips must be 16 kHz mono 16-bit (`audio.WAVToPCM` rejects anything else, and the
+clip is skipped rather than benchmarked wrong); samples saved from a cloud
+provider are `.mp3` and are ignored.
+
+`make bench-save` runs the same thing but **appends** the result to `benchmark.txt`
+as a labelled baseline block (machine/CPU/RAM/OS, corpus, runs, commit, model
+version, date). One invocation = one block, so baselines from several machines
+accumulate in one comparable file — run it on each new machine rather than
+overwriting. `BENCH_FILE=` overrides the destination.
 
 ## Flags
 
-- `-debug` - enable diagnostic logging (default: false)
-- `-debug-transcribe` - enable transcription text logging (requires `-debug`)
+- `-debug-transcribe` - enable transcription text logging (diagnostic logging is always on)
 - `-format <mp3@16|mp3@64|flac>` - audio format (default: mp3@16)
 - `-lang <code>` - language code for transcription (default: en, also settable from tray menu)
 - `-device <name>` - use named microphone device (also switchable from tray menu)
-- `-setup` - select microphone device interactively
-- `-doctor` - run system diagnostics and exit
+- `zee setup` (or `-setup`) - interactive setup wizard: mic + live transcription test, hotkey capture + fire test, permissions, providers (multiple, each key live-tested)
+- `zee doctor` - zero-question health check: hold the configured hotkey, speak, release — verifies hotkey/mic/provider end to end with the saved config; exit code reflects health
+- `zee update` - download + verify the latest release, swap it into place, then re-run `zee setup` (macOS drops TCC grants when the ad-hoc-signed bundle changes; setup restores them). The tray's "Check for Updates" is notify-only
 - `-benchmark <wav>` - run benchmark instead of live recording
 - `-runs N` - benchmark iterations (default: 3)
 - `-logpath <path>` - log directory (default: `$ZEE_LOG_PATH` or OS-specific, use `./` for current directory)
 - `-hints <words>` - comma-separated vocabulary hints (overrides `hints.txt`)
 - `-transcribe <file>` - transcribe an audio file (mp3/flac/wav) and exit
 
-**Environment variables:**
-- `ZEE_SAVE_LAST_AUDIO=1` - enables "Save Last Recording" tray button (saves audio + metadata to `config/samples/`)
+The tray's "Save Last Recording" persists the last clip (audio + `info.json`) to `<config>/samples/`; a failed transcription auto-saves there too, with the error recorded in `info.json`.
 
 ## Architecture
 
 Push-to-talk transcription using Groq Whisper API:
 
 ```
-Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call → clipboard
+Option+Space keydown → record audio → encode (mode-based) → API call → clipboard
 ```
 
 **Files:**
@@ -67,10 +95,11 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - `tray/` - system tray icon, menus (devices, providers, languages, auto-paste), dynamic icons
 - `encoder/` - AudioEncoder interface, FLAC, MP3, and Adaptive implementations
 - `transcriber/` - STT providers (Groq, OpenAI, Deepgram, Mistral, ElevenLabs) with shared TracedClient for HTTP timing metrics
-- `hotkey/` - global hotkey registration (Ctrl+Shift+Space) with platform-specific backends
+- `hotkey/` - global hotkey registration (Option+Space) with platform-specific backends
 - `clipboard/` - platform-specific clipboard and paste operations (Cmd+V / Ctrl+V)
-- `audio/` - platform-specific audio I/O: capture (malgo on macOS, PulseAudio on Linux) and feedback-tone playback (`PlayStart/PlayEnd/...`); on macOS both share one malgo context + a private device-lifecycle lock
-- `doctor/` - system diagnostics (`-doctor` flag)
+- `audio/` - platform-specific audio I/O: capture (malgo on macOS, PulseAudio on Linux) and feedback-tone playback (`PlayStart/PlayEnd/...`); on macOS playback goes through AVAudioPlayer (fire-and-forget, in-memory WAV, no app-managed device), capture through one malgo context + a private device-lifecycle lock. Also owns the PCM format converters used across packages: `WAVToPCM` / `PCMToWAV` / `PCMToF32` (S16LE → the −1..1 float32 the local engine consumes)
+- `setup/` - interactive setup wizard (`zee setup`) and health check (`zee doctor`): providers + API keys, device, TCC permissions, hotkey capture + fire test, live mic/provider verification; absorbed the former `doctor/`
+- `permissions/` - macOS TCC prompting (Microphone via AVFoundation, Accessibility via `AXIsProcessTrustedWithOptions`)
 - `internal/mp3/` - vendored shine-mp3 encoder (with mono fix)
 - `device.go` - microphone picker with arrow-key navigation
 - `vad.go` - voice activity detection using WebRTC VAD with debounced speech confirmation
@@ -96,8 +125,8 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - Default location: OS-specific (macOS: `~/Library/Logs/zee/`, Linux: `~/.config/zee/logs/`, Windows: `%LOCALAPPDATA%\zee\logs\`)
 - Override with `ZEE_LOG_PATH` env var or `-logpath <path>` flag (supports relative paths, use `./` for current directory)
 - `crash_log.txt` - panic recovery (always enabled)
-- `diagnostics_log.txt` - timing metrics, errors, warnings (requires `-debug`)
-- `transcribe_log.txt` - transcription text history (requires `-debug -debug-transcribe`)
+- `diagnostics_log.txt` - timing metrics, errors, warnings (always enabled, rotated at 10 MB)
+- `transcribe_log.txt` - transcription text history (requires `-debug-transcribe`)
 
 ## Releasing
 

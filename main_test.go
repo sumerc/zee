@@ -248,6 +248,10 @@ func TestTryStartSessionDeniesDuringCycle(t *testing.T) {
 // is enqueued and its SilenceClose handle returned.
 func TestTryStartSessionEnqueuesWhenIdle(t *testing.T) {
 	isRecording.Store(false)
+	// tryStartSession claims the cycle (isRecording=true) instead of leaving that
+	// to recordSessions, which isn't running here — release it like a real cycle
+	// end would, so later tests start idle.
+	defer isRecording.Store(false)
 
 	sessions := make(chan recSession, 1)
 	sc := tryStartSession(sessions)
@@ -261,22 +265,29 @@ func TestTryStartSessionEnqueuesWhenIdle(t *testing.T) {
 	}
 }
 
-// TestApplyPendingSwitchRunsOnceAtCycleEnd pins the deferred-switch mechanism a
-// model switch requested mid-cycle rides on: recordSessions calls
-// applyPendingSwitch at cycle end, which runs the deferred swap exactly once
-// (when no session is in flight, so the freed model can't be one in use).
-func TestApplyPendingSwitchRunsOnceAtCycleEnd(t *testing.T) {
-	var ran int32
-	pendingMu.Lock()
-	pendingSwitch = func() { atomic.AddInt32(&ran, 1) }
-	pendingMu.Unlock()
-
-	applyPendingSwitch()
-	if atomic.LoadInt32(&ran) != 1 {
-		t.Fatalf("deferred switch ran %d times, want 1", ran)
+// TestDeviceChangeAction pins the hotplug decision table — in particular the
+// regression where a session started while the preferred mic was unplugged:
+// the preference must still win the moment the device is attached.
+func TestDeviceChangeAction(t *testing.T) {
+	jabra := "Jabra EVOLVE 20 MS"
+	cases := []struct {
+		name      string
+		names     []string
+		selected  string
+		preferred string
+		want      deviceAction
+	}{
+		{"selected mic unplugged", []string{"MacBook Pro Microphone"}, jabra, jabra, switchToDefault},
+		{"preferred plugged in while on default", []string{"MacBook Pro Microphone", jabra}, "", jabra, switchToPreferred},
+		{"started without preferred, it appears later", []string{jabra}, "", jabra, switchToPreferred},
+		{"on default, no preference", []string{jabra}, "", "", keepDevice},
+		{"selected still attached", []string{"MacBook Pro Microphone", jabra}, jabra, jabra, keepDevice},
+		{"preferred absent, stay on default", []string{"MacBook Pro Microphone"}, "", jabra, keepDevice},
 	}
-	applyPendingSwitch() // nothing pending now — must be a no-op
-	if atomic.LoadInt32(&ran) != 1 {
-		t.Fatalf("deferred switch ran again after being cleared (%d)", ran)
+	for _, c := range cases {
+		if got := deviceChangeAction(c.names, c.selected, c.preferred); got != c.want {
+			t.Errorf("%s: deviceChangeAction(%v, sel=%q, pref=%q) = %v, want %v",
+				c.name, c.names, c.selected, c.preferred, got, c.want)
+		}
 	}
 }

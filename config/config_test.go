@@ -145,3 +145,40 @@ func TestSettingsConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestReloadExternalEdits(t *testing.T) {
+	d := t.TempDir()
+	SetDir(d)
+	if err := Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	Update(func(s *Settings) { s.Language = "en" }) // create the file
+
+	// An external edit (what "Edit Settings…" produces) must swap the
+	// in-memory settings when the user hits "Reload Config".
+	data := []byte(`{"language": "fr", "auto_paste": false}`)
+	if err := os.WriteFile(filepath.Join(d, "config.json"), data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	s, err := Reload()
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if s.Language != "fr" || s.AutoPaste {
+		t.Fatalf("reloaded settings = %+v, want language fr, auto_paste false", s)
+	}
+	if got := Get().Language; got != "fr" {
+		t.Fatalf("Get().Language = %q after reload, want fr", got)
+	}
+
+	// A corrupt file must error and leave the live settings untouched.
+	if err := os.WriteFile(filepath.Join(d, "config.json"), []byte("{nope"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Reload(); err == nil {
+		t.Fatal("Reload on corrupt file: want error, got nil")
+	}
+	if got := Get().Language; got != "fr" {
+		t.Fatalf("Get().Language = %q after failed reload, want fr (untouched)", got)
+	}
+}

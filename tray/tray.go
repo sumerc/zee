@@ -20,6 +20,7 @@ const (
 type Model struct {
 	Provider      string // e.g. "groq", "openai", "parakeet"
 	ProviderLabel string // e.g. "Groq"
+	Group         string // menu heading; contiguous entries sharing it render as one submenu (both local engines under "Local")
 	ModelID       string // e.g. "whisper-large-v3-turbo"
 	Label         string // model display name
 	State         ModelState
@@ -35,14 +36,13 @@ var (
 	recordFn   func()
 	stopFn     func()
 
-	// trayMu guards all mutable tray state below (recording/warning, the device
+	// trayMu guards all mutable tray state below (recording, the device
 	// list, the model list, the language fields, the hints toggle). It is held
 	// only around field reads/writes — never across a systray update or a
 	// callback, both of which re-enter these accessors and would deadlock.
 	trayMu sync.Mutex
 
 	recording bool
-	warning   bool
 
 	deviceNames []string
 	deviceSel   string
@@ -51,8 +51,9 @@ var (
 	autoPasteOn bool
 	autoPasteCb func(bool)
 
-	loginOn bool
-	loginCb func(bool) error
+	loginOn        bool
+	loginAvailable = true
+	loginCb        func(bool) error
 
 	models  []Model
 	modelCb func(provider, model string)
@@ -61,29 +62,62 @@ var (
 
 	langCode   string // effective language shown for the active model ("" = auto-detect)
 	langIntent string // user's persisted choice; survives models that can't offer it
-	langCb     func(code string, persist bool)
+	// langCb reports whether the change was accepted; a user click that is
+	// denied (busy engine) must not move the menu's checkmark. Derived changes
+	// (persist=false) are always accepted.
+	langCb func(code string, persist bool) bool
 
-	appVersion    string
-	checkUpdateCb func()
-	saveAudioCb   func()
-	editHintsCb   func()
+	appVersion     string
+	checkUpdateCb  func()
+	saveAudioCb    func()
+	editHintsCb    func()
+	editSettingsCb func()
+	editCredsCb    func()
+	reloadCfgCb    func()
+	hotkeyLabel    string // display-only current push-to-talk combo (e.g. "⌥Space")
 )
 
 var languages []transcriber.Language // set via SetLanguages
 
 func OnCopyLast(fn func())        { copyLastFn = fn }
 func OnRecord(start, stop func()) { recordFn = start; stopFn = stop }
-func SetAutoPaste(on bool)        { autoPasteOn = on }
 func OnAutoPaste(fn func(bool))   { autoPasteCb = fn }
-func SetLogin(on bool)            { loginOn = on }
 func OnLogin(fn func(bool) error) { loginCb = fn }
 
+// SetAutoPaste / SetLogin set the checkbox state; before Init they seed the
+// menu build, after Init (config-file reload) they re-render the item.
+func SetAutoPaste(on bool) {
+	trayMu.Lock()
+	autoPasteOn = on
+	trayMu.Unlock()
+	updateAutoPasteItem(on)
+}
+
+func SetLogin(on bool) {
+	trayMu.Lock()
+	loginOn = on
+	trayMu.Unlock()
+	updateLoginItem(on)
+}
+
+// SetLoginAvailable greys out "Start on Login" when auto-start does not apply to
+// this build (see login.Supported). Must be called before Init — it is read once
+// while the menu is built.
+func SetLoginAvailable(ok bool) {
+	trayMu.Lock()
+	loginAvailable = ok
+	trayMu.Unlock()
+}
+
+// SetRecording flips the menu between start and stop, and locks the device and
+// backend pickers for the duration — switching either mid-recording would pull
+// the ground out from under the session. The menu bar glyph does not change:
+// the overlay is what tells the user a recording is running.
 func SetRecording(rec bool) {
 	trayMu.Lock()
 	recording = rec
-	warning = false
 	trayMu.Unlock()
-	updateRecordingIcon(rec)
+	updateRecordItem(rec)
 	if rec {
 		disableDevices()
 		disableBackend()
@@ -91,23 +125,6 @@ func SetRecording(rec bool) {
 		enableDevices()
 		enableBackend()
 	}
-}
-
-func SetWarning(on bool) {
-	trayMu.Lock()
-	if !recording {
-		trayMu.Unlock()
-		return
-	}
-	warning = on
-	trayMu.Unlock()
-	updateWarningIcon(on)
-}
-
-// SetTranscribing shows the "transcription in progress" icon (a blue status
-// dot). The icon returns to idle on the next SetRecording(false).
-func SetTranscribing(on bool) {
-	updateTranscribingIcon(on)
 }
 
 func SetError(msg string) {
@@ -213,12 +230,72 @@ func SetHintsEnabled(on bool) {
 	setHintsEnabled(on)
 }
 
-func SetVersion(v string)     { appVersion = v }
-func OnCheckUpdate(fn func()) { checkUpdateCb = fn }
-func OnSaveAudio(fn func())   { saveAudioCb = fn }
-func OnEditHints(fn func())   { editHintsCb = fn }
+func SetVersion(v string)         { appVersion = v }
+func OnCheckUpdate(fn func())     { checkUpdateCb = fn }
+func OnSaveAudio(fn func())       { saveAudioCb = fn }
+func OnEditHints(fn func())       { editHintsCb = fn }
+func OnEditSettings(fn func())    { editSettingsCb = fn }
+func OnEditCredentials(fn func()) { editCredsCb = fn }
+func OnReloadConfig(fn func())    { reloadCfgCb = fn }
 
-func SetLanguage(code string, onSwitch func(code string, persist bool)) {
+// SetHotkeyLabel sets the display-only current push-to-talk combo shown (and
+// disabled) in the menu, and the combo hint on the Start/Stop Recording item.
+// Before Init it seeds the menu build; after Init (config-file reload) it
+// re-renders both items.
+func SetHotkeyLabel(label string) {
+	trayMu.Lock()
+	hotkeyLabel = label
+	trayMu.Unlock()
+	updateHotkeyDisplay()
+}
+
+// recordTitle is the Start/Stop Recording menu label, with the current
+// push-to-talk combo as a hint.
+func recordTitle(rec bool) string {
+	trayMu.Lock()
+	label := hotkeyLabel
+	trayMu.Unlock()
+	title := "○ Start Recording"
+	if rec {
+		title = "● Stop Recording"
+	}
+	if label != "" {
+		title += " (" + label + ")"
+	}
+	return title
+}
+
+// SelectLanguage changes the user's language intent from outside the menu
+// (config-file reload) and re-renders the checkmarks; the effective language
+// reaches the transcriber through the usual callback (persist=false — the
+// value came from the file, writing it back would be an echo).
+func SelectLanguage(code string) {
+	trayMu.Lock()
+	same := langIntent == code
+	langIntent = code
+	trayMu.Unlock()
+	if !same {
+		applyLanguage()
+	}
+}
+
+// applyLanguage derives the effective language from the user's intent (the
+// fallback when the model can't offer the intent is applied to the transcriber
+// but never persisted, so switching back to a capable model restores the
+// intent), delivers it to the transcriber callback, and re-renders the
+// platform menu. Platform-neutral so config-file edits work without a menu.
+func applyLanguage() {
+	trayMu.Lock()
+	langCode = effectiveLang(langIntent, languages)
+	cb, code := langCb, langCode
+	trayMu.Unlock()
+	if cb != nil {
+		cb(code, false)
+	}
+	refreshLanguageMenu()
+}
+
+func SetLanguage(code string, onSwitch func(code string, persist bool) bool) {
 	trayMu.Lock()
 	langCode = code
 	langIntent = code
@@ -230,7 +307,7 @@ func SetLanguages(langs []transcriber.Language) {
 	trayMu.Lock()
 	languages = langs
 	trayMu.Unlock()
-	refreshLanguageMenu()
+	applyLanguage()
 }
 
 // effectiveLang picks the language to actually use for a model that offers
@@ -259,7 +336,7 @@ func statusText() string {
 	var provider, model string
 	for _, m := range models {
 		if m.Active {
-			provider = m.ProviderLabel
+			provider = m.Group
 			model = m.Label
 			break
 		}

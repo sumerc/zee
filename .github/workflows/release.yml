@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Unit tests
         run: make test
@@ -43,7 +43,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Integration tests
         env:
@@ -62,7 +62,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -80,6 +80,7 @@ jobs:
           bin=$(find dist -name "zee" -type f | head -1)
           test -n "$bin" || { echo "arm64 binary not found"; find dist -type f; exit 1; }
           chmod +x "$bin"
-          packaging/mkdmg.sh "$bin" "$VERSION" "Zee-${VERSION}.dmg"
+          packaging/mkdmg.sh "$bin" "$VERSION" "Zee-${VERSION}.dmg" "Zee-${VERSION}.zip"
           shasum -a 256 "Zee-${VERSION}.dmg" >> dist/checksums.txt
-          gh release upload "$VERSION" "Zee-${VERSION}.dmg" dist/checksums.txt --clobber
+          shasum -a 256 "Zee-${VERSION}.zip" >> dist/checksums.txt
+          gh release upload "$VERSION" "Zee-${VERSION}.dmg" "Zee-${VERSION}.zip" dist/checksums.txt --clobber

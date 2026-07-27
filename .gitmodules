@@ -2,3 +2,6 @@
 	path = third_party/parakeet.cpp
 	url = https://github.com/mudler/parakeet.cpp
 	ignore = dirty
+[submodule "third_party/whisper.cpp"]
+	path = third_party/whisper.cpp
+	url = https://github.com/ggml-org/whisper.cpp

@@ -34,6 +34,7 @@ type Metrics struct {
 	TotalTimeMs      float64
 	ProcessRSSMB     float64
 	InferenceMs      float64
+	PressToRecordMs  float64 // press → mic-live; a stall here (fork/lock) misses quick taps
 }
 
 func ResolveDir(flagPath string) (string, error) {
@@ -87,6 +88,18 @@ func SetTranscribeEnabled(on bool) {
 	logMu.Unlock()
 }
 
+// maxLogSize caps each append-only log file: logging is always on, so without
+// a bound the files would grow for the life of the install. On overflow the
+// file is rotated to <name>.old (one generation kept).
+const maxLogSize = 10 << 20 // 10 MB
+
+func rotateIfLarge(path string) {
+	if st, err := os.Stat(path); err == nil && st.Size() > maxLogSize {
+		os.Remove(path + ".old") // Windows: Rename won't replace an existing file
+		os.Rename(path, path+".old")
+	}
+}
+
 func Init() error {
 	logMu.Lock()
 	defer logMu.Unlock()
@@ -100,6 +113,7 @@ func Init() error {
 	var err error
 
 	diagPath := filepath.Join(dir, "diagnostics_log.txt")
+	rotateIfLarge(diagPath)
 	diagFile, err = os.OpenFile(diagPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -107,6 +121,7 @@ func Init() error {
 
 	if transcribeOn {
 		transcribePath := filepath.Join(dir, "transcribe_log.txt")
+		rotateIfLarge(transcribePath)
 		transcribeFile, err = os.OpenFile(transcribePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			diagFile.Close()
@@ -200,7 +215,33 @@ func TranscriptionMetrics(m Metrics, mode, format, provider string, connReused b
 	if m.InferenceMs > 0 {
 		ev = ev.Float64("inference_ms", m.InferenceMs)
 	}
+	if m.PressToRecordMs > 0 {
+		ev = ev.Float64("press_to_record_ms", m.PressToRecordMs)
+	}
 	ev.Msg("transcription")
+}
+
+// HotkeyPress records one push-to-talk press: how long the keys were held as
+// the app *observed* them (down_to_up_ms — a value far above the tap/hold
+// threshold on a quick tap means the keyup event was delivered late, i.e. the
+// run loop stalled) and how it resolved (hold/toggle/denied).
+func HotkeyPress(downToUpMs float64, mode string) {
+	if !logReady.Load() {
+		return
+	}
+	diagLog.Info().Float64("down_to_up_ms", downToUpMs).Str("mode", mode).Msg("hotkey_press")
+}
+
+// ReleaseToText records the one latency the user actually feels: hotkey release
+// (or silence auto-close) → text delivered to the clipboard/paste. It spans the
+// whole tail — mic tail-wait, device stop, encode, inference, network, paste — so
+// it is the number to watch for "why did that feel slow", and it is emitted for
+// batch and streaming providers alike, unlike the per-mode metrics lines.
+func ReleaseToText(ms float64) {
+	if !logReady.Load() {
+		return
+	}
+	diagLog.Info().Float64("release_to_text_ms", ms).Msg("felt_latency")
 }
 
 func TranscriptionText(text string) {

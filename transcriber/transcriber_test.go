@@ -4,43 +4,88 @@ import (
 	"encoding/binary"
 	"net/http"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 	"zee/encoder"
+	"zee/localmodel"
 )
 
-// TestParakeetModelsMethodMatchesFunc pins the delegation: the (*Parakeet).Models
-// method and the package ParakeetModels function must return identical lists so
-// the tray and a loaded provider can never disagree on the model set.
-func TestParakeetModelsMethodMatchesFunc(t *testing.T) {
-	p := &Parakeet{}
-	if got, want := p.Models(), ParakeetModels(); !reflect.DeepEqual(got, want) {
-		t.Errorf("Parakeet.Models() = %v, want %v (must delegate to ParakeetModels)", got, want)
+// TestModelsAreEngineScoped guards the split introduced with Whisper: each local
+// provider must expose only its own engine's models, or the tray would offer a
+// gguf to the engine that cannot load it.
+func TestModelsAreEngineScoped(t *testing.T) {
+	for _, tc := range []struct{ engine string }{
+		{localmodel.EngineParakeet}, {localmodel.EngineWhisper},
+	} {
+		for _, m := range localModels(tc.engine) {
+			if m.Engine != tc.engine {
+				t.Errorf("localModels(%q) returned %q with engine %q", tc.engine, m.ID, m.Engine)
+			}
+		}
+	}
+	if len(localModels(localmodel.EngineWhisper)) == 0 {
+		t.Error("no whisper models in the registry")
 	}
 }
 
-// TestNewErrorListsEveryProvider guards the message main.go now surfaces verbatim:
-// with no engine available, New()'s error must name every cloud key plus the
-// offline hint, so a fresh user is told all their options. Deterministic where no
-// provider is available (CI: parakeet not compiled in, keys empty); skipped when a
-// local model or key makes New() succeed on a dev machine.
-func TestNewErrorListsEveryProvider(t *testing.T) {
+// TestNewErrorWhenNoProvider guards the message main.go surfaces verbatim: with
+// no key source resolving anything (and no local model), New()'s error must point
+// the user at `zee -setup` and mention the offline option. Deterministic where no
+// provider is available (CI: parakeet not compiled in, no keys); skipped when a
+// local model makes New() succeed on a dev machine.
+func TestNewErrorWhenNoProvider(t *testing.T) {
 	os.Unsetenv("ZEE_FAKE_TEXT")
-	for _, k := range []string{"DEEPGRAM_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "ELEVENLABS_API_KEY"} {
-		t.Setenv(k, "")
-	}
+	SetKeySource(func(string) string { return "" })
+	t.Cleanup(func() { SetKeySource(func(string) string { return "" }) })
 
 	_, err := New()
 	if err == nil {
 		t.Skip("a provider is available on this machine; cannot exercise the no-engine path")
 	}
-	for _, want := range []string{"DEEPGRAM_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "ELEVENLABS_API_KEY", "offline"} {
+	for _, want := range []string{"zee -setup", "offline"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("New() error %q missing %q", err.Error(), want)
 		}
 	}
+}
+
+// TestKeySourceGatesCloudProvider verifies the injected key source drives cloud
+// availability: a provider is unavailable with no key and available once the
+// source returns one.
+func TestKeySourceGatesCloudProvider(t *testing.T) {
+	t.Cleanup(func() { SetKeySource(func(string) string { return "" }) })
+
+	SetKeySource(func(string) string { return "" })
+	groq := providerNamed(t, "groq")
+	if groq.Available() {
+		t.Error("groq should be unavailable with no key")
+	}
+
+	SetKeySource(func(p string) string {
+		if p == "groq" {
+			return "gsk_x"
+		}
+		return ""
+	})
+	groq = providerNamed(t, "groq")
+	if !groq.Available() {
+		t.Error("groq should be available once the key source resolves its key")
+	}
+	if providerNamed(t, "openai").Available() {
+		t.Error("openai should stay unavailable (key source returns its key only for groq)")
+	}
+}
+
+func providerNamed(t *testing.T, name string) ProviderInfo {
+	t.Helper()
+	for _, p := range Providers() {
+		if p.Name == name {
+			return p
+		}
+	}
+	t.Fatalf("provider %q not found", name)
+	return ProviderInfo{}
 }
 
 func TestNetworkMetricsSum(t *testing.T) {
@@ -121,7 +166,10 @@ func TestBatchSessionFeedAndClose(t *testing.T) {
 	}
 
 	// Drain updates — channel closed by Close()
-	go func() { for range bs.Updates() {} }()
+	go func() {
+		for range bs.Updates() {
+		}
+	}()
 
 	nSamples := encoder.BlockSize + encoder.BlockSize/2
 	pcm := make([]byte, nSamples*2)

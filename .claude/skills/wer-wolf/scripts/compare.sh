@@ -10,13 +10,20 @@ ZEE_BIN="${ZEE_BIN:-}"
 if [ -z "$ZEE_BIN" ]; then
   ZEE_BIN=$(lsof -c zee 2>/dev/null | awk '$4=="txt" && $NF ~ /zee$/ {print $NF; exit}')
 fi
-[ -z "$ZEE_BIN" ] && ZEE_BIN="/Users/supo/Desktop/p/zee/zee"
+[ -z "$ZEE_BIN" ] && ZEE_BIN="$HOME/Desktop/p/personal/zee/zee"
 if [ ! -x "$ZEE_BIN" ]; then
   echo "ERROR: zee binary not found or not executable: $ZEE_BIN" >&2
   exit 1
 fi
 
-ZEE_DIR="$HOME/Library/Application Support/zee"
+# Match the binary's config dir (config.Dir): the installed .app uses the
+# per-user location, a dev binary keeps state in <exe dir>/.zee. Exporting
+# ZEE_CONFIG_DIR pins the binary to the same dir we edit, whatever its logic.
+case "$ZEE_BIN" in
+  *".app/Contents/MacOS/"*) ZEE_DIR="$HOME/Library/Application Support/zee" ;;
+  *) ZEE_DIR="$(cd "$(dirname "$ZEE_BIN")" && pwd)/.zee" ;;
+esac
+export ZEE_CONFIG_DIR="$ZEE_DIR"
 CFG="$ZEE_DIR/config.json"
 SAMPLES="$ZEE_DIR/samples"
 BACKUP="/tmp/zee-config-backup.$$.json"
@@ -45,15 +52,21 @@ HINTS_FILE="$ZEE_DIR/hints.txt"
   echo
 } | tee -a "$HUMAN"
 
-# (provider, model, env_var) — keep groq turbo first since it's the fastest baseline.
+# (provider, model) — keep groq turbo first since it's the fastest baseline.
 # Update this list when zee adds providers/models (transcriber/*.go).
 COMBOS=(
-  "groq|whisper-large-v3-turbo|GROQ_API_KEY"
-  "groq|whisper-large-v3|GROQ_API_KEY"
-  "openai|gpt-4o-transcribe|OPENAI_API_KEY"
-  "mistral|voxtral-mini-latest|MISTRAL_API_KEY"
-  "elevenlabs|scribe_v2|ELEVENLABS_API_KEY"
+  "groq|whisper-large-v3-turbo"
+  "groq|whisper-large-v3"
+  "openai|gpt-4o-transcribe"
+  "mistral|voxtral-mini-latest"
+  "elevenlabs|scribe_v2"
 )
+
+# Keys live in credentials.json (0600), not env vars, since zee's setup wizard.
+CRED="$ZEE_DIR/credentials.json"
+has_key() {
+  [ -f "$CRED" ] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get(sys.argv[2]) else 1)' "$CRED" "$1"
+}
 
 # JSON string escaper for the JSONL output. Python is on every macOS.
 jesc() { python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()), end="")'; }
@@ -89,14 +102,14 @@ if [ -n "${SAMPLE:-}" ]; then
 fi
 
 if [ "${#SAMPLE_DIRS[@]}" -eq 0 ]; then
-  echo "No samples found under $SAMPLES — enable ZEE_SAVE_LAST_AUDIO=1 and record some clips first." >&2
+  echo "No samples found under $SAMPLES — record some clips first (tray → Save Last Recording)." >&2
   exit 1
 fi
 
 for combo in "${COMBOS[@]}"; do
-  IFS='|' read -r prov model envk <<< "$combo"
-  if [ -z "${!envk:-}" ]; then
-    echo "########## SKIP $prov/$model ($envk not set) ##########" | tee -a "$HUMAN"
+  IFS='|' read -r prov model <<< "$combo"
+  if ! has_key "$prov"; then
+    echo "########## SKIP $prov/$model (no key in credentials.json) ##########" | tee -a "$HUMAN"
     continue
   fi
   echo "########## $prov / $model ##########" | tee -a "$HUMAN"

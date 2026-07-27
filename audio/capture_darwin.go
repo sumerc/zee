@@ -9,10 +9,13 @@ import (
 	"sync/atomic"
 
 	"github.com/gen2brain/malgo"
+
+	"zee/log"
 )
 
-// deviceMu serializes every malgo context/device lifecycle call across capture
-// AND playback (beep_darwin.go). miniaudio's CoreAudio backend keeps process-
+// deviceMu serializes every malgo context/device lifecycle call — the record
+// loop's Start/Stop, the device watcher's enumeration and switches, and the
+// tray's switches all interleave. miniaudio's CoreAudio backend keeps process-
 // global default-device state that ma_device_init/uninit/start/stop mutate; two
 // threads touching it concurrently corrupt the heap (observed SIGSEGV in
 // ma_device_uninit). It does NOT guard the audio data callbacks — those run on
@@ -20,9 +23,9 @@ import (
 // acquire once per logical operation, never nest.
 var deviceMu sync.Mutex
 
-// maCtx is the single process-wide malgo context, shared by capture and
-// playback so there's one piece of CoreAudio global state, not two. Created
-// lazily under deviceMu and never freed — its lifetime is the process.
+// maCtx is the single process-wide malgo context (capture only — feedback
+// tones go through AVAudioPlayer, see beep_darwin.go). Created lazily under
+// deviceMu and never freed — its lifetime is the process.
 var maCtx *malgo.AllocatedContext
 
 // ensureContext creates the shared context on first use. Caller must hold deviceMu.
@@ -128,20 +131,31 @@ func (c *malgoCapture) initDevice() error {
 	return nil
 }
 
+// Start starts the warm device, created once and reused across recordings.
+// A full CoreAudio reinit costs 250–650ms per press and stalls the main run
+// loop (delaying hotkey keyup delivery, which misreads quick taps as holds);
+// starting a warm device takes ~40ms. If the handle went bad (sleep/wake,
+// coreaudiod restart), Start fails loudly — rebuild once and retry. A selected
+// device that vanished is handled by the device watcher in main, not here.
 func (c *malgoCapture) Start() error {
 	deviceMu.Lock()
 	defer deviceMu.Unlock()
-	// Always reinitialize before starting — handles macOS sleep/wake where the
-	// device handle goes stale without returning errors. Null the pointer after
-	// Uninit: if the reinit below fails (transient CoreAudio error during a
-	// route/sleep-wake change), c.device must not be left pointing at the freed
-	// device, or the next Start uninits it again and double-frees.
-	if c.device != nil {
-		c.device.Uninit()
-		c.device = nil
+	if c.device == nil {
+		if err := c.initDevice(); err != nil {
+			return err
+		}
 	}
-	if err := c.initDevice(); err != nil {
-		return fmt.Errorf("device reinit failed: %w", err)
+	err := c.device.Start()
+	if err == nil {
+		return nil
+	}
+	log.Warnf("capture start failed (%v), rebuilding device", err)
+	// Null before reinit: if the rebuild fails, c.device must not point at the
+	// freed device, or the next Start would uninit it again and double-free.
+	c.device.Uninit()
+	c.device = nil
+	if initErr := c.initDevice(); initErr != nil {
+		return fmt.Errorf("device rebuild failed: %w (start: %v)", initErr, err)
 	}
 	return c.device.Start()
 }

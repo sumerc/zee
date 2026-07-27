@@ -67,17 +67,30 @@ func WAVToPCM(b []byte) ([]byte, error) {
 	return data, nil
 }
 
+// PCMToF32 converts raw signed-16-bit little-endian PCM (the capture format,
+// and what WAVToPCM returns) to the -1..1 float32 samples the local Parakeet
+// engine consumes. A trailing odd byte is ignored.
+func PCMToF32(pcm []byte) []float32 {
+	f32 := make([]float32, len(pcm)/2)
+	for i := range f32 {
+		f32[i] = float32(int16(binary.LittleEndian.Uint16(pcm[i*2:]))) / 32768.0
+	}
+	return f32
+}
+
 // PCMToWAV wraps raw 16 kHz mono signed-16-bit little-endian PCM in a minimal
 // 44-byte RIFF/WAVE container — the inverse of WAVToPCM.
 //
 // Use case: the live local-transcriber (Parakeet) path. API providers encode
 // captured audio to mp3/flac, but Parakeet consumes raw PCM and never encodes,
 // so to hand back a real, saveable file in SessionResult.AudioData it gets
-// wrapped here. That's what the "Save Last Recording" feature
-// (ZEE_SAVE_LAST_AUDIO, main.go) writes to disk. Unlike WAVToPCM, this is on
-// the hot path, not test-only.
-func PCMToWAV(pcm []byte) []byte {
-	const sampleRate, channels, bits = 16000, 1, 16
+// wrapped here. That's what the "Save Last Recording" feature (and the
+// auto-save-on-error path in main.go) writes to disk. Unlike WAVToPCM, this is
+// on the hot path, not test-only.
+func PCMToWAV(pcm []byte) []byte { return pcmWAV(pcm, 16000) }
+
+func pcmWAV(pcm []byte, sampleRate int) []byte {
+	const channels, bits = 1, 16
 	byteRate := sampleRate * channels * bits / 8
 	blockAlign := channels * bits / 8
 
@@ -89,7 +102,7 @@ func PCMToWAV(pcm []byte) []byte {
 	binary.LittleEndian.PutUint32(buf[16:20], 16) // PCM fmt chunk size
 	binary.LittleEndian.PutUint16(buf[20:22], 1)  // format = PCM
 	binary.LittleEndian.PutUint16(buf[22:24], channels)
-	binary.LittleEndian.PutUint32(buf[24:28], sampleRate)
+	binary.LittleEndian.PutUint32(buf[24:28], uint32(sampleRate))
 	binary.LittleEndian.PutUint32(buf[28:32], uint32(byteRate))
 	binary.LittleEndian.PutUint16(buf[32:34], uint16(blockAlign))
 	binary.LittleEndian.PutUint16(buf[34:36], bits)
@@ -147,11 +160,11 @@ type CaptureDevice interface {
 
 // --- Feedback tones (record start/end, error, denied) ---
 //
-// Playback shares the OS audio device with capture — on darwin the same malgo
-// context and lifecycle lock (see capture_darwin.go). This file owns the
-// platform-neutral half: the public API, the enable guard, and tone synthesis.
-// Each platform file provides exactly two backend hooks, initSound() and
-// playOne(sound), so the guard logic lives here once instead of per platform.
+// This file owns the platform-neutral half: the public API, the enable guard,
+// and tone synthesis. Each platform file provides exactly two backend hooks,
+// initSound() and playOne(sound), so the guard logic lives here once instead
+// of per platform. Playback is independent of capture on every OS (darwin:
+// AVAudioPlayer, linux: PulseAudio) — it never touches the capture device.
 
 // sound identifies a tone; it indexes the canonical sample table below.
 type sound int
@@ -165,9 +178,9 @@ const (
 )
 
 // samples is the canonical tone table: 16-bit mono PCM, synthesized once by
-// buildSamples. Each platform's playback adapts these to its device format
-// (darwin: mono S16 little-endian bytes; linux: stereo) as it copies into the
-// device buffer — so the tone data and synthesis live here once, never per OS.
+// buildSamples. Each platform's playback adapts these to its own format
+// (darwin: in-memory WAV bytes; linux: stereo stream) — so the tone data and
+// synthesis live here once, never per OS.
 var samples [numSounds][]int16
 
 // disabled is set once at startup (or by tests) but read from recording

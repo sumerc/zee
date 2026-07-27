@@ -28,8 +28,12 @@ func NewDeepgram(apiKey string) *Deepgram {
 	}
 }
 
-var nova3Langs = langsFromCodes([]string{
-	"bg", "ca", "zh", "cs", "da", "nl", "en", "et", "fi", "fr",
+// No Auto-detect entry: Deepgram streaming has no real language detection —
+// omitting the param means English-only, and "multi" covers just 10 languages —
+// so offering Auto would be a promise the provider can't keep. English is
+// first so effectiveLang's fallback lands on it when the user's intent is Auto.
+var nova3Langs = plainLangsFromCodes([]string{
+	"en", "bg", "ca", "zh", "cs", "da", "nl", "et", "fi", "fr",
 	"de", "el", "hi", "hu", "id", "it", "ja", "ko", "lv", "lt",
 	"ms", "no", "pl", "pt", "ro", "ru", "sk", "es", "sv", "th",
 	"tr", "uk", "vi",

@@ -3,6 +3,7 @@ package transcriber
 import (
 	"crypto/tls"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -21,12 +22,23 @@ func NewTracedClient(apiURL string) *TracedClient {
 	}
 	tc := &TracedClient{
 		client: &http.Client{
+			// Overall cap; the phase timeouts below are what actually bound the
+			// common failures. An unreachable host (offline, dead VPN, captive
+			// portal) must fail in seconds — without a dial bound, a hanging
+			// DNS/connect burns the whole 2 minutes with the app stuck on the
+			// "transcribing" icon. ResponseHeaderTimeout spans the provider's
+			// inference (TTFB), so it stays generous.
 			Timeout: 2 * time.Minute,
 			Transport: &http.Transport{
-				MaxIdleConns:        4,
-				MaxIdleConnsPerHost: 4,
-				IdleConnTimeout:     90 * time.Second,
-				ForceAttemptHTTP2:   true,
+				DialContext: (&net.Dialer{
+					Timeout: 10 * time.Second,
+				}).DialContext,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 60 * time.Second,
+				MaxIdleConns:          4,
+				MaxIdleConnsPerHost:   4,
+				IdleConnTimeout:       90 * time.Second,
+				ForceAttemptHTTP2:     true,
 			},
 		},
 		warmURL: warmURL,

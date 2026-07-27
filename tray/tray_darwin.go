@@ -3,8 +3,6 @@
 package tray
 
 import (
-	"os"
-
 	"github.com/energye/systray"
 	"golang.design/x/hotkey/mainthread"
 
@@ -20,19 +18,31 @@ var (
 	deviceItems    []*systray.MenuItem
 	deviceReady    chan struct{}
 
-	mSettings   *systray.MenuItem
-	mAutoPaste  *systray.MenuItem
-	mLogin      *systray.MenuItem
-	mEditHints  *systray.MenuItem
-	mBackend    *systray.MenuItem
-	mLanguage   *systray.MenuItem
-	langEntries []struct {
+	mSettings     *systray.MenuItem
+	mAutoPaste    *systray.MenuItem
+	mLogin        *systray.MenuItem
+	mHotkey       *systray.MenuItem
+	mEditHints    *systray.MenuItem
+	mEditSettings *systray.MenuItem
+	mEditCreds    *systray.MenuItem
+	mBackend      *systray.MenuItem
+	mLanguage     *systray.MenuItem
+	langEntries   []struct {
 		item *systray.MenuItem
 		code string
 	}
 	mCheckUpdate *systray.MenuItem
 
 	modelItems []*systray.MenuItem
+	// modelGroups records each group submenu and its [start,end) slice of
+	// models, so a model-state change can re-derive the group's enabled state
+	// and "(no API key)" suffix (a key added via Reload Config re-enables its
+	// provider without rebuilding the menu).
+	modelGroups []struct {
+		item       *systray.MenuItem
+		label      string
+		start, end int
+	}
 )
 
 func Init() <-chan struct{} {
@@ -47,17 +57,53 @@ func Init() <-chan struct{} {
 	return quitCh
 }
 
-func updateRecordingIcon(rec bool) {
-	if rec {
-		systray.SetIcon(iconRecHi)
-		if mRecord != nil {
-			mRecord.SetTitle("● Stop Recording (Shift+Control+Space)")
-		}
+// addSubmenuSeparator draws a divider inside a submenu. systray can only put a
+// real separator in the top-level menu, so submenus fake one with a disabled
+// item.
+func addSubmenuSeparator(parent *systray.MenuItem) {
+	item := parent.AddSubMenuItem("─────────", "")
+	item.Disable()
+}
+
+func updateRecordItem(rec bool) {
+	if mRecord != nil {
+		mRecord.SetTitle(recordTitle(rec))
+	}
+}
+
+func updateAutoPasteItem(on bool) {
+	if mAutoPaste == nil {
+		return
+	}
+	if on {
+		mAutoPaste.Check()
 	} else {
-		systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
-		if mRecord != nil {
-			mRecord.SetTitle("○ Start Recording (Shift+Control+Space)")
-		}
+		mAutoPaste.Uncheck()
+	}
+}
+
+func updateLoginItem(on bool) {
+	if mLogin == nil {
+		return
+	}
+	if on {
+		mLogin.Check()
+	} else {
+		mLogin.Uncheck()
+	}
+}
+
+// updateHotkeyDisplay re-renders the two items that show the combo: the
+// disabled "Hotkey: …" label and the Start/Stop Recording hint.
+func updateHotkeyDisplay() {
+	trayMu.Lock()
+	label, rec := hotkeyLabel, recording
+	trayMu.Unlock()
+	if mHotkey != nil {
+		mHotkey.SetTitle("Hotkey: " + label)
+	}
+	if mRecord != nil {
+		mRecord.SetTitle(recordTitle(rec))
 	}
 }
 
@@ -70,22 +116,6 @@ func disableDevices() {
 func enableDevices() {
 	if mDevices != nil {
 		mDevices.Enable()
-	}
-}
-
-func updateWarningIcon(on bool) {
-	if on {
-		systray.SetIcon(iconWarnHi)
-	} else {
-		systray.SetIcon(iconRecHi)
-	}
-}
-
-func updateTranscribingIcon(on bool) {
-	if on {
-		systray.SetIcon(iconBusyHi)
-	} else {
-		systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
 	}
 }
 
@@ -166,7 +196,7 @@ func RefreshDevices(names []string, selected string) {
 }
 
 func onReady() {
-	systray.SetTemplateIcon(iconIdleHi, iconIdleHi)
+	systray.SetTemplateIcon(icon, icon)
 	systray.SetTooltip("zee – push to talk")
 
 	mStatus = systray.AddMenuItem(statusText(), "")
@@ -174,7 +204,7 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	mRecord = systray.AddMenuItem("○ Start Recording (Shift+Control+Space)", "Start or stop recording")
+	mRecord = systray.AddMenuItem(recordTitle(false), "Start or stop recording")
 	mRecord.Click(func() {
 		trayMu.Lock()
 		rec := recording
@@ -198,15 +228,14 @@ func onReady() {
 		}
 	})
 
-	if os.Getenv("ZEE_SAVE_LAST_AUDIO") != "" {
-		mSave := systray.AddMenuItem("Save Last Recording", "Save last audio + metadata to disk")
-		mSave.Click(func() {
-			if saveAudioCb != nil {
-				go saveAudioCb()
-			}
-		})
-	}
+	mSave := systray.AddMenuItem("Save Last Recording", "Save last audio + metadata to disk")
+	mSave.Click(func() {
+		if saveAudioCb != nil {
+			go saveAudioCb()
+		}
+	})
 
+	systray.AddSeparator()
 	mSettings = systray.AddMenuItem("Settings", "Settings")
 
 	mAutoPaste = mSettings.AddSubMenuItemCheckbox("Auto-paste", "Auto-paste transcribed text", autoPasteOn)
@@ -221,7 +250,16 @@ func onReady() {
 		}
 	})
 
-	mLogin = mSettings.AddSubMenuItemCheckbox("Start on Login", "Launch zee when you log in", loginOn)
+	// Greyed out, same title: a suffix like "(installed app only)" would widen
+	// the whole submenu to fit it. The tooltip carries the why.
+	loginTip := "Launch zee when you log in"
+	if !loginAvailable {
+		loginTip = "Auto-start applies to Zee.app in /Applications, not to a dev build"
+	}
+	mLogin = mSettings.AddSubMenuItemCheckbox("Start on Login", loginTip, loginOn)
+	if !loginAvailable {
+		mLogin.Disable()
+	}
 	mLogin.Click(func() {
 		want := !mLogin.Checked()
 		if loginCb != nil {
@@ -236,6 +274,9 @@ func onReady() {
 		}
 	})
 
+	// Closes off the toggles, leaving the file editors below it.
+	addSubmenuSeparator(mSettings)
+
 	mEditHints = mSettings.AddSubMenuItem("Edit Hints…", "Edit vocabulary hints file")
 	mEditHints.Click(func() {
 		if editHintsCb != nil {
@@ -249,8 +290,40 @@ func onReady() {
 		mEditHints.Disable()
 	}
 
-	sep := mSettings.AddSubMenuItem("─────────", "")
-	sep.Disable()
+	mEditSettings = mSettings.AddSubMenuItem("Edit Settings…", "Open config.json (apply with Reload Config)")
+	mEditSettings.Click(func() {
+		if editSettingsCb != nil {
+			go editSettingsCb()
+		}
+	})
+
+	mEditCreds = mSettings.AddSubMenuItem("Edit Credentials…", "Open credentials.json to change provider API keys")
+	mEditCreds.Click(func() {
+		if editCredsCb != nil {
+			go editCredsCb()
+		}
+	})
+
+	// Reload Config acts on the three files above rather than being a fourth
+	// editor, so it sits on its own side of a separator.
+	addSubmenuSeparator(mSettings)
+
+	mReload := mSettings.AddSubMenuItem("Reload Config", "Re-read config.json + credentials.json and apply the changes")
+	mReload.Click(func() {
+		if reloadCfgCb != nil {
+			go reloadCfgCb()
+		}
+	})
+
+	addSubmenuSeparator(mSettings)
+
+	trayMu.Lock()
+	hl := hotkeyLabel
+	trayMu.Unlock()
+	if hl != "" {
+		mHotkey = mSettings.AddSubMenuItem("Hotkey: "+hl, "Change via Settings → Edit Settings…")
+		mHotkey.Disable()
+	}
 
 	mDevices = mSettings.AddSubMenuItem("Microphone", "Select input device")
 
@@ -277,21 +350,25 @@ func onReady() {
 	}
 	trayMu.Unlock()
 
+	// Divide the input device from the transcription pair (Model + Language).
+	addSubmenuSeparator(mSettings)
+
 	trayMu.Lock()
 	if len(models) > 0 {
 		mBackend = mSettings.AddSubMenuItem("Model", "Select transcription model")
 		modelItems = make([]*systray.MenuItem, len(models))
-		// models are grouped by provider (contiguous); one submenu per provider.
+		// models are grouped by Group (contiguous); one submenu per group. Both
+		// local engines share the "Local" group, each cloud provider is its own.
 		for i := 0; i < len(models); {
-			prov := models[i].Provider
+			group := models[i].Group
 			j, anyUsable := i, false
-			for j < len(models) && models[j].Provider == prov {
+			for j < len(models) && models[j].Group == group {
 				if models[j].State != ModelUnavailable {
 					anyUsable = true
 				}
 				j++
 			}
-			label := models[i].ProviderLabel
+			label := group
 			if !anyUsable {
 				label += " (no API key)"
 			}
@@ -299,6 +376,11 @@ func onReady() {
 			if !anyUsable {
 				provMenu.Disable()
 			}
+			modelGroups = append(modelGroups, struct {
+				item       *systray.MenuItem
+				label      string
+				start, end int
+			}{provMenu, group, i, j})
 			for k := i; k < j; k++ {
 				idx := k
 				m := models[k]
@@ -319,6 +401,10 @@ func onReady() {
 					cb(mm.Provider, mm.ModelID)
 				})
 				modelItems[idx] = item
+			}
+			// Divide Local from the cloud providers.
+			if group == "Local" && j < len(models) {
+				addSubmenuSeparator(mBackend)
 			}
 			i = j
 		}
@@ -345,7 +431,7 @@ func onReady() {
 	mQuit.Click(func() { Quit() })
 	systray.CreateMenu()
 
-	refreshLanguageMenu() // constrain the freshly-built menu to the active model
+	applyLanguage() // constrain the freshly-built menu to the active model
 
 	close(deviceReady)
 }
@@ -382,6 +468,35 @@ func updateModelItem(idx int) {
 	} else {
 		it.Disable()
 	}
+	refreshModelGroup(idx)
+}
+
+// refreshModelGroup re-derives the group submenu containing models[idx]:
+// enabled iff any of its models is usable, with the "(no API key)" suffix
+// tracking that state.
+func refreshModelGroup(idx int) {
+	for _, g := range modelGroups {
+		if idx < g.start || idx >= g.end {
+			continue
+		}
+		trayMu.Lock()
+		anyUsable := false
+		for k := g.start; k < g.end && k < len(models); k++ {
+			if models[k].State != ModelUnavailable {
+				anyUsable = true
+			}
+		}
+		trayMu.Unlock()
+		title := g.label
+		if !anyUsable {
+			title += " (no API key)"
+			g.item.Disable()
+		} else {
+			g.item.Enable()
+		}
+		g.item.SetTitle(title)
+		return
+	}
 }
 
 func addLangEntry(code, label string) {
@@ -393,18 +508,25 @@ func addLangEntry(code, label string) {
 	item.Click(func() {
 		// langEntries is built once in onReady and never mutated after, so it's
 		// safe to read here without the lock; only langCode/langIntent need it.
+		trayMu.Lock()
+		cb := langCb
+		code := langEntries[idx].code
+		trayMu.Unlock()
+		// Ask before touching any state: a busy engine denies the change, and
+		// the menu must keep showing the language the transcriber actually has
+		// (macOS closes the menu on click, so doing nothing here means the old
+		// checkmark is intact when it reopens).
+		if cb != nil && !cb(code, true) {
+			return
+		}
 		for _, e := range langEntries {
 			e.item.Uncheck()
 		}
 		langEntries[idx].item.Check()
 		trayMu.Lock()
-		langCode = langEntries[idx].code
-		langIntent = langCode // a user click is a real choice — remember it
-		cb, code := langCb, langCode
+		langCode = code
+		langIntent = code // a user click is a real choice — remember it
 		trayMu.Unlock()
-		if cb != nil {
-			cb(code, true)
-		}
 		updateStatus()
 	})
 	langEntries = append(langEntries, struct {
@@ -417,23 +539,16 @@ func refreshLanguageMenu() {
 	if mLanguage == nil {
 		return
 	}
-	// Derive the effective language from the user's intent every refresh. The
-	// fallback (when the model can't offer the intent) is applied to the
-	// transcriber but never persisted, so switching back to a capable model
-	// restores the intent. Field access is done under the lock; the systray
-	// updates and the callback run outside it.
+	// Pure render: langCode was already derived (and the transcriber notified)
+	// by applyLanguage in tray.go; this only shows the active model's set and
+	// checks the effective language.
 	trayMu.Lock()
 	want := make(map[string]bool, len(languages))
 	for _, l := range languages {
 		want[l.Code] = true
 	}
-	langCode = effectiveLang(langIntent, languages)
-	cb, code := langCb, langCode
+	code := langCode
 	trayMu.Unlock()
-
-	if cb != nil {
-		cb(code, false)
-	}
 	for _, e := range langEntries {
 		if want[e.code] {
 			e.item.Show()

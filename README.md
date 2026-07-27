@@ -2,7 +2,8 @@
   <img src="zee-logo-stack.svg" alt="zee" width="180"><br>
   <strong>zee</strong><br><br>
   Voice transcription that stays out of your way.<br>
-  Supports Groq, OpenAI, Mistral, ElevenLabs and Deepgram models.<br>
+  <strong>Works offline the moment you install it — no account, no API key, no network.</strong><br>
+  Local Parakeet and Whisper on-device, or Groq, OpenAI, Mistral, ElevenLabs and Deepgram.<br>
   Push-to-talk, tap-to-toggle, or real-time streaming. Pure Go. Sub-second fast.<br><br>
   <img src="https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white" alt="Go 1.24">
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple" alt="macOS">
@@ -15,7 +16,7 @@
 
 ## Highlights
 
-- **Offline, on-device** — on Apple Silicon, transcribes fully locally via Parakeet (parakeet.cpp, CPU) with **no API key and no network**. Cloud providers are optional and switchable from the tray.
+- **Offline, on-device** — on Apple Silicon, transcribes fully locally with **no API key and no network**, working from the first launch. Two engines, both GPU-accelerated (Metal): **Parakeet** for fast English, **Whisper** (large-v3 turbo) for multilingual with auto-detect. Cloud providers are optional and switchable from the tray.
 - **System tray app** — lives in the menu bar. Switch microphones, transcription providers, and languages from the tray menu. Dynamic icons show recording and warning states.
 - **Two recording modes** — push-to-talk (hold hotkey) or tap-to-toggle (tap to start/stop).
 - **Real-time streaming** — when a streaming-capable model is selected (e.g. Deepgram Nova-3), words appear as you speak and auto-paste into the focused window incrementally.
@@ -23,7 +24,7 @@
 - **Auto-paste** — transcribed text goes straight to clipboard and pastes into the active window. In streaming mode, each new phrase pastes as it arrives.
 - **Silence detection** — VAD-based voice activity detection warns when no speech is heard. In streaming mode, auto-closes recording after 30 seconds of silence.
 - **Pure Go encoding** — MP3 and FLAC encoders, no CGO. Three formats: `mp3@16` (smallest), `mp3@64` (balanced), `flac` (lossless).
-- **Multiple providers** — Groq, OpenAI, Mistral, ElevenLabs, and Deepgram, switchable from the tray menu at runtime.
+- **Multiple providers** — local Parakeet and Whisper, plus Groq, OpenAI, Mistral, ElevenLabs, and Deepgram, switchable from the tray menu at runtime.
 - **36 languages** — select transcription language from the tray menu or via `-lang` flag.
 - **Cross-platform** — minimal dependencies, pure Go where possible.
   - [x] macOS (Apple Silicon)
@@ -57,21 +58,30 @@ curl -L https://github.com/sumerc/zee/releases/latest/download/zee_darwin_arm64.
 
 ```bash
 ./zee                               # offline, on-device (no key needed)
-GROQ_API_KEY=xxx ./zee              # Groq Whisper (cloud)
-DEEPGRAM_API_KEY=xxx ./zee          # Deepgram (streaming auto-enabled when a streaming model is selected from the tray)
+./zee setup                         # add cloud providers (Groq, OpenAI, Deepgram, …), pick mic + hotkey
 ./zee -debug-transcribe             # include transcription text logs
 ```
 
 > **Note:** When running from a terminal, macOS permissions (Microphone, Accessibility) are granted to the **terminal app** (e.g. Ghostty, iTerm2, Terminal), not to zee itself.
 
+### Update
+
+Quit Zee (menu bar → Quit), then run:
+
+```bash
+/Applications/Zee.app/Contents/MacOS/zee update
+```
+
+Zee verifies the release archive, replaces `Zee.app`, and re-runs the setup wizard — macOS resets the app's permissions whenever the bundle changes, and setup restores and re-verifies them. Models and settings are unchanged. (**Check for Updates** in the tray tells you when a release is available.)
+
 ### Build from source
 
-Requires **Apple Silicon**, plus `cmake` and the Xcode Command Line Tools (for the one-time on-device STT engine build).
+Requires **Apple Silicon**, plus `cmake` and the Xcode Command Line Tools (for the one-time on-device STT engine build: parakeet.cpp + whisper.cpp).
 
 ```bash
 git clone https://github.com/sumerc/zee && cd zee
-make build        # builds the local STT engine (cmake) + CLI binary;
-                  # first run also fetches the default models (~900 MB) into models/parakeet/v1/
+make build        # builds the local STT engines (cmake) + CLI binary;
+                  # first run also fetches the default models (~800 MB) into models/local/v2/
 make app          # macOS DMG
 ```
 
@@ -79,26 +89,19 @@ The submodule, static libraries, and models are all set up automatically by `mak
 
 ## Usage
 
-On Apple Silicon, zee works offline out of the box — no key required. To use a cloud provider instead, set its key (pick the provider from the tray), then run zee:
+On Apple Silicon, zee works offline out of the box — no key required. Pick **Parakeet** for fast English or **Whisper** for multilingual auto-detect from the tray. To use a cloud provider (Groq Whisper, OpenAI, Deepgram streaming, Mistral Voxtral, ElevenLabs Scribe), run the setup wizard and paste the provider's API key when prompted:
 
 ```bash
-export GROQ_API_KEY=your_key       # batch mode (Groq Whisper)
-export OPENAI_API_KEY=your_key     # batch mode (OpenAI Whisper)
-export DEEPGRAM_API_KEY=your_key   # streaming mode (Deepgram)
-export MISTRAL_API_KEY=your_key    # batch mode (Mistral Voxtral)
-export ELEVENLABS_API_KEY=your_key # batch mode (ElevenLabs Scribe)
-zee                                # starts in menu bar, hold Ctrl+Shift+Space to record
+zee setup
 ```
 
-> **Note:** `export` only works in the current terminal session. To make API keys available to `Zee.app` when launched from Spotlight or Applications, use `launchctl`:
-> ```bash
-> launchctl setenv GROQ_API_KEY your_key
-> ```
-> Add this to your `~/.zshrc` so it runs on every login.
+Keys are stored per-provider in `credentials.json` (mode 0600) in zee's config directory — environment variables are not read. Each key is live-tested as you enter it, and you can switch providers any time from the tray.
 
-zee runs as a system tray app in the menu bar. Hold `Ctrl+Shift+Space` to record, release to transcribe. Result auto-pastes into the focused window.
+To replace a key later without re-running the wizard, use **Settings → Edit Credentials…** in the tray: it opens `credentials.json` in your editor, and the next recording uses the new key — no restart. The wizard is still the way to *add* a provider, since it live-tests the key; a hand edit isn't verified until you record.
 
-Use the tray menu to switch microphones, providers, and languages — or use `-setup` for initial device selection.
+zee runs as a system tray app in the menu bar. Hold `Option+Space` (the default — rebindable in `zee setup`) to record, release to transcribe. Result auto-pastes into the focused window.
+
+Use the tray menu to switch microphones, providers, and languages.
 
 ### macOS Permissions
 
@@ -108,14 +111,14 @@ On first run, macOS will prompt for permissions:
 
 2. **Accessibility** — Required for global hotkey and auto-paste. System Settings → Privacy & Security → Accessibility.
 
-If permissions aren't granted, zee will fail silently or the hotkey won't register. Run with `-doctor` to diagnose permission issues.
+If permissions aren't granted, zee will fail silently or the hotkey won't register. Run `zee -setup` to (re-)grant permissions and verify everything works.
 
 ## Testing
 
 ```bash
 make test                                      # unit tests
 make test-integration                          # integration tests (builds binary, requires GROQ_API_KEY)
-make integration-test WAV=test/data/short.wav  # single-file integration test (requires GROQ_API_KEY)
+make test-integration                          # end-to-end tests (requires GROQ_API_KEY)
 make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 ```
 
@@ -125,12 +128,10 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 |------|---------|-------------|
 | `-format` | mp3@16 | Audio format: `mp3@16`, `mp3@64`, or `flac` |
 | `-autopaste` | true | Auto-paste into focused window |
-| `-setup` | false | Select microphone device |
+| `-setup` | false | Run the interactive setup wizard (provider, key, device, permissions, hotkey) and exit |
 | `-device` | (default) | Use named microphone device |
 | `-lang` | en | Language code (e.g., `en`, `es`, `fr`) |
-| `-debug` | true | Enable diagnostic logging |
 | `-debug-transcribe` | false | Enable transcription text logging |
-| `-doctor` | false | Run system diagnostics and exit |
 | `-logpath` | OS-specific | Log directory (use `./` for current dir) |
 | `-hints` | - | Vocabulary hints for transcription (comma-separated) |
 | `-transcribe` | - | Audio file to transcribe and exit |
@@ -146,7 +147,14 @@ make benchmark WAV=file.wav RUNS=5             # multiple runs for timing
 | `ZEE_PPROF` | pprof server address (e.g., `:6060`) |
 | `ZEE_CRASH=1` | Trigger synthetic crash for crash-log testing |
 | `ZEE_LONGPRESS_DURATION` | Hybrid hotkey long-press threshold (e.g., `350ms`) |
-| `ZEE_SAVE_LAST_AUDIO=1` | Enable tray action to save the last recording sample |
+
+## Design notes
+
+[`docs/design-notes.md`](docs/design-notes.md) records *why* the non-obvious
+choices were made — which engine and model, which backend, what got measured,
+and which alternatives were tried and rejected (and why). Worth reading before
+changing anything in `audio/`, `transcriber/`, or the local model registry: most
+of the surprising code there has a measurement behind it.
 
 ## About
 

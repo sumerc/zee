@@ -16,9 +16,19 @@ func Info(msg string) {
 	show(msg, "note")
 }
 
+// Untrusted text (msg, action) is passed via argv rather than interpolated into
+// the AppleScript source, so quotes/backslashes/newlines/Unicode need no escaping.
+// icon is a fixed AppleScript keyword (note/caution/stop) we control, so it stays
+// in the source.
+
 func Confirm(msg, action string) bool {
-	out, err := exec.Command("osascript", "-e",
-		`display dialog "`+msg+`" with title "Zee" buttons {"Cancel", "`+action+`"} default button "`+action+`" with icon note`).Output()
+	if underTest {
+		return false
+	}
+	const script = `on run argv
+		display dialog (item 1 of argv) with title "Zee" buttons {"Cancel", item 2 of argv} default button (item 2 of argv) with icon note
+	end run`
+	out, err := exec.Command("osascript", "-e", script, msg, action).Output()
 	if err != nil {
 		return false
 	}
@@ -26,6 +36,11 @@ func Confirm(msg, action string) bool {
 }
 
 func show(msg, icon string) {
-	exec.Command("osascript", "-e",
-		`display dialog "`+msg+`" with title "Zee" buttons {"OK"} default button "OK" with icon `+icon).Run()
+	if underTest {
+		return
+	}
+	script := `on run argv
+		display dialog (item 1 of argv) with title "Zee" buttons {"OK"} default button "OK" with icon ` + icon + `
+	end run`
+	exec.Command("osascript", "-e", script, msg).Run()
 }

@@ -2,114 +2,41 @@
 
 package audio
 
+/*
+#cgo darwin LDFLAGS: -framework AVFoundation -framework Foundation
+void zeeBeepLoad(int idx, const void *wav, int len);
+void zeeBeepPlay(int idx);
+*/
+import "C"
+
 import (
-	"sync/atomic"
-
-	"github.com/gen2brain/malgo"
+	"encoding/binary"
+	"unsafe"
 )
 
-var (
-	playbackDevice *malgo.Device
-
-	// Playback state, read from the device callback: the canonical mono buffer
-	// being played and the current sample offset into it.
-	playMono atomic.Pointer[[]int16]
-	playPos  atomic.Uint32
-)
-
-// initPlaybackDevice is lock-free; callers must hold deviceMu around it.
-func initPlaybackDevice() error {
-	config := malgo.DefaultDeviceConfig(malgo.Playback)
-	config.Playback.Format = malgo.FormatS16
-	config.Playback.Channels = 1
-	config.SampleRate = beepSampleRate
-
-	callbacks := malgo.DeviceCallbacks{
-		Data: dataCallback,
-	}
-
-	var err error
-	playbackDevice, err = malgo.InitDevice(maCtx.Context, config, callbacks)
-	return err
-}
-
+// Feedback tones play via AVAudioPlayer (see beep_darwin.m): the OS owns the
+// audio machinery, so each beep is fire-and-forget with no playback device to
+// init, keep warm, or serialize against capture (deviceMu guards capture
+// only). App-managed malgo playback was tried both ways and lost: reinit-per-
+// tone stalled the run loop 100–600ms (audibly late end-beep, delayed hotkey
+// events), a kept-warm device intermittently went silent. Tones are still
+// synthesized by buildSamples (the single source of truth) and handed to the
+// OS as in-memory WAV bytes at startup.
 func initSound() {
-	deviceMu.Lock()
-	defer deviceMu.Unlock()
-
-	if err := ensureContext(); err != nil {
-		return
-	}
-
 	buildSamples()
-	initPlaybackDevice() // best-effort; playInt16 reinits per play anyway
-}
-
-// dataCallback fills the mono S16 device buffer, converting each canonical
-// int16 sample to two little-endian bytes as it copies.
-func dataCallback(pOutput, _ []byte, frameCount uint32) {
-	silence := func() {
-		for i := range pOutput {
-			pOutput[i] = 0
-		}
-	}
-
-	mono := playMono.Load()
-	if mono == nil {
-		silence()
-		return
-	}
-	pos := playPos.Load()
-	total := uint32(len(*mono))
-	if pos >= total {
-		playMono.Store(nil)
-		silence()
-		return
-	}
-
-	frames := min(total-pos, frameCount)
-	s := *mono
-	for i := uint32(0); i < frames; i++ {
-		v := s[pos+i]
-		pOutput[i*2] = byte(v)
-		pOutput[i*2+1] = byte(v >> 8)
-	}
-	for i := frames * 2; i < frameCount*2; i++ {
-		pOutput[i] = 0 // zero-fill any frames past the buffer
-	}
-	playPos.Store(pos + frames)
-}
-
-func playInt16(mono []int16) {
-	if maCtx == nil || len(mono) == 0 {
-		return
-	}
-
-	deviceMu.Lock()
-	defer deviceMu.Unlock()
-
-	// Always reinitialize to pick up current default output device
-	// (handles BT connect/disconnect, sleep/wake). Null device after Uninit
-	// so a failed reinit can't leave it pointing at the freed device — the
-	// next call would otherwise Uninit it again and double-free.
-	if playbackDevice != nil {
-		playbackDevice.Stop()
-		playbackDevice.Uninit()
-		playbackDevice = nil
-	}
-	if err := initPlaybackDevice(); err != nil {
-		playbackDevice = nil
-		return
-	}
-
-	playPos.Store(0)
-	playMono.Store(&mono)
-
-	if err := playbackDevice.Start(); err != nil {
-		playMono.Store(nil)
+	for s := startSound; s < numSounds; s++ {
+		wav := pcmWAV(pcm16LE(samples[s]), beepSampleRate)
+		C.zeeBeepLoad(C.int(s), unsafe.Pointer(&wav[0]), C.int(len(wav)))
 	}
 }
 
-func playOne(s sound) {
-	playInt16(samples[s])
+func playOne(s sound) { C.zeeBeepPlay(C.int(s)) }
+
+// pcm16LE flattens canonical int16 samples to little-endian bytes.
+func pcm16LE(s []int16) []byte {
+	b := make([]byte, 2*len(s))
+	for i, v := range s {
+		binary.LittleEndian.PutUint16(b[i*2:], uint16(v))
+	}
+	return b
 }

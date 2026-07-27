@@ -110,8 +110,13 @@ var langLabels = map[string]string{
 }
 
 func langsFromCodes(codes []string) []Language {
-	langs := make([]Language, 0, len(codes)+1)
-	langs = append(langs, Language{"", "Auto-detect"})
+	return append([]Language{{"", "Auto-detect"}}, plainLangsFromCodes(codes)...)
+}
+
+// plainLangsFromCodes builds a language list without the Auto-detect entry,
+// for providers that cannot honor it (see nova3Langs).
+func plainLangsFromCodes(codes []string) []Language {
+	langs := make([]Language, 0, len(codes))
 	for _, c := range codes {
 		label := langLabels[c]
 		if label == "" {
@@ -181,25 +186,38 @@ type ModelStatus struct {
 // provider is special-cased: New() and the tray treat them all through these
 // fields. Download is nil for providers that have nothing to fetch (cloud).
 type ProviderInfo struct {
-	Name      string
-	Label     string
-	Models    []ModelInfo
-	Available func() bool        // at least one model usable right now
-	New       func() Transcriber // keyless: closes over the key / model dir
-	Status    func(modelID string) ModelStatus
-	Download  func(modelID string, progress func(fraction float64)) error
+	Name         string
+	Label        string
+	Models       []ModelInfo
+	Local        bool               // on-device engine: keyless, models on disk
+	DefaultModel string             // the model a fresh instance loads (local only)
+	Available    func() bool        // at least one model usable right now
+	New          func() Transcriber // keyless: closes over the key / model dir
+	Status       func(modelID string) ModelStatus
+	Download     func(modelID string, progress func(fraction float64)) error
 }
 
+// keySource resolves a provider's API key by provider name (e.g. "groq" →
+// "gsk_…"). It is injected once at startup (SetKeySource) so this package keeps
+// no dependency on app-level secret storage. The default resolves nothing.
+var keySource = func(string) string { return "" }
+
+// SetKeySource installs the provider→key resolver. main() wires this to
+// config.APIKey (which reads credentials.json); tests inject their own. Call it
+// once, before any provider is used.
+func SetKeySource(fn func(provider string) string) { keySource = fn }
+
 // cloudProvider builds a key-gated ProviderInfo. Availability is "key present";
-// every model shares that status and nothing is downloadable.
-func cloudProvider(name, label, envKey string, models []ModelInfo, mk func(string) Transcriber) ProviderInfo {
-	hasKey := func() bool { return os.Getenv(envKey) != "" }
+// every model shares that status and nothing is downloadable. The key is
+// resolved by provider name through the injected keySource.
+func cloudProvider(name, label string, models []ModelInfo, mk func(string) Transcriber) ProviderInfo {
+	hasKey := func() bool { return keySource(name) != "" }
 	return ProviderInfo{
 		Name:      name,
 		Label:     label,
 		Models:    models,
 		Available: hasKey,
-		New:       func() Transcriber { return mk(os.Getenv(envKey)) },
+		New:       func() Transcriber { return mk(keySource(name)) },
 		Status:    func(string) ModelStatus { return ModelStatus{Ready: hasKey()} },
 	}
 }
@@ -208,12 +226,15 @@ func Providers() []ProviderInfo {
 	return []ProviderInfo{
 		// Local is first so it's the default on a fresh machine even when cloud
 		// keys are set; cloud is opt-in via the tray (the choice persists).
+		// Parakeet leads Whisper: it is the English fast path (4–9× faster) and
+		// the startup default, with Whisper the multilingual option next to it.
 		parakeetProvider(),
-		cloudProvider("deepgram", "Deepgram", "DEEPGRAM_API_KEY", DeepgramModels, func(k string) Transcriber { return NewDeepgram(k) }),
-		cloudProvider("openai", "OpenAI", "OPENAI_API_KEY", OpenAIModels, func(k string) Transcriber { return NewOpenAI(k) }),
-		cloudProvider("groq", "Groq", "GROQ_API_KEY", GroqModels, func(k string) Transcriber { return NewGroq(k) }),
-		cloudProvider("mistral", "Mistral", "MISTRAL_API_KEY", MistralModels, func(k string) Transcriber { return NewMistral(k) }),
-		cloudProvider("elevenlabs", "ElevenLabs", "ELEVENLABS_API_KEY", ElevenLabsModels, func(k string) Transcriber { return NewElevenLabs(k) }),
+		whisperProvider(),
+		cloudProvider("deepgram", "Deepgram", DeepgramModels, func(k string) Transcriber { return NewDeepgram(k) }),
+		cloudProvider("openai", "OpenAI", OpenAIModels, func(k string) Transcriber { return NewOpenAI(k) }),
+		cloudProvider("groq", "Groq", GroqModels, func(k string) Transcriber { return NewGroq(k) }),
+		cloudProvider("mistral", "Mistral", MistralModels, func(k string) Transcriber { return NewMistral(k) }),
+		cloudProvider("elevenlabs", "ElevenLabs", ElevenLabsModels, func(k string) Transcriber { return NewElevenLabs(k) }),
 	}
 }
 
@@ -234,5 +255,5 @@ func New() (Transcriber, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("set DEEPGRAM_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, or ELEVENLABS_API_KEY (or install on Apple Silicon to run offline)")
+	return nil, fmt.Errorf("no transcriber available: run `zee -setup` to add a cloud provider API key (or install on Apple Silicon to run offline)")
 }

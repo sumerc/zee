@@ -19,12 +19,9 @@ import (
 func runTestMode(wavPath string) {
 	audio.DisableBeep()
 
-	if err := log.Init(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not init logging: %v\n", err)
-	}
+	// Logging is already initialized (and session_start logged) by run() before
+	// it dispatches here; only the shutdown flush is ours.
 	defer log.Close()
-
-	log.SessionStart(activeTranscriber.Name(), activeFormat, activeFormat)
 
 	if autoPaste {
 		if err := clipboard.Init(); err != nil {

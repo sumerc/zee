@@ -20,11 +20,13 @@ import (
 	"zee/audio"
 	"zee/clipboard"
 	"zee/config"
-	"zee/doctor"
 	"zee/encoder"
 	"zee/hotkey"
 	"zee/log"
 	"zee/login"
+	"zee/overlay"
+	"zee/permissions"
+	"zee/setup"
 	"zee/shutdown"
 	"zee/transcriber"
 	"zee/tray"
@@ -54,6 +56,7 @@ type savedRecording struct {
 	Provider    string
 	Model       string
 	Timestamp   time.Time
+	Err         string
 }
 
 var (
@@ -72,6 +75,14 @@ func trayModelState(s transcriber.ModelStatus) tray.ModelState {
 	}
 }
 
+func deviceNames(devices []audio.DeviceInfo) []string {
+	names := make([]string, len(devices))
+	for i := range devices {
+		names[i] = devices[i].Name
+	}
+	return names
+}
+
 func modelSupportsStream(tr transcriber.Transcriber) bool {
 	id := tr.GetModel()
 	for _, m := range tr.Models() {
@@ -85,15 +96,19 @@ func modelSupportsStream(tr transcriber.Transcriber) bool {
 type recSession struct {
 	Stop         <-chan struct{}
 	SilenceClose *atomic.Bool
+	PressedAt    time.Time // when the press was accepted; drives the reflex-latency metric
 }
 
 type recordingConfig struct {
-	tr        transcriber.Transcriber
-	stream    bool
-	format    string
-	lang      string
-	hints     string
-	autoPaste bool
+	tr              transcriber.Transcriber
+	stream          bool
+	format          string
+	lang            string
+	hints           string
+	autoPaste       bool
+	tailWait        time.Duration // mic kept open after release so a fast keyup doesn't clip the last word
+	pressToRecordMs float64       // press→mic-live, filled at record start; logged with the transcription metrics
+	releasedAt      time.Time     // recording end, filled once it happens; start of the felt-latency metric
 }
 
 var configMu sync.Mutex
@@ -106,6 +121,7 @@ var captureMu sync.Mutex
 
 var trayRecordChan = make(chan struct{}, 1)
 var isRecording atomic.Bool
+var accessibilityPoll atomic.Bool
 
 // isTranscribing is true while a recording has stopped but its transcription is
 // still running. isRecording stays true across this phase too (so a re-press is
@@ -157,37 +173,64 @@ func gracefulShutdown() {
 	})
 }
 
+// runUpdate is the `zee update` verb: check, download+verify+swap, then hand
+// off to setup. It returns the process exit code.
+func runUpdate() int {
+	if version == "dev" {
+		fmt.Println("Dev build — cannot check for updates.")
+		return 0
+	}
+	fmt.Printf("zee %s — checking for updates...\n", version)
+	rel, err := update.CheckLatest(version)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return 1
+	}
+	if rel == nil {
+		fmt.Println("Already up to date.")
+		return 0
+	}
+	fmt.Printf("Updating %s → %s...\n", version, rel.Version)
+	app, err := update.Install(*rel)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return 1
+	}
+	// The swap changed the (ad-hoc) code signature, so macOS dropped the TCC
+	// grants — setup re-grants and re-verifies as the new binary. Its exit code
+	// is the update's: an updated app that can't hear is not a successful update.
+	fmt.Println("Update installed. macOS resets permissions when the app changes — running setup to restore them.")
+	code, err := setup.SpawnSetupAt(app)
+	if err != nil {
+		fmt.Printf("Zee %s is installed, but setup could not start: %v\n", rel.Version, err)
+		fmt.Printf("Run it manually: %s/Contents/MacOS/zee setup\n", app)
+		return 1
+	}
+	return code
+}
+
 func run() {
-	if len(os.Args) > 1 && os.Args[1] == "update" {
-		if version == "dev" {
-			fmt.Println("Dev build — cannot check for updates.")
-			os.Exit(0)
+	// Bare subcommands, parsed before the flag set (like git/go verbs). The
+	// -setup flag below stays as an alias so install.sh and older docs keep
+	// working.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "setup":
+			os.Exit(setup.Run())
+		case "doctor":
+			os.Exit(setup.Doctor())
+		case "update":
+			os.Exit(runUpdate())
 		}
-		fmt.Printf("zee %s — checking for updates...\n", version)
-		rel, err := update.CheckLatest(version)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			os.Exit(1)
-		}
-		if rel == nil {
-			fmt.Println("Already up to date.")
-			os.Exit(0)
-		}
-		fmt.Printf("\nUpdate available: %s → %s\n\n", version, rel.Version)
-		fmt.Println("Install:   curl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash")
-		fmt.Printf("Download:  %s\n", rel.URL)
-		os.Exit(0)
 	}
 
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
 	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
-	setupFlag := flag.Bool("setup", false, "Select microphone device (otherwise uses system default)")
+	setupFlag := flag.Bool("setup", false, "Run the interactive setup wizard (provider, key, device, permissions, hotkey) and exit")
 	deviceFlag := flag.String("device", "", "Use named microphone device")
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
-	doctorFlag := flag.Bool("doctor", false, "Run system diagnostics and exit")
-	debugFlag := flag.Bool("debug", true, "Enable diagnostic logging (timing, errors, events)")
 	debugTranscribeFlag := flag.Bool("debug-transcribe", false, "Enable transcription text logging")
 	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
@@ -234,12 +277,16 @@ func run() {
 		os.Exit(0)
 	}
 
-	if *doctorFlag {
-		wavFile := ""
-		if len(flag.Args()) > 0 {
-			wavFile = flag.Args()[0]
-		}
-		os.Exit(doctor.Run(wavFile))
+	// Cloud provider API keys come from credentials.json (via config.APIKey),
+	// never the environment. Wire the resolver before any provider is used —
+	// including the setup wizard below, which resolves a transcriber.
+	transcriber.SetKeySource(config.APIKey)
+
+	// The setup wizard is a self-contained mode: it configures provider/key,
+	// device, permissions and hotkey, then launches the app and exits. It does
+	// its own config load and (on macOS) re-execs as the bundle for TCC.
+	if *setupFlag {
+		os.Exit(setup.Run())
 	}
 	// Load persistent settings, merge with CLI flags
 	if err := config.Load(); err != nil {
@@ -299,6 +346,12 @@ func run() {
 		var initErr error
 		activeTranscriber, initErr = transcriber.New()
 		if initErr != nil {
+			// An unreadable credentials.json hides every cloud key, so the
+			// generic "run zee setup" would send the user to reconfigure keys
+			// that are already there. Name the actual problem.
+			if cerr := config.CredentialsError(); cerr != nil {
+				fatal("Credentials could not be read, so no provider is configured.\n\n%v\n\nFix %s and start Zee again.", cerr, config.CredentialsPath())
+			}
 			fatal("%v", initErr)
 		}
 	}
@@ -307,24 +360,11 @@ func run() {
 		activeTranscriber.SetLanguage(*langFlag)
 	}
 
-	if *setupFlag && *deviceFlag == "" {
-		ctx, err := audio.NewContext()
-		if err != nil {
-			fatal("Error initializing audio: %v", err)
-		}
-		if dev, _ := selectDevice(ctx); dev != nil {
-			*deviceFlag = dev.Name
-		}
-		ctx.Close()
-	}
-
-	if *debugFlag {
-		log.SetTranscribeEnabled(*debugTranscribeFlag)
-		if err := log.Init(); err != nil {
-			alert.Warn("Debug logging will not work.\n\n" + err.Error())
-		} else {
-			log.SessionStart(activeTranscriber.Name(), activeFormat, activeFormat)
-		}
+	log.SetTranscribeEnabled(*debugTranscribeFlag)
+	if err := log.Init(); err != nil {
+		alert.Warn("Diagnostic logging will not work.\n\n" + err.Error())
+	} else {
+		log.SessionStart(activeTranscriber.Name(), activeFormat, activeFormat)
 	}
 
 	if *testFlag {
@@ -354,10 +394,7 @@ func run() {
 			log.Warnf("paste init failed: %v", err)
 			alert.Warn("Auto-paste will not work.\n\n" + err.Error())
 		}
-		if !clipboard.CheckAccessibility() {
-			alert.Warn("Auto-paste requires Accessibility permission.\n\nGrant access to Zee.app (or your terminal app if running from CLI) in:\nSystem Settings → Privacy & Security → Accessibility")
-			exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").Start()
-		}
+		ensureAutoPasteAccessibility()
 	}
 
 	ctx, err := audio.NewContext()
@@ -376,12 +413,6 @@ func run() {
 					break
 				}
 			}
-		}
-	} else if *setupFlag {
-		selectedDevice, err = selectDevice(ctx)
-		if err != nil {
-			log.Warnf("device selection failed: %v — falling back to default", err)
-			selectedDevice = nil
 		}
 	}
 
@@ -406,18 +437,18 @@ func run() {
 		},
 		func() { requestStop() },
 	)
-	// preferredDevice remembers the user's choice so we can auto-reconnect
-	preferredDevice := ""
-	if selectedDevice != nil {
-		preferredDevice = selectedDevice.Name
-	}
+	// preferredDevice remembers the user's choice so we can auto-reconnect.
+	// Seeded from the saved/flag name — NOT from what's currently attached —
+	// so a session started while the mic is unplugged still auto-switches to
+	// it the moment it's plugged in (capture starts on system default until
+	// then).
+	preferredDevice := *deviceFlag
 	tray.SetBTCheck(audio.IsBluetooth)
 	if devices, err := ctx.Devices(); err == nil && len(devices) > 0 {
-		names := make([]string, len(devices))
-		for i := range devices {
-			names[i] = devices[i].Name
-		}
-		tray.SetDevices(names, preferredDevice, func(name string) {
+		tray.SetDevices(deviceNames(devices), preferredDevice, func(name string) {
+			if guardBusy("Can't change the microphone while recording or transcribing.") {
+				return
+			}
 			captureMu.Lock()
 			preferredDevice = name
 			captureMu.Unlock()
@@ -434,11 +465,18 @@ func run() {
 	var trayModels []tray.Model
 	modelIndex := map[string]transcriber.ModelInfo{}
 	for _, p := range transcriber.Providers() {
+		// Both local engines render under one "Local" heading in the tray —
+		// users pick a role ("English, fastest"), not an engine.
+		group := p.Label
+		if p.Local {
+			group = "Local"
+		}
 		for _, m := range p.Models {
 			st := p.Status(m.ID)
 			trayModels = append(trayModels, tray.Model{
 				Provider:      p.Name,
 				ProviderLabel: p.Label,
+				Group:         group,
 				ModelID:       m.ID,
 				Label:         m.Label,
 				State:         trayModelState(st),
@@ -459,6 +497,7 @@ func run() {
 	// switchModel), so the freed model can't be one an in-flight session uses.
 	applySwitch := func(p transcriber.ProviderInfo, model string) {
 		configMu.Lock()
+		from := activeTranscriber.Name() + "/" + activeTranscriber.GetModel()
 		var outgoing transcriber.Transcriber
 		if activeTranscriber.Name() != p.Name {
 			outgoing = activeTranscriber
@@ -466,37 +505,36 @@ func run() {
 			newTr.SetLanguage(activeTranscriber.GetLanguage())
 			activeTranscriber = newTr
 		}
-		activeTranscriber.SetModel(model) // local: blocks here during gguf load
+		activeTranscriber.SetModel(model) // local: kicks off a background gguf load, returns at once
+		log.Info(fmt.Sprintf("model_switch from=%s to=%s/%s", from, p.Name, model))
 		streamEnabled = modelIndex[p.Name+":"+model].Stream
 		if !streamEnabled {
 			activeFormat = *formatFlag
 		}
 		langs := activeTranscriber.SupportedLanguages()
-		local := transcriber.IsLocal(activeTranscriber)
+		hints := transcriber.SupportsHints(activeTranscriber)
 		configMu.Unlock()
 
 		// Only Parakeet has a provider-level Close (frees the gguf); cloud
 		// providers don't implement it and are skipped.
 		if c, ok := outgoing.(interface{ Close() }); ok {
+			ct := time.Now()
 			c.Close()
+			log.Info(fmt.Sprintf("model_close freed=%s close_ms=%d", from, time.Since(ct).Milliseconds()))
 		}
 
 		config.Update(func(s *config.Settings) { s.Provider = p.Name; s.Model = model })
 		tray.SetLanguages(langs)
-		tray.SetHintsEnabled(!local)
+		tray.SetHintsEnabled(hints)
 		tray.SetActiveModel(p.Name, model)
 	}
 
-	// switchModel applies the swap immediately when idle, or defers it to the end
-	// of the current record/inference cycle when one is active — so neither the
+	// switchModel is the guarded wrapper for a user-initiated model/provider
+	// change: it denies while a record/inference cycle is active (so neither the
 	// gguf reload nor the Close of the outgoing model can free a ctx an in-flight
-	// session is using. The tray menu and the download-complete goroutine both
-	// funnel through here.
+	// session is using), otherwise applies the swap. Only the tray menu calls it.
 	switchModel := func(p transcriber.ProviderInfo, model string) {
-		if isRecording.Load() {
-			pendingMu.Lock()
-			pendingSwitch = func() { applySwitch(p, model) }
-			pendingMu.Unlock()
+		if guardBusy("Can't switch models while recording or transcribing.") {
 			return
 		}
 		applySwitch(p, model)
@@ -525,12 +563,28 @@ func run() {
 					return
 				}
 				tray.UpdateModelState(provider, model, tray.ModelReady, "")
-				switchModel(p, model)
+				// Don't auto-switch: a download finishing shouldn't yank the active
+				// model out from under an in-flight dictation. Notify and let the
+				// user select it — the menu already shows it ready.
+				label := model
+				if m, ok := modelIndex[provider+":"+model]; ok {
+					label = m.Label
+				}
+				alert.Info(label + " downloaded and ready.\n\nSelect it from the menu to use it.")
 			}()
 		}
 	})
 
-	tray.SetLanguage(*langFlag, func(code string, persist bool) {
+	tray.SetLanguage(*langFlag, func(code string, persist bool) bool {
+		// Only a real user choice can be denied. Derived changes arrive with
+		// persist=false — a model-constraint fallback, a config reload, the
+		// language list being rebuilt — and must apply silently: they are
+		// just a string assignment (the in-flight session already captured its
+		// language), and denying one pops a modal at a user who did nothing.
+		// The return value tells the tray whether to move its checkmark.
+		if persist && guardBusy("Can't change the language while recording or transcribing.") {
+			return false
+		}
 		configMu.Lock()
 		activeTranscriber.SetLanguage(code)
 		configMu.Unlock()
@@ -539,14 +593,46 @@ func run() {
 		if persist {
 			config.Update(func(s *config.Settings) { s.Language = code })
 		}
+		return true
 	})
-	tray.SetHintsEnabled(!transcriber.IsLocal(activeTranscriber))
+	tray.SetHintsEnabled(transcriber.SupportsHints(activeTranscriber))
+	// A dev build can't auto-start (login.Supported), and drops any entry an
+	// earlier build of itself left behind — otherwise launchd keeps relaunching
+	// a rebuilt, re-signed binary at login and macOS re-prompts for permissions.
+	if !login.Supported() {
+		if err := login.Disable(); err != nil {
+			log.Errorf("drop unsupported login item: %v", err)
+		}
+	}
+	tray.SetLoginAvailable(login.Supported())
 	tray.SetLogin(login.Enabled())
 	tray.SetVersion(version)
 	tray.OnSaveAudio(saveLastRecording)
 	tray.OnEditHints(func() {
 		exec.Command("open", config.HintsPath()).Run()
 	})
+	tray.OnEditSettings(func() {
+		// Materialize an unset hotkey as the active default so the opened file
+		// shows a readable combo (⌥Space) instead of "key": 0 / empty label.
+		// config.Update also creates config.json if it's missing — open needs a file.
+		config.Update(func(s *config.Settings) {
+			if s.Hotkey.IsZero() {
+				s.Hotkey = hotkey.DefaultCombo()
+			}
+		})
+		exec.Command("open", "-t", config.SettingsPath()).Run()
+	})
+	tray.OnEditCredentials(func() {
+		// A cloud transcriber bakes its key in at construction, so an edit here
+		// takes effect via "Reload Config" (rebuilds the active provider and
+		// refreshes menu states) — or on the next provider switch.
+		if err := config.EnsureCredentials(); err != nil {
+			alert.Warn("Could not create the credentials file.\n\n" + err.Error())
+			return
+		}
+		exec.Command("open", "-t", config.CredentialsPath()).Run()
+	})
+	tray.SetHotkeyLabel(cfg.Hotkey.OrDefault().Display())
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
@@ -554,6 +640,9 @@ func run() {
 		autoPaste = on
 		configMu.Unlock()
 		config.Update(func(s *config.Settings) { s.AutoPaste = on })
+		if on {
+			go ensureAutoPasteAccessibility()
+		}
 	})
 	tray.OnLogin(func(on bool) error {
 		var err error
@@ -581,10 +670,7 @@ func run() {
 			if err != nil {
 				continue
 			}
-			names := make([]string, len(devices))
-			for i := range devices {
-				names[i] = devices[i].Name
-			}
+			names := deviceNames(devices)
 			if slices.Equal(last, names) {
 				continue
 			}
@@ -599,11 +685,12 @@ func run() {
 			}
 			pref := preferredDevice
 			captureMu.Unlock()
-			if selName != "" && !slices.Contains(names, selName) {
+			switch deviceChangeAction(names, selName, pref) {
+			case switchToDefault:
 				log.Info("device_disconnected: " + selName)
 				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
 				selName = ""
-			} else if selName == "" && pref != "" && slices.Contains(names, pref) {
+			case switchToPreferred:
 				log.Info("device_reconnected: " + pref)
 				switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, pref)
 				selName = pref
@@ -612,6 +699,9 @@ func run() {
 		}
 	}()
 
+	// Notify-only: the tray never installs. Updating swaps the bundle, which
+	// resets the TCC grants (ad-hoc signature) and requires the interactive
+	// setup re-grant — a terminal flow the running tray app can't host.
 	tray.OnCheckUpdate(func() {
 		go func() {
 			rel, err := update.CheckLatest(version)
@@ -623,10 +713,13 @@ func run() {
 				alert.Info("You're on the latest version (" + version + ")")
 				return
 			}
-			installURL := "https://github.com/" + update.Repo + "#install"
-			if alert.Confirm("Update available: "+version+" → "+rel.Version+"\n\nOne-liner install instructions:\n"+installURL, "Open Install Instructions") {
-				exec.Command("open", installURL).Start()
+			cmd := "/Applications/Zee.app/Contents/MacOS/zee update"
+			if exe, err := os.Executable(); err == nil {
+				cmd = exe + " update"
 			}
+			alert.Info("Update available: " + version + " → " + rel.Version +
+				"\n\nQuit Zee (menu bar → Quit), then run in a terminal:\n\n" + cmd +
+				"\n\nThe update re-runs setup — macOS resets permissions when the app changes.")
 		}()
 	})
 
@@ -642,15 +735,157 @@ func run() {
 
 	go audio.InitBeep()
 
-	hk := hotkey.New()
+	hk := hotkey.New(cfg.Hotkey.OrDefault())
 	if err := hk.Register(); err != nil {
 		log.Errorf("hotkey register error: %v", err)
-		fatal("Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security.", err)
+		// A bad saved combo (unknown modifier, unregistrable chord) must not
+		// brick every launch. If it wasn't the default, fall back to the
+		// default and warn — the user can re-bind from Settings; only a failing
+		// default is fatal (nothing left to try).
+		const hotkeyFatal = "Failed to register hotkey: %v\n\nGrant Accessibility access in System Settings → Privacy & Security."
+		def := hotkey.DefaultCombo()
+		if cfg.Hotkey.OrDefault().Equal(def) {
+			fatal(hotkeyFatal, err)
+		}
+		log.Warnf("falling back to default hotkey %s", def.Label)
+		hk = hotkey.New(def)
+		if err := hk.Register(); err != nil {
+			fatal(hotkeyFatal, err)
+		}
+		tray.SetHotkeyLabel(def.Display())
+		tray.SetError("Saved hotkey couldn't be registered — using " + def.Display() + ". Re-bind it in Settings.")
 	}
 	defer hk.Unregister()
 
 	sessions := make(chan recSession, 1)
-	go listenHotkey(hk, longPressDuration(), sessions)
+	go listenHotkey(hk, hotkey.LongPress(), sessions)
+
+	// Apply a re-read config.json (tray "Reload Config") field by field, each
+	// through the same path its tray callback uses. Reload is user-initiated
+	// and busy-guarded like every other engine op — there is no file watcher,
+	// so an edit takes effect when the user says so and a parse error is shown
+	// instead of silently ignored.
+	applyCfg := func(s config.Settings) {
+		configMu.Lock()
+		curProv, curModel := activeTranscriber.Name(), activeTranscriber.GetModel()
+		configMu.Unlock()
+		// An empty model means "the provider's default" (its first listed model)
+		// — what a hand-edit naturally omits. Resolving it here keeps that a
+		// real switch, not a silent no-op. Models is a plain slice, so this is
+		// cheap (no model load).
+		reqProv, reqModel := s.Provider, s.Model
+		if reqProv != "" && reqModel == "" {
+			if p, ok := providerByName(reqProv); ok && len(p.Models) > 0 {
+				reqModel = p.Models[0].ID
+			} else {
+				log.Warnf("settings reload: unknown provider %q, keeping %s/%s", reqProv, curProv, curModel)
+			}
+		}
+		if reqProv != "" && reqModel != "" && (reqProv != curProv || reqModel != curModel) {
+			// Only a ready model is applied — a file edit must not trigger a download.
+			// applySwitch (raw), not switchModel: the caller (Reload Config) already
+			// passed the busy guard, so re-checking it here would be redundant.
+			if p, ok := providerByName(reqProv); ok && p.Status(reqModel).Ready {
+				applySwitch(p, reqModel)
+			} else {
+				log.Warnf("settings reload: %s/%s not available, keeping %s/%s", reqProv, reqModel, curProv, curModel)
+			}
+		}
+
+		tray.SelectLanguage(s.Language)
+
+		captureMu.Lock()
+		devChanged := s.Device != preferredDevice
+		preferredDevice = s.Device
+		captureMu.Unlock()
+		if devChanged {
+			if s.Device == "" {
+				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
+			} else {
+				switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, s.Device)
+			}
+			if devices, err := ctx.Devices(); err == nil {
+				names := deviceNames(devices)
+				captureMu.Lock()
+				sel := ""
+				if selectedDevice != nil {
+					sel = selectedDevice.Name
+				}
+				captureMu.Unlock()
+				tray.RefreshDevices(names, sel)
+			}
+		}
+
+		configMu.Lock()
+		apChanged := autoPaste != s.AutoPaste
+		autoPaste = s.AutoPaste
+		configMu.Unlock()
+		if apChanged {
+			tray.SetAutoPaste(s.AutoPaste)
+			if s.AutoPaste {
+				go ensureAutoPasteAccessibility()
+			}
+		}
+
+		// Guarded on Supported: where auto-start doesn't apply, Enabled is always
+		// false, so an auto_start:true config would retry a no-op Enable on every
+		// reload. The preference stays saved and takes effect in the installed app.
+		if login.Supported() && s.AutoStart != login.Enabled() {
+			var err error
+			if s.AutoStart {
+				err = login.Enable()
+			} else {
+				err = login.Disable()
+			}
+			if err != nil {
+				log.Errorf("settings reload: login toggle: %v", err)
+			} else {
+				tray.SetLogin(s.AutoStart)
+			}
+		}
+
+		if want := s.Hotkey.OrDefault(); !want.Equal(hk.Current()) {
+			if err := hk.Rebind(want); err != nil {
+				log.Errorf("settings reload: hotkey %s: %v", want.Label, err)
+				tray.SetError("Hotkey " + want.Display() + " rejected — keeping " + hk.Current().Display())
+			} else {
+				log.Info("settings reload: hotkey → " + want.Label)
+				tray.SetHotkeyLabel(want.Display())
+			}
+		}
+	}
+	tray.OnReloadConfig(func() {
+		if guardBusy("Can't reload the config while recording or transcribing.") {
+			return
+		}
+		s, err := config.Reload()
+		if err != nil {
+			alert.Warn("Config reload failed — keeping current settings.\n\n" + err.Error())
+			return
+		}
+		applyCfg(s)
+
+		// Credentials may have changed too: a cloud transcriber bakes its key in
+		// at construction, so rebuild the active one; then re-derive every
+		// provider's menu state (a newly added key flips its models to Ready,
+		// a removed one greys them out).
+		configMu.Lock()
+		if !transcriber.IsLocal(activeTranscriber) {
+			if p, ok := providerByName(activeTranscriber.Name()); ok {
+				nt := p.New()
+				nt.SetModel(activeTranscriber.GetModel())
+				nt.SetLanguage(activeTranscriber.GetLanguage())
+				activeTranscriber = nt
+			}
+		}
+		configMu.Unlock()
+		for _, p := range transcriber.Providers() {
+			for _, m := range p.Models {
+				st := p.Status(m.ID)
+				tray.UpdateModelState(p.Name, m.ID, trayModelState(st), st.Detail)
+			}
+		}
+	})
 
 	go func() {
 		for range trayRecordChan {
@@ -669,38 +904,59 @@ func run() {
 // record+transcribe cycle. Test-only hook (lets the harness know a cycle ended).
 var afterRecordCycle func()
 
-// pendingSwitch holds a model switch deferred because it was requested during a
-// record/inference cycle; applyPendingSwitch runs it at cycle end, when no
-// session is in flight (see switchModel). pendingMu guards it across the tray and
-// download goroutines and the record loop.
-var (
-	pendingMu     sync.Mutex
-	pendingSwitch func()
-)
+// busyAlert ensures at most one "busy" dialog is open at a time: a second denial
+// while it's showing only beeps, so rapid taps can't stack modal dialogs.
+var busyAlert atomic.Bool
 
-func applyPendingSwitch() {
-	pendingMu.Lock()
-	fn := pendingSwitch
-	pendingSwitch = nil
-	pendingMu.Unlock()
-	if fn != nil {
-		fn()
+// guardBusy denies a user-initiated engine op while a record/inference cycle is
+// active — the fragile window in which the model ctx must not be swapped or
+// freed. It beeps immediately and pops one non-blocking dialog (the given
+// warning) explaining why. Returns true when the op was denied. Every user
+// action that touches the engine (record start, model/provider switch, device
+// switch, language change) funnels through here; internal callers (startup
+// restore, setup) use the raw functions and skip the guard.
+func guardBusy(warning string) bool {
+	if !isRecording.Load() {
+		return false
+	}
+	denyBusy(warning)
+	return true
+}
+
+// denyBusy is the denial itself — beep, one dialog, one log line — split out so
+// tryStartSession can claim the cycle atomically and still deny identically.
+func denyBusy(warning string) {
+	// Log every denial. Without this a dialog that appears without the user
+	// touching anything is untraceable: the alert names the action but nothing
+	// records which caller fired it or what the engine state was.
+	log.Warnf("denied (recording=true transcribing=%v): %s", isTranscribing.Load(), warning)
+	audio.PlayDenied()
+	if busyAlert.CompareAndSwap(false, true) {
+		go func() {
+			alert.Warn(warning)
+			busyAlert.Store(false)
+		}()
 	}
 }
 
 // tryStartSession enqueues a fresh recording session unless a cycle is already
-// active (recording OR still transcribing) — in which case it denies audibly,
-// the same guard the hotkey uses. Returns the SilenceClose handle when it
-// started a session, nil when it denied. The hotkey and the tray "Start
-// Recording" button both funnel through here, so neither can queue an
-// unattended recording that fires the instant inference ends.
+// active (recording OR still transcribing) — in which case guardBusy denies it.
+// Returns the SilenceClose handle when it started a session, nil when it denied.
+// The hotkey and the tray "Start Recording" button both funnel through here, so
+// neither can queue an unattended recording that fires the instant inference ends.
 func tryStartSession(sessions chan<- recSession) *atomic.Bool {
-	if isRecording.Load() {
-		go audio.PlayDenied()
+	// Claiming the cycle IS the guard: a plain check-then-send is not atomic
+	// (isRecording only went true once recordSessions picked the session up), so
+	// a hotkey press and a tray click landing together could both pass and both
+	// enqueue — the second firing unattended the moment the first cycle ended.
+	// recordSessions clears the flag at cycle end exactly as before.
+	if !isRecording.CompareAndSwap(false, true) {
+		denyBusy("Already recording or transcribing.")
 		return nil
 	}
 	sc := &atomic.Bool{}
-	sessions <- recSession{Stop: resetStop(), SilenceClose: sc}
+	audio.PlayStart() // reflexive: sound the press now, not after the record loop spins up (playOne is non-blocking)
+	sessions <- recSession{Stop: resetStop(), SilenceClose: sc, PressedAt: time.Now()}
 	return sc
 }
 
@@ -718,9 +974,9 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		capture := getCapture()
 		log.Info("recording_start")
 		log.Info("recording_device: " + capture.DeviceName())
-		isRecording.Store(true)
+		isRecording.Store(true) // already set when the session came from tryStartSession
 		tray.SetRecording(true)
-		go audio.PlayStart()
+		overlay.Show() // every path — hotkey, toggle, tray — funnels through here
 
 		done, err := handleRecording(capture, sess)
 		if err != nil {
@@ -729,79 +985,72 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		}
 		if done != nil {
 			isTranscribing.Store(true)
-			tray.SetTranscribing(true) // blue status dot while inference runs
-			<-done                     // hold isRecording too — blocks re-record
+			overlay.SetState(overlay.Transcribing)
+			<-done // hold isRecording too — blocks re-record
 			isTranscribing.Store(false)
 		}
 		isRecording.Store(false)
 		tray.SetRecording(false)
-		applyPendingSwitch() // apply any model switch deferred during this cycle
+		overlay.Hide() // one exit for the whole cycle: record, then inference
 		if afterRecordCycle != nil {
 			afterRecordCycle()
 		}
 	}
 }
 
-func longPressDuration() time.Duration {
-	const def = 350 * time.Millisecond
-	if v := os.Getenv("ZEE_LONGPRESS_DURATION"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
+func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- recSession) {
+	for {
+		<-hk.Keydown()
+		if isRecording.Load() {
+			<-hk.Keyup()
+			log.HotkeyPress(0, "denied")
+			if isTranscribing.Load() {
+				audio.PlayDenied() // ignored: transcription still in progress
+			} else {
+				requestStop()
+			}
+			continue
 		}
-		log.Warnf("invalid ZEE_LONGPRESS_DURATION %q, using default %s", v, def)
+		sc := tryStartSession(sessions)
+		if sc == nil {
+			log.HotkeyPress(0, "denied")
+			<-hk.Keyup() // denied (a cycle began between the guard above and here)
+			continue
+		}
+		// Shared press semantics (hold vs toggle) — see hotkey.WaitStop. Toggle
+		// mode arms silence auto-close the moment it is entered.
+		downToUp, toggled := hotkey.WaitStop(hk, longPress, func() { sc.Store(true) })
+		mode := "hold"
+		if toggled {
+			mode = "toggle"
+		}
+		log.HotkeyPress(float64(downToUp.Milliseconds()), mode)
+		requestStop()
 	}
-	return def
 }
 
-func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- recSession) {
-	type state int
-	const (
-		idle state = iota
-		toggleRecording
-	)
+// deviceAction is what a change in the attached-device list means for the
+// capture device.
+type deviceAction int
 
-	st := idle
-	for {
-		switch st {
-		case idle:
-			<-hk.Keydown()
-			if isRecording.Load() {
-				<-hk.Keyup()
-				if isTranscribing.Load() {
-					go audio.PlayDenied() // ignored: transcription still in progress
-				} else {
-					requestStop()
-				}
-				continue
-			}
-			sc := tryStartSession(sessions)
-			if sc == nil {
-				<-hk.Keyup() // denied (a cycle began between the guard above and here)
-				continue
-			}
-			timer := time.NewTimer(longPress)
-			select {
-			case <-timer.C:
-				<-hk.Keyup()
-				requestStop()
-				st = idle
-			case <-hk.Keyup():
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				sc.Store(true)
-				st = toggleRecording
-			}
-		case toggleRecording:
-			<-hk.Keydown()
-			<-hk.Keyup()
-			requestStop()
-			st = idle
-		}
+const (
+	keepDevice        deviceAction = iota
+	switchToDefault                // the selected mic vanished
+	switchToPreferred              // the user's preferred mic (re)appeared
+)
+
+// deviceChangeAction decides how the capture device should react to the
+// current device list: switch away when the selected mic is gone, switch (back)
+// to the preferred one when it is attached while we're on the system default —
+// including the first time it appears after starting without it.
+func deviceChangeAction(names []string, selected, preferred string) deviceAction {
+	if selected != "" && !slices.Contains(names, selected) {
+		return switchToDefault
 	}
+	if selected == "" && preferred != "" && slices.Contains(names, preferred) {
+		return switchToPreferred
+	}
+	return keepDevice
 }
 
 func switchDeviceByName(ctx audio.Context, captureConfig audio.CaptureConfig, captureDevice *audio.CaptureDevice, selectedDevice **audio.DeviceInfo, name string) {
@@ -837,6 +1086,41 @@ func applyDeviceSwitch(ctx audio.Context, captureConfig audio.CaptureConfig, cap
 	*selectedDevice = newDevice
 }
 
+// ensureAutoPasteAccessibility requests the one permission needed by
+// auto-paste and watches for the asynchronous System Settings grant. It never
+// changes the saved auto-paste preference: a grant makes the next recording
+// paste normally, while a timeout leaves the preference intact for a later
+// grant or app restart.
+func ensureAutoPasteAccessibility() {
+	if permissions.HasAccessibility() || !accessibilityPoll.CompareAndSwap(false, true) {
+		return
+	}
+	alert.Warn("Auto-paste requires Accessibility permission.\n\nGrant access to Zee.app (or your terminal app if running from CLI) in:\nSystem Settings → Privacy & Security → Accessibility")
+	permissions.RequestAccessibility()
+	permissions.OpenAccessibilitySettings()
+
+	go func() {
+		defer accessibilityPoll.Store(false)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		timeout := time.NewTimer(time.Minute)
+		defer timeout.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if permissions.HasAccessibility() {
+					log.Info("Accessibility permission granted; auto-paste is ready")
+					return
+				}
+			case <-timeout.C:
+				log.Warn("Accessibility permission not granted; auto-paste remains unavailable")
+				tray.SetError("Auto-paste is waiting for Accessibility permission")
+				return
+			}
+		}
+	}()
+}
+
 func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struct{}, error) {
 	clip.CancelRestore()
 
@@ -848,8 +1132,13 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		lang:      activeTranscriber.GetLanguage(),
 		hints:     config.GetHints(),
 		autoPaste: autoPaste,
+		tailWait:  time.Duration(config.Get().TailWaitMs) * time.Millisecond,
 	}
 	configMu.Unlock()
+	if cfg.autoPaste && !permissions.HasAccessibility() {
+		cfg.autoPaste = false
+		tray.SetError("Auto-paste is waiting for Accessibility permission")
+	}
 
 	tSess, err := cfg.tr.NewSession(context.Background(), transcriber.SessionConfig{
 		Stream:   cfg.stream,
@@ -861,11 +1150,15 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		return nil, err
 	}
 
-	// Save clipboard before recording overwrites it (async to not delay capture start)
+	// Save the clipboard before the first overwrite so it can be restored
+	// after the paste — but never during the press: atotto's Read forks
+	// pbpaste, and fork freezes every thread for O(resident memory) while the
+	// kernel clones the page tables (~0.5s with a local model loaded), which
+	// delays keyup delivery and misreads a quick tap as a hold. Saved lazily
+	// instead: at the first streamed paste, or once recording has ended.
 	clipCh := make(chan string, 1)
-	if cfg.autoPaste {
-		go func() { clipCh <- clip.SaveCurrent() }()
-	}
+	var clipOnce sync.Once
+	saveClip := func() { clipOnce.Do(func() { clipCh <- clip.SaveCurrent() }) }
 
 	updatesDone := make(chan struct{})
 	go func() {
@@ -873,13 +1166,14 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		var prev string
 		for text := range tSess.Updates() {
 			if cfg.autoPaste && len(text) > len(prev) {
+				saveClip()
 				clip.PasteText(text[len(prev):])
 			}
 			prev = text
 		}
 	}()
 
-	rec, err := newRecordingSession(capture, sess.Stop, tSess, sess.SilenceClose, cfg.stream)
+	rec, err := newRecordingSession(capture, sess.Stop, tSess, sess.SilenceClose, cfg.tailWait)
 	if err != nil {
 		tSess.Close()
 		return nil, err
@@ -888,11 +1182,22 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		tSess.Close()
 		return nil, err
 	}
+	// Reflex latency: press → mic live. Logged with the transcription metrics
+	// (next to rss_mb) so a stall here — a fork or lock on the record-start path,
+	// which scales with resident memory and makes quick taps misfire — is visible
+	// in the field and correlatable with model size.
+	if !sess.PressedAt.IsZero() {
+		cfg.pressToRecordMs = float64(time.Since(sess.PressedAt).Milliseconds())
+	}
 	rec.Wait()
+	cfg.releasedAt = rec.ReleasedAt()
 
 	if rec.totalFrames < uint64(encoder.SampleRate/10) {
 		tSess.Close()
 		return nil, nil
+	}
+	if cfg.autoPaste {
+		go saveClip() // keys are up now; the pbpaste fork can't distort the press
 	}
 
 	recDur := time.Duration(float64(rec.totalFrames) / float64(encoder.SampleRate) * float64(time.Second))
@@ -916,10 +1221,38 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	if closeErr != nil {
 		log.Errorf("transcription error: %v", closeErr)
 		tray.SetError(closeErr.Error())
+		// Auto-save the failed recording so it can be recovered/retried, and
+		// tell the user what actually happened — an error alert, not the
+		// manual save's "Saved to" notice.
+		if len(result.AudioData) > 0 {
+			setLastRecording(result, cfg, closeErr.Error())
+			// Persist synchronously — an immediate quit after the failure must
+			// not lose the recording; only the dialog is fire-and-forget.
+			msg := "Transcription failed:\n" + closeErr.Error()
+			if cerr := config.CredentialsError(); cerr != nil {
+				// No key was sent at all: the provider's "invalid api key" is a
+				// symptom of the unreadable file, so lead with the real cause.
+				msg = "Transcription failed — credentials could not be read, so no API key was sent.\n\n" +
+					cerr.Error() + "\n\nFix it from the menu bar: Settings → Edit Credentials…\n\n" + closeErr.Error()
+			}
+			if dir, err := persistLastRecording(); err == nil {
+				msg += "\n\nRecording saved to:\n" + dir
+				pruneFailedSamples()
+			}
+			go alert.Error(msg)
+		}
 	}
 
 	if closeErr == nil && !cfg.stream && result.HasText && cfg.autoPaste && !skipPaste {
 		clip.PasteText(result.Text)
+	}
+
+	// The text is delivered by here on both paths — streamed pastes were joined
+	// at updatesDone above, the batch paste just happened — so this is the end of
+	// the wait the user perceives, whether it ended in a paste or in text they
+	// still have to hit Cmd+V for.
+	if closeErr == nil && result.HasText && !cfg.releasedAt.IsZero() {
+		log.ReleaseToText(float64(time.Since(cfg.releasedAt).Microseconds()) / 1000)
 	}
 
 	if cfg.autoPaste && !skipPaste {
@@ -952,6 +1285,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 			TotalTimeMs:      bs.TotalTimeMs,
 			ProcessRSSMB:     result.ProcessRSSMB,
 			InferenceMs:      bs.InferenceMs,
+			PressToRecordMs:  cfg.pressToRecordMs,
 		}
 		transcriptionsMu.Lock()
 		transcriptionCount++
@@ -989,41 +1323,61 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 		tray.SetLastRecording(recDur, totalMs)
 	}
 
-	if len(result.AudioData) > 0 {
-		lastRecMu.Lock()
-		lastRec = &savedRecording{
-			AudioData:   result.AudioData,
-			AudioFormat: result.AudioFormat,
-			Text:        result.Text,
-			Provider:    cfg.tr.Name(),
-			Model:       cfg.tr.GetModel(),
-			Timestamp:   time.Now(),
-		}
-		lastRecMu.Unlock()
-	}
+	setLastRecording(result, cfg, "")
 }
 
+// setLastRecording stashes the just-finished recording (audio + metadata) so the
+// tray "Save Last Recording" button and the auto-save-on-error path can persist
+// it. errStr is the transcription error, if any ("" on success).
+func setLastRecording(result transcriber.SessionResult, cfg recordingConfig, errStr string) {
+	if len(result.AudioData) == 0 {
+		return
+	}
+	lastRecMu.Lock()
+	lastRec = &savedRecording{
+		AudioData:   result.AudioData,
+		AudioFormat: result.AudioFormat,
+		Text:        result.Text,
+		Provider:    cfg.tr.Name(),
+		Model:       cfg.tr.GetModel(),
+		Timestamp:   time.Now(),
+		Err:         errStr,
+	}
+	lastRecMu.Unlock()
+}
+
+// saveLastRecording is the tray "Save Last Recording" button: persist + a
+// success notice. The auto-save-on-error path uses persistLastRecording
+// directly and shows its own error alert instead.
 func saveLastRecording() {
+	dir, err := persistLastRecording()
+	if err != nil {
+		alert.Warn(err.Error())
+		return
+	}
+	alert.Info("Saved to " + dir)
+}
+
+// persistLastRecording writes the stashed last recording (audio + info.json)
+// to a timestamped folder under samples/ and returns that folder.
+func persistLastRecording() (string, error) {
 	lastRecMu.Lock()
 	rec := lastRec
 	lastRecMu.Unlock()
 
 	if rec == nil {
-		alert.Warn("No recording to save")
-		return
+		return "", fmt.Errorf("no recording to save")
 	}
 
 	ts := rec.Timestamp.Format("2006-01-02T15-04-05")
 	dir := filepath.Join(config.Dir(), "samples", ts)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		alert.Error("Save failed: " + err.Error())
-		return
+		return "", fmt.Errorf("save failed: %w", err)
 	}
 
 	ext := rec.AudioFormat
 	if err := os.WriteFile(filepath.Join(dir, "audio."+ext), rec.AudioData, 0644); err != nil {
-		alert.Error("Save failed: " + err.Error())
-		return
+		return "", fmt.Errorf("save failed: %w", err)
 	}
 
 	info, _ := json.Marshal(map[string]string{
@@ -1031,11 +1385,55 @@ func saveLastRecording() {
 		"model":     rec.Model,
 		"format":    rec.AudioFormat,
 		"text":      rec.Text,
+		"error":     rec.Err,
 		"timestamp": rec.Timestamp.Format(time.RFC3339),
 	})
 	os.WriteFile(filepath.Join(dir, "info.json"), info, 0644)
 
-	alert.Info("Saved to " + dir)
+	return dir, nil
+}
+
+// maxFailedSamples caps how many auto-saved failed recordings are kept. A user
+// dictating all day against a revoked key would otherwise fill the disk with
+// WAVs nobody asked for (a minute of audio is ~2 MB).
+const maxFailedSamples = 20
+
+// pruneFailedSamples deletes the oldest auto-saved failures beyond the cap.
+// Only failures: a sample whose info.json records no error was saved
+// deliberately from the tray (it may be someone's benchmark corpus) and is
+// never touched. Directory names are sortable timestamps, so "oldest" is just
+// lexical order.
+func pruneFailedSamples() {
+	entries, err := os.ReadDir(filepath.Join(config.Dir(), "samples"))
+	if err != nil {
+		return
+	}
+	var failed []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(config.Dir(), "samples", e.Name())
+		data, err := os.ReadFile(filepath.Join(dir, "info.json"))
+		if err != nil {
+			continue // no metadata: not ours to judge, leave it
+		}
+		var info struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(data, &info) == nil && info.Error != "" {
+			failed = append(failed, dir)
+		}
+	}
+	if len(failed) <= maxFailedSamples {
+		return
+	}
+	slices.Sort(failed)
+	for _, dir := range failed[:len(failed)-maxFailedSamples] {
+		if err := os.RemoveAll(dir); err == nil {
+			log.Info("pruned failed sample " + filepath.Base(dir))
+		}
+	}
 }
 
 // directTranscriber transcribes encoded audio bytes in one call. Every provider

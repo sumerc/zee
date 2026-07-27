@@ -2,6 +2,6 @@
 
 package login
 
-func Enabled() bool  { return false }
-func Enable() error  { return nil }
-func Disable() error { return nil }
+func enabled() bool  { return false }
+func enable() error  { return nil }
+func disable() error { return nil }

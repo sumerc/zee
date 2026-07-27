@@ -9,9 +9,9 @@ Run every saved sample under `~/Library/Application Support/zee/samples/` throug
 
 ## What this does
 
-1. Lists every sample directory under `~/Library/Application Support/zee/samples/`.
+1. Lists every sample directory under zee's config dir (`~/Library/Application Support/zee/samples/` for the installed app, `<binary dir>/.zee/samples/` for a dev binary — the script derives it from `ZEE_BIN` and pins the binary to it via `ZEE_CONFIG_DIR`).
 2. For each sample, reads `info.json` (original provider/model, original transcribed text, timestamp) and stats `audio.<ext>` for KB size + format.
-3. Loops over `(provider, model)` pairs whose API key env var is set, swapping `config.json` for each, calling `./zee -transcribe <audio_file>`. Hints are read automatically from `hints.txt` by all five providers.
+3. Loops over `(provider, model)` pairs that have a key in `credentials.json`, swapping `config.json` for each, calling `./zee -transcribe <audio_file>`. Hints are read automatically from `hints.txt` by all five providers.
 4. Restores the original `config.json` at the end (also on error — script uses a trap).
 5. Renders the result as one block per sample: metadata header followed by an ASCII table of every model's output.
 
@@ -23,9 +23,9 @@ Before running, verify:
   ```bash
   lsof -c zee 2>/dev/null | awk '$4=="txt" && $NF ~ /zee$/ {print $NF; exit}'
   ```
-  Fall back to `/Users/supo/Desktop/p/zee/zee` if no process. If neither exists, ask the user where the binary is.
-- **Samples directory** exists and has at least one `2026-*` subdir. If empty, tell the user to enable `ZEE_SAVE_LAST_AUDIO=1` and capture some recordings first.
-- **API keys**. Print which of `GROQ_API_KEY`, `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `ELEVENLABS_API_KEY` are set; the script auto-skips providers whose key is missing. Deepgram is skipped entirely (its only model `nova-3` is streaming, not compatible with batch `-transcribe`).
+  Fall back to `~/Desktop/p/personal/zee/zee` if no process. If neither exists, ask the user where the binary is.
+- **Samples directory** exists and has at least one `2026-*` subdir. If empty, tell the user to capture some recordings first (the tray's "Save Last Recording" saves the last clip; failed transcriptions are auto-saved).
+- **API keys**. Keys live in `credentials.json` (0600) in zee's config dir — env vars are not read. Print which providers have an entry (`python3 -c 'import json;print(sorted(json.load(open("<config>/credentials.json"))))'` — never print the values); the script auto-skips providers without a key. Deepgram is skipped entirely (its only model `nova-3` is streaming, not compatible with batch `-transcribe`).
 - **Tray app warning**. Tell the user not to interact with the running tray app's menu during the run — it caches `config.json` in memory and will overwrite the file on the next menu interaction. Backup is restored at the end either way, but mid-run interference can corrupt results.
 
 ## Running it

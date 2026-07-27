@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"zee/audio"
 	"zee/encoder"
 	"zee/log"
 )
@@ -45,6 +46,7 @@ type streamSession struct {
 	finalizedOnce sync.Once
 
 	feedBuf []byte
+	pcmBuf  []byte // full session PCM, returned as WAV in SessionResult.AudioData
 	feedMu  sync.Mutex
 
 	mu      sync.Mutex
@@ -110,6 +112,13 @@ func newStreamSession(dial func() (rawStreamSession, error)) *streamSession {
 }
 
 func (s *streamSession) Feed(pcm []byte) {
+	// Retain all PCM regardless of stream health — a broken stream is exactly
+	// when the audio must survive, so main.go's save/auto-save-on-error paths
+	// (SessionResult.AudioData) can persist the dictation.
+	s.feedMu.Lock()
+	s.pcmBuf = append(s.pcmBuf, pcm...)
+	s.feedMu.Unlock()
+
 	s.mu.Lock()
 	if s.err != nil {
 		s.mu.Unlock()
@@ -156,7 +165,9 @@ func (s *streamSession) Close() (SessionResult, error) {
 		<-s.sendDone
 		<-s.recvDone
 		close(s.updates)
-		return SessionResult{NoSpeech: true}, connErr
+		sr := SessionResult{NoSpeech: true}
+		s.attachAudio(&sr)
+		return sr, connErr
 	}
 	s.mu.Unlock()
 
@@ -233,8 +244,22 @@ func (s *streamSession) Close() (SessionResult, error) {
 			AudioS:       audioDuration,
 		},
 	}
+	s.attachAudio(&sr)
 	sr.captureRSS()
 	return sr, sessionErr
+}
+
+// attachAudio hands the retained session PCM back as a saveable WAV, matching
+// the batch/local sessions' AudioData contract.
+func (s *streamSession) attachAudio(sr *SessionResult) {
+	s.feedMu.Lock()
+	pcm := s.pcmBuf
+	s.feedMu.Unlock()
+	if len(pcm) == 0 {
+		return
+	}
+	sr.AudioData = audio.PCMToWAV(pcm)
+	sr.AudioFormat = "wav"
 }
 
 func (s *streamSession) runSender() {

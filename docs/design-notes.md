@@ -3,6 +3,12 @@
 Ideas and tradeoffs decided while building zee. Each entry captures *why* a
 choice was made, so we don't relitigate it (or silently regress it) later.
 
+Entries record what was **measured**, not what was expected — including options
+that were tried and rejected, so a future attempt starts from the evidence
+rather than the intuition. When a later measurement supersedes an earlier one,
+the old entry is marked superseded rather than deleted: the fact that something
+*used to be true* is usually why the code looks the way it does.
+
 ## Why the audio device is re-init'd on every recording
 
 `audio.Start()` tears down the capture device (`Uninit`) and rebuilds it
@@ -38,19 +44,54 @@ against concurrent init/uninit across the two malgo contexts.
 
 ## Why Parakeet (local default), CPU, and which model
 
+> **Partly superseded** — Parakeet is still the local *English* default. The
+> multilingual role moved from Parakeet v3 to Whisper in models-v2, then split:
+> v3 is back as the opt-in *fast* multilingual model and Whisper is the coverage
+> default. The v2 claims below are kept as the reasoning that held at the time;
+> see "Why Whisper for multilingual" and "Parakeet v3 back as the fast
+> multilingual option" for what replaced them.
+
 zee runs NVIDIA NeMo **Parakeet** locally (via `parakeet.cpp`/`libparakeet`/ggml)
 as the default engine, with cloud providers (Groq, OpenAI, …) as accuracy/noise
 fallbacks. Local-first wins on privacy and latency; the cloud path is there for
 when accuracy matters or the environment is noisy. All numbers below were
 measured on an M1 Pro.
 
-**CPU backend, not Metal.** ggml's Metal backend doesn't implement `CONV_2D_DW`,
-the depthwise conv the FastConformer encoder needs, and Parakeet runs the whole
-graph on one backend with no per-op CPU fallback — so a Metal build *aborts*, it
-doesn't degrade. Still true on ggml v0.13.0. The CPU path runs at 20–65x
-real-time, which is plenty for dictation-length clips; Metal would only matter
-for batching hours of audio. (A different Metal-capable backend exists but only
-beats CPU on the 0.6b model and *loses* on our 110m default.)
+**CPU backend, not Metal** — *but see below, fixed in mudler v0.4.0.* ggml's
+Metal backend doesn't implement `CONV_2D_DW`, the depthwise conv the
+FastConformer encoder needs, and Parakeet ran the whole graph on one backend
+with no per-op CPU fallback — so a Metal build *aborted*, it didn't degrade. The
+CPU path runs at 20–65x real-time, which is plenty for dictation-length clips;
+Metal would only matter for batching hours of audio. (A different Metal-capable
+backend exists but only beats CPU on the 0.6b model and *loses* on our 110m
+default.)
+
+**Metal works as of mudler v0.4.0 (bump from v0.1.1+4).** The abort above is
+superseded — *not* by ggml (still v0.13.0, still missing `CONV_2D_DW`) but by
+parakeet's own fix (upstream #2 / PR #4): a `ggml_backend_sched` over `{GPU,CPU}`
+that offloads unsupported ops to CPU, plus a native Metal depthwise-conv kernel.
+Same ggml pin, so no ggml movement. Both 110m and the v3 multilingual GGUF (the
+model that used to crash) transcribe cleanly on Metal.
+
+- **Speedup** (synthetic TTS, wall-clock A/B, same clips both sides — read as
+  relative, not absolute): steady-state RTFx 110m 22→**38x** (~1.7x), v3-0.6b
+  8→**21x** (~2.6x). Per-utterance warm-daemon on a 10s clip: 110m 0.45→0.26 s,
+  v3 1.25→**0.48 s**. The win scales with model size, so it's **marginal for the
+  English 110m default** (both already sub-perceptible; fixed overhead dominates)
+  but **real for multilingual** (v3) — the case that justifies Metal. (This
+  entry originally wrote that as "v3/Turkish"; wrong — Turkish is not among v3's
+  25 languages. The Metal win on v3 is real, the Turkish framing never was.)
+- **Cold-start is paid once, not per utterance.** Shaders are embedded in
+  `libggml-metal.a` (no shipped `.metallib` — single-binary intact) and the OS
+  caches compiled pipelines, so the two-point fit put fixed overhead at ~0–0.3 s.
+  In the daemon it lands once at launch: bake a warmup `Transcribe` on a synthetic
+  buffer into startup (same spirit as HTTP pre-warming), sized near dictation
+  length so the common tensor shapes pre-compile.
+- **Whisper angle:** since Metal now works on the *shared* ggml v0.13.0, a future
+  whisper.cpp integration could link the same Metal-enabled ggml — and whisper
+  benefits from GPU more (larger models, offline ~99-language incl. Turkish).
+  **Answered: yes** — whisper.cpp v1.9.1 builds and runs against ggml v0.13.0,
+  and both engines coexist in one process over one ggml (next section).
 
 **Static-linked** (`BUILD_SHARED_LIBS=OFF` → `.a` folded into the Go binary):
 one self-contained arm64 binary, no shipped `lib/`, no dylib version-skew. Cost
@@ -78,7 +119,10 @@ is ~4 MB and a relink when the C side changes — worth it for a drop-in app.
 - **Keep the multilingual model warm** — its ~2.4 s load must never land
   per-utterance. Load once at startup, transcribe per clip.
 - **Don't quantize for speed.** q4_k is ~26% *slower* on CPU (per-matmul dequant
-  vs the f16 Accelerate/AMX path); it's a footprint/load-time win only.
+  vs the f16 Accelerate/AMX path); it's a footprint/load-time win only. **Scoped
+  to CPU** — on the Metal backend the dequant penalty is gone, which is why
+  v3-q4_k is now both the smaller *and* the fast multilingual model (see
+  "Parakeet v3 back as the fast multilingual option").
 
 **What we tested (so read the WER as relative, not absolute):** a 9-sample
 corpus, 539 reference words — a mix of dictation-length clips plus one 350-word
@@ -105,3 +149,500 @@ Full benchmarks, decoder/threading/deployment-target details, and the
 provider-WER comparison live in internal notes (`mynotes/notes/local-stt-models.md`,
 `stt-model-comparisons.md`); the `wer-wolf` skill is the repeatable way to re-run
 provider/model evals on saved samples.
+
+## Why the state icons are a bare coloured dot
+
+Idle is the Z glyph as a macOS **template** image (alpha only; AppKit tints it to
+match the bar). Each state is a flat saturated dot and nothing else — red
+recording, orange hearing-nothing, blue transcribing — generated by
+`go run ./packaging/mktrayicons`. A saturated dot is legible on a light and a
+dark bar alike, so the states need no light/dark variants and **no code detects
+the bar's appearance**.
+
+The constraint everything here follows from: an `NSStatusItem` holds exactly one
+image, and that image is either a template (auto-tinted, but alpha-only, so all
+colour is discarded) or a plain coloured image (keeps colour, but nothing tints
+it for you). "Auto-tinted glyph + coloured badge" is not expressible. Any design
+that wants both must re-implement the tinting, which means detecting the bar's
+appearance — and that detection is the entire cost.
+
+The bug that started this: the variant used to be picked from
+`AppleInterfaceStyle`, the **global Light/Dark toggle**, which is not what the
+menu bar follows. On macOS Tahoe the bar is glass — appearance derived from the
+wallpaper behind it, per screen, re-tinting live — so light mode + dark wallpaper
+drew a dark glyph on a dark bar. The value was also cached once per launch, so
+even a correct answer went stale. Idle never broke; it was already a template.
+
+Rejected alternatives:
+- **Glyph + coloured badge, variant chosen from the status button's
+  `effectiveAppearance`.** Built and reverted. It is the *correct* way to keep
+  both (measured on Tahoe: `button.effectiveAppearance` = VibrantLight while
+  `NSApp.effectiveAppearance` = Aqua — the button is the only object that knows,
+  and it is KVO-able), but it cost ~100 lines of cgo: the systray library keeps
+  its `NSStatusItem` private, so the button had to be found by walking the app's
+  own window list, plus a KVO observer and a cached answer because AppKit cannot
+  be touched from the recording goroutine. Too much machinery to choose between
+  two PNGs; dropping the glyph during states deletes all of it.
+- **All-template icons, state as badge shape** (disc/ring/bar). Zero detection
+  and correct everywhere, but monochrome: at a glance the *colour* is the state
+  signal, and the marks are ~5.5 pt, so shape carries much less.
+- **Template glyph + `button.contentTintColor`.** Lets the system solve
+  light/dark and keeps a colour, but tints the *whole* glyph — a red Z, not a
+  red dot — and needs the same private button.
+
+Cost accepted: during a state the menu bar shows only a dot, not the Z. The
+icon's position in the bar already identifies the app, and the colour is the
+information.
+
+## Why Whisper for multilingual (models-v2)
+
+> **Partly superseded** — the "Whisper strictly replaces v3" premise below did
+> not survive measurement. Whisper is still the multilingual *default* and the
+> coverage engine, but v3 came back as an opt-in fast path; see "Parakeet v3 back
+> as the fast multilingual option". Everything else here (auto-detect, q5_0, the
+> one-ggml-two-engines build, the `retiredIDs` hazard) still holds.
+
+Parakeet v3 was the offline multilingual model; **whisper large-v3-turbo q5_0**
+replaced it. Two models, two roles:
+
+```
++---------------------+----------+---------+--------+--------------------------+
+| Model               | Engine   | Size    | Langs  | Role                     |
++---------------------+----------+---------+--------+--------------------------+
+| parakeet-110m-en    | parakeet | 267 MB  | en     | startup default, instant |
+| whisper-turbo-q5    | whisper  | 547 MB  | ~99    | everything else          |
++---------------------+----------+---------+--------+--------------------------+
+```
+
+Both pre-fetched; install payload *shrank* 942 → 814 MB. Dropped:
+`parakeet-v3-multi` (superseded) and `parakeet-v2-en-large` (1.4 GB; the 110m
+already covers English). Saved selections migrate **by role**, so a multilingual
+user is never silently downgraded to English-only (`retiredIDs` in
+`localmodel/localmodel.go`). Old builds keep working — they pin `models-v1`,
+still published.
+
+`ByID` following `retiredIDs` is right for a user's stale `config.json` and wrong
+for code that names a model deliberately: the ID resolves, but to a model on a
+*different engine*, so pairing it with a hardcoded provider yields whisper
+weights loaded by the parakeet engine. That combination does not fail uniformly —
+locally it returns a clean `gguf open failed`, on CI it hung silently for 8m24s
+until the test timeout (mechanism never identified; the child printed nothing).
+The integration tests therefore reject a retired ID instead of following the
+migration, and take the provider from `Model.Engine` rather than a literal
+(`localModel` in `test/integration_test.go`). Worth remembering if a mismatched
+provider/model pair can reach users some other way — the failure may be a hang,
+not an error.
+
+M5 Pro, real saved dictations, warm, best of 3:
+
+```
++----------+---------------+--------------+----------------+
+| Audio    | parakeet-110m | whisper (en) | whisper (auto) |
++----------+---------------+--------------+----------------+
+| 1.9 s    |     18 ms     |    272 ms    |     535 ms     |
+| 9.8 s    |     51 ms     |    295 ms    |     581 ms     |
+| 70 s     |    309 ms     |   1088 ms    |    1335 ms     |
++----------+---------------+--------------+----------------+
+```
+
+M1 Pro (10 cores), same models, warm, best of 3, synthetic clips (2026-07-26).
+The floor machine — every number users feel is worst here:
+
+```
++----------+---------------+--------------+----------------+
+| Audio    | parakeet-110m | whisper (en) | whisper (auto) |
++----------+---------------+--------------+----------------+
+| 2.5 s    |     44 ms     |    947 ms    |    1946 ms     |
+| 11.5 s   |    116 ms     |   1049 ms    |    1984 ms     |
+| 27 s     |    294 ms     |   1161 ms    |    2164 ms     |
+| 60 s     |    761 ms     |   3235 ms    |    4071 ms     |
++----------+---------------+--------------+----------------+
+```
+
+Three things this pins down. **whisper is ~3.3× slower than M5** (947 vs 272 ms,
+1161 vs ~389 ms) — the ratio claimed above, now with an M1 block in
+`benchmark.txt` behind it. **Cost tracks 30 s windows, not audio length:**
+947→1049→1161 ms across a 10× range, then a step to 3235 ms at 60 s when a
+second window opens. Budget ~1.1–1.6 s per 30 s window, not per second of
+speech. **parakeet scales linearly instead** (44/116/294/761 ms), so the gap
+widens as clips shorten: 21× at 2.5 s, 4× at 27 s — the routing default is most
+valuable exactly where dictation actually lives.
+
+**One ggml, two engines.** whisper.cpp v1.9.1 builds against the *patched* ggml
+v0.13.0 that parakeet.cpp vendors; both load in one process, no duplicate
+symbols. `make whisper-lib` installs parakeet's ggml to a local prefix and
+builds `libwhisper.a` against it (`-DWHISPER_USE_SYSTEM_GGML=ON`). Letting
+whisper use its own vendored ggml would be worse than a link error: unpatched
+headers against patched archives — a silent struct-layout mismatch. zee never
+pins ggml directly, it inherits the pin from parakeet.cpp, so a test asserts the
+commit and fails loudly if a parakeet bump moves it.
+
+**Metal tensor cores are free on M5.** ggml auto-detects them
+(`has tensor = true`, `MTLGPUFamilyMetal4`) with zero integration work — the
+main reason M5 whisper is ~3× M1. GPU tensor path, *not* the ANE.
+
+**Auto-detect is the default, and not as a preference.** whisper's language
+setting hard-forces the start-of-transcript token, so a wrong setting *garbles*
+rather than mislabels: Turkish audio pinned to English came back as "There is a
+travel system in a bootstrap…". Groq's `language=en` is a soft hint and survives
+the same audio — the local engine is strictly less forgiving than the cloud path
+users know.
+
+What matters is that the token matches the **dominant** language, not that
+detection is on: on Turkish audio with embedded English, `-l tr` output was
+*identical* to `-l auto`, English terms intact under both. Whisper transcribes
+foreign words regardless of the token; only the wrong dominant language breaks
+it. Auto is the default because that language isn't known before the user
+speaks — the mixed-language case zee exists for. Cost: one extra encoder pass —
+~260 ms on M5, but **~1.0 s on M1 Pro**, where it doubles short-utterance
+latency (0.95 s → 1.95 s). It is a full encoder pass, so it scales with the
+machine, not the clip: measured +999/+935/+1003 ms across 2.5/11.5/27 s. On
+M1-class hardware auto-detect, not whisper itself, is the dominant cost of the
+multilingual path.
+
+Parakeet is unaffected — no language parameter in its C-API; each gguf is
+single-language by build.
+
+**q5_0, not f16** — free on both axes. Warm latency a tie (273 vs 270 ms). No
+quality direction: over 5 real dictations (537 words) the models diverged on
+4.8% of words; adjudicating each differing span gave q5_0 closer on 5, f16 on 1,
+rest a wash. Short clean clips byte-identical; most long-clip divergence is
+repetition-loop garble present in *both* (long-audio decoding artifact, not
+quantization). So q5_0 wins on size alone: 547 MB vs 1.6 GB.
+
+*Caveat:* that is **divergence between the two models**, not WER — the
+references are the models' own output. It proves "quantization changes nothing
+measurable here"; it cannot rank either against truth. Real WER needs a labelled
+corpus (accented/noisy/non-English, human transcripts) we don't have.
+
+**Metal, not Core ML/ANE — measured, then declined.** The ANE path works
+(`-DWHISPER_COREML=1`, `.mlmodelc` encoder bundle, `-framework CoreML`) and is
+faster. Measured on both machines — the gain is a function of how weak the GPU
+is, so read the two tables together, not the average.
+
+M5 Pro:
+
+```
+Audio    Metal-only   +CoreML/ANE   gain
+2.9 s      273 ms       217 ms      -21%
+11.0 s     295 ms       247 ms      -16%
+22.8 s     389 ms       331 ms      -15%
+```
+
+M1 Pro (in-process, warm, best of 3, `-l en`):
+
+```
+Audio    Metal-only   +CoreML/ANE   gain
+2.5 s      906 ms       634 ms      -30%
+11.5 s     984 ms       721 ms      -27%
+27.0 s    1199 ms       879 ms      -27%
+```
+
+Encoder alone on M1: ~880–920 ms → ~630 ms (~1.4×), far short of the ~3×
+upstream advertises — that figure comes from later ANE generations.
+
+Declined on price, not size of gain: **+1.2 GB per model** (a second encoder
+copy on top of the 547 MB gguf — more than doubles the payload) and **an ANE
+recompile on every app update**, since the specialization is keyed to the bundle
+(~4.5 s on M5, ~2.5 min on M1 — a visible freeze on exactly the slower machine
+that needs the speed). The gain also shrinks as hardware improves: ~30% on M1 →
+~15–20% on M5, as Metal's tensor cores absorbed it. And it buys nothing on the
+common path: parakeet is 4–9× faster than *either* whisper config for English.
+GGUF/ggml can never reach the ANE (GPU-only), so Core ML is the only route —
+this is the whole decision.
+
+*Open:* enabling ANE only on M1-class hardware (e.g. at install time) is an
+unresolved trade — ~30% there is worth more than ~15% here, but it means a
+second asset pipeline and a 2.5-min post-update compile.
+
+**`audio_ctx` sizing: measured, then rejected.** whisper's encoder always
+processes a fixed 1500-frame (30 s) window, so a 2 s clip costs the same encode
+as a 30 s one — visible above as whisper's near-flat 272/295 ms across a 5×
+range of audio length. Capping the window to the clip is a ~3× short-clip win
+and measured clean via `whisper-cli`. Unusable: shrinking `audio_ctx` on a
+reused `whisper_state` yields fluent garbage.
+
+```
+fresh ctx at ac=400 · same size repeatedly · two clips at one size   correct
+200 -> 400 (grow)                                                    correct
+400 -> 200, and full/1500 -> 400 (shrink)                            garbage
+```
+
+Reproduced byte-identically on pure upstream ggml v0.13.0 → upstream
+whisper.cpp bug, not a parakeet ggml patch. (Upstream issue #1855 proposes this
+exact scheme; no maintainer validated it.) Two things close it for zee:
+dictation lengths vary, so per-clip sizing inevitably shrinks; and auto-detect
+shrinks *within* one `whisper_full` call, because the detection encode runs
+before `exp_n_audio_ctx` is assigned (v1.9.1, line 6836 vs 6972). At
+`audio_ctx = 0` sizes never change and the bug cannot fire. A grow-only scheme,
+or fresh `whisper_state` per utterance, could revisit;
+`internal/whisper/audioctx_matrix_test.go` (`ZEE_AC_DEBUG=1`) re-validates any
+attempt in seconds.
+
+**Re-verified 2026-07-26**, after `no_timestamps` was turned off, in case the
+decoder-loop fix had also cleared this: the matrix is unchanged (D/F/G/H/I/J/L
+garble, A/B/C/E/K pass). Different layer — that fix is in the decoder loop,
+this fault is in the encoder state. Nor is it language-specific: `lang=en`
+shrinks garble exactly as auto does (0→400, 400→200, 1500→400 all fail with a
+fixed language). Auto-detect is only special in that it makes the shrink
+*unavoidable* — case H garbles on a fresh context, one call, no prior encode.
+Upstream has not fixed it either: v1.9.1 is still the newest tag and none of
+the 154 commits since it touch `exp_n_audio_ctx`.
+
+Ruled out while chasing it (each tested, not assumed): sampling strategy (beam
+search — whisper-cli's actual default at `beam_size=5` — garbles identically),
+`no_timestamps` (not a cause *here* — but a serious bug in its own right, see
+"Why whisper runs *with* timestamps" below), `flash_attn`/`use_gpu`,
+`no_context`, warm-up content, and audio length varying between calls.
+
+**The POC's exit-134 abort did not follow us.** whisper+parakeet in one process
+aborted on exit in the C driver; in zee both engines load and tear down cleanly
+(exit 0, repeatedly). That was the driver's teardown order, not ggml sharing.
+
+Raw measurement detail: `zee-whisper-poc/FINDINGS.md`.
+
+**Silence trimming (VAD before inference): not a whisper speed lever.**
+Handy runs Silero VAD during capture and drops non-speech before the model
+ever sees it — tempting to copy, but the speedup doesn't transfer. whisper's
+encoder pads every clip to the fixed 1500-frame/30 s window, so trimming
+silence out of a ≤30 s dictation changes the encode cost by exactly nothing.
+It pays for Handy because their *default* models are Parakeet/Nemotron/Canary,
+which have no fixed window — compute scales with actual audio, every trimmed
+second is a saved second. The expectation was that it still helps at the margins on
+clips >30 s — one encoder pass per window, so trimming can drop a window.
+
+**Measured 2026-07-26, and the margin win is not there either.** whisper.cpp
+v1.9 does the trimming itself (`params.vad` + an 864 KB Silero ggml model): it
+detects speech, rebuilds the buffer with speech only, and decodes that
+(`whisper.cpp:7779`) — no capture-side work needed. Best of 3, timestamps on,
+turbo-q5, M5 Pro:
+
+```
++--------------------------+--------+--------+--------+-------------+
+| Clip                     | no-VAD | VAD    | Delta  | Speech kept |
++--------------------------+--------+--------+--------+-------------+
+| 159.9 s (6 windows -> 5) | 4.10 s | 4.60 s | +12%   | 81%         |
+| 130.9 s (5 windows -> 4) | 4.09 s | 4.09 s |   0%   | 74%         |
+|  26.6 s                  | 1.58 s | 1.58 s |   0%   | 74%         |
+| 26.6 s + 30 s dead air   | 2.08 s | 2.08 s |   0%   | ~47%        |
++--------------------------+--------+--------+--------+-------------+
+```
+
+Dropping a whole window saves nothing: whisper's cost tracks *tokens decoded*,
+not windows encoded — a silent window emits EOT almost immediately and is
+nearly free, while the words spoken are identical either way. Silero's own pass
+then adds cost, which is why the longest clip got slower. Quality was unchanged
+too (1762 vs 1792 chars on the 131 s clip, same content, tail intact both ways),
+so the predicted hallucination benefit did not appear on this corpus.
+
+Not adopted: zee's clips are mostly speech (push-to-talk), the mic tail is
+deliberate (added to stop last-word clipping), silence hallucinations haven't
+shown up in the logs, and enabling it would mean hosting, checksumming and
+versioning a third model file for a 0% win. Revisit only if silence
+hallucinations appear.
+
+**flash_attn: on by default, verified worth ~12% on M5 (2026-07-25).**
+whisper.cpp defaults `flash_attn=true` since v1.8.0 and zee passes default
+context params, so the win was already banked. A/B with FA forced off
+(bench-local, turbo-q5, saved samples, M5 Pro): 262→297 ms (1.9 s clip),
+2419→2641 ms (183 s) — ~12% short, ~8% long. Far under the 30–47% upstream
+measured on M1–M4: M5's Metal tensor cores absorb most of what FA saves.
+Same pattern as Core ML — encoder tricks shrink as hardware improves.
+
+**q8_0 vs q5_0 on M5: a wash, q5_0 stays (2026-07-25).** Community claim was
+"q8_0 equal-or-faster on GPU (cheaper dequant), quality ≥". Measured
+(bench-local, saved samples, M5 Pro, same run): short clips ~3% faster on q8
+(263→256 ms en, 514→498 ms auto), the 183 s clip ~3% *slower* (2429→2504 ms
+en) — inside noise both directions. Not worth +300 MB disk (874 vs 574 MB)
+and ~+300 MB resident. Quality not re-evaluated: the q5-vs-f16 entry above
+already showed quantization deltas are unmeasurable on our corpus, and q8
+sits between them. *Open:* same A/B pending on M1 — no tensor cores there,
+so q8's cheaper dequant could matter more; decision is per-M5 until then.
+
+**temperature_inc=0: no average-case win, not adopted (2026-07-25).** The
+default fallback ladder (up to 5 re-decodes at rising temperature when
+compression-ratio/logprob thresholds fail) is a worst-case latency risk, so
+disabling it was benchmarked: every clip within noise of baseline — clean
+push-to-talk audio never trips the thresholds, so the ladder never runs.
+Kept enabled because it only costs when it fires, and when it fires it is
+rescuing quality on hard audio. Revisit if diagnostics ever show an
+`inference_ms` far above its `audio_s` peers (the stall signature).
+
+## Parakeet v3 back as the fast multilingual option (2026-07-26)
+
+models-v2 retired `parakeet-v3-multi` on the premise that Whisper *strictly*
+replaced it. That premise was never benchmarked head-to-head on M1 — the v3
+numbers in `benchmark.txt` were M5 only, and the M1 block above has Parakeet 110m
+and Whisper columns but no v3. Measured, the premise is wrong: v3 is **3–25×
+faster than Whisper** and only ~1.8× slower than the 110m English default. So v3
+is back, as an **opt-in download** (643 MB, `PreFetch: false` — install payload
+unchanged), and the registry is now three models in three *roles*:
+
+```
++-------------------+----------+--------+-------+----------+-------------------------+
+| Model             | Engine   | Size   | Langs | Fetch    | Role                    |
++-------------------+----------+--------+-------+----------+-------------------------+
+| parakeet-110m-en  | parakeet | 267 MB | en    | pre      | startup default, instant|
+| parakeet-v3-multi | parakeet | 643 MB | 25    | opt-in   | multilingual, fast      |
+| whisper-turbo-q5  | whisper  | 547 MB | ~99   | pre      | multilingual, coverage  |
++-------------------+----------+--------+-------+----------+-------------------------+
+```
+
+M1 Pro (10 cores), Metal, warm, best of 3, synthetic clips at the same durations
+as the M1 block above so the two are comparable. Whisper reproduced that block
+within noise (892 vs 947 ms at 2.5 s; 2151 vs 2164 ms auto at 27 s), which is
+what makes the v3 column trustworthy:
+
+```
++--------+---------------+-------------+--------------+----------------+
+| Audio  | parakeet-110m | parakeet-v3 | whisper (en) | whisper (auto) |
++--------+---------------+-------------+--------------+----------------+
+| 2.5 s  |     40 ms     |    70 ms    |    892 ms    |    1744 ms     |
+| 11.5 s |    124 ms     |   220 ms    |    967 ms    |    1825 ms     |
+| 27 s   |    288 ms     |   526 ms    |   1255 ms    |    2151 ms     |
+| 60 s   |    755 ms     |  1295 ms    |   3322 ms    |    4316 ms     |
++--------+---------------+-------------+--------------+----------------+
+| v3 is  |   1.7–1.8x    |      —      |   2.4–12.7x  |   3.3–24.8x    |
+|        |    slower     |             |    faster    |     faster     |
++--------+---------------+-------------+--------------+----------------+
+```
+
+**The gap is widest exactly where dictation lives.** v3 scales ~linearly with
+audio length; Whisper is dominated by fixed cost per 30 s window, so at 2.5 s v3
+is 25× faster and at 60 s only 3.3×. For a 2–10 s utterance v3 is sub-perceptible
+(70–220 ms) where Whisper auto is 1.7–1.8 s — the difference between "instant"
+and "waiting".
+
+**Quantization is not the speed story here.** The older "don't quantize for
+speed — q4_k is ~26% *slower* on CPU" entry still holds *for CPU*: it measured
+per-matmul dequant against the f16 Accelerate/AMX path. On Metal that penalty is
+gone, so v3-q4_k being both the small *and* the fast multilingual option is not a
+contradiction with that entry — it is the Metal backend changing which axis
+dominates. Labels never mention quantization; users pick a role.
+
+**Why Whisper still owns the default.** Coverage, and it is not close: v3 does 25
+European languages, Whisper ~99. **Turkish is not in v3's 25** — a Turkish clip
+comes back as phonetic English mush ("Merhaba, bugün yerel…" → "Malhaba, Bugunieral
+Transcription Motor Larna…"), which is the failure mode to expect for any
+unsupported language: not an error, not a mislabel, just confident garbage. Since
+Turkish is a primary dictation language for this project's author, v3 cannot be
+the multilingual default. On languages v3 *does* cover it matched Whisper exactly
+on the repo fixtures (`test/data/fr.wav`, `ru.wav`, `en.wav` — one short sentence
+each, so this proves the language path works, it is not a WER ranking).
+
+Net: role-based labels rather than engine names, because the choice a user makes
+is "fast, or every language?" — not "Parakeet or Whisper?".
+
+**Picking a language explicitly is free quality and ~0.85 s of latency
+(re-verified 2026-07-26).** The models-v2 entry above found `-l tr` identical to
+`-l auto` on Turkish-with-English audio; re-checked on a fresh 37.7 s Turkish
+dictation with embedded English terms (`branch`, `pull rebase`, `Benchmark text`,
+`design notes`), `-lang tr` was **byte-identical** to auto-detect — and to the
+transcript the tray had already saved on auto. Cost of auto on the same clip:
+5072 ms vs 4231 ms best-of-3 (whole-process, so load included), an ~840 ms delta
+that matches the ~1.0 s detect pass measured earlier. Auto stays the default
+because the language is unknown before the user speaks, but a user who always
+dictates one language should set it: same text, ~0.85 s cheaper.
+
+## Why whisper runs *with* timestamps, even though we only want text
+
+`whisper_full` was called with `no_timestamps = true` — the obvious setting when
+the caller joins segment text and throws timings away. It silently drops audio.
+
+Under `no_timestamps`, whisper.cpp cannot recover from a decode that stops early:
+on EOT it forces `seek_delta = 30 s` (`whisper.cpp:7401`), so the window always
+jumps a full chunk no matter how little the model emitted, and it skips the
+"decoder failed → retry at a higher temperature" branch (`:7392`). With
+timestamps on, `seek_delta` comes from the last emitted timestamp token
+(`:7363`), so audio the model skipped is re-decoded by the next window — the
+loop self-heals. Known upstream, still open: whisper.cpp#2186.
+
+Measured on a 131 s Turkish dictation (`whisper-turbo-q5`, auto-detect). The
+final window (120 → 130.92 s) decoded into a 2-second hallucination and the loop
+moved on; 11 s of speech were gone. Deterministic, 3/3 runs.
+
+```
++---------------------------------------+-----------------------------------+
+| Variant                               | Result                            |
++---------------------------------------+-----------------------------------+
+| production (no_timestamps)            | tail lost, 3/3 runs               |
+| only change: timestamps on            | complete and clean                |
+| forced lang=tr                        | tail lost -> not a language issue |
+| failing window decoded alone          | correct -> audio is fine          |
+| q8_0 model, same params               | tail present but stutters         |
+| Groq cloud turbo (no such flag)       | complete                          |
+| English TTS, 131 s, no_timestamps     | repetition loop x15               |
++---------------------------------------+-----------------------------------+
+```
+
+Whole-file volume, same clip: 1593 chars with `no_timestamps` vs 1792 with
+timestamps — 11% of the transcript was missing, tail included but not only.
+
+Speed is a wash, and clip-dependent (wall, model load included, mean of 3):
+
+```
++----------+-----------------+--------------+---------+
+| Clip     | no_timestamps   | timestamps   | Delta   |
++----------+-----------------+--------------+---------+
+| 160 s    |     3.78 s      |    4.08 s    |  +8%    |
+| 131 s    |     4.24 s      |    3.57 s    | -16%    |
+| 27 s     |     1.55 s      |    1.55 s    |   0     |
++----------+-----------------+--------------+---------+
+```
+
+The 131 s clip is the one that was failing: its bad decode burned
+temperature-fallback retries, so fixing correctness also removed that work.
+Timestamp tokens otherwise cost a few percent on clean audio.
+
+Ruled out as causes: language, capture/VAD (per-second RMS over the lost span is
+a steady 190–350, i.e. continuous speech), cross-chunk prompt (`no_context` is
+already `true` by default), and quantization — q8_0 only makes the bad decode
+less likely, it does not remove the trap.
+
+No regression test ships with this: the failure is content-dependent, and a
+synthetic long clip (a short sample repeated to 131 s) reproduces nothing —
+whisper collapses repeated content in *both* modes. A fixture would have to be
+a real multi-minute recording. The manual reproducer lives in
+`whisper-tail-truncate-issue/` (probe harness + `findings.md`).
+
+`single_segment` shares the same `seek_delta = 30 s` branch and would resurrect
+this bug; do not set it.
+
+## Why hints reach Whisper but not Parakeet
+
+`hints.txt` used to stop at the cloud providers; the tray greyed the entry out
+for anything local. That conflated two different questions — "is this on-device?"
+and "can this engine be biased?" — so the gate is now `SupportsHints`, a
+per-engine capability. Whisper takes the same comma-separated string the cloud
+providers send as `prompt`, as `initial_prompt`. Parakeet cannot: a greedy
+CTC/TDT decode has no prompt to condition on.
+
+`carry_initial_prompt = true` goes with it. Without it whisper.cpp drops the
+hint into the *rolling* context (`whisper.cpp:6958`), where decoded text pushes
+it out — so a two-minute dictation is biased for its first 30 s and unbiased for
+the remaining 90. With it, the hint is pinned to the front of every window's
+prompt (`:6946`).
+
+Measured A/B on two saved Turkish dictations, same model, same audio, hints file
+the only difference:
+
+```
++-------------------------------+---------------------------+
+| No hints                      | With hints                |
++-------------------------------+---------------------------+
+| hangi *app'leri* kullanacağız | hangi *API'leri*          |
+| GitHub *Işığlarına* bakabilir | GitHub *issue'larına*     |
+| Whisper *Auto Detect*         | whisper *auto-detect*     |
++-------------------------------+---------------------------+
+```
+
+**The prompt's style bleeds into the transcript** — the same behaviour OpenAI
+documents for its `prompt` parameter, so this is not a local-only quirk. An
+all-lowercase hints file pulled "Z'nin Whisper" down to "zinin whisper"; a list
+of capitalised terms pushes mid-sentence capitals the other way. Punctuation
+follows the same rule. Write `hints.txt` the way the output should look.
+
+Ordinary prompt-conditioning side effects come with it (a repeated word at the
+end of one clip, a dropped comma). Biasing is a trade, not a free win — which is
+why it stays opt-in per user rather than being seeded with defaults.
+
