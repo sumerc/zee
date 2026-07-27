@@ -250,11 +250,13 @@ func onReady() {
 		}
 	})
 
-	loginTitle, loginTip := "Start on Login", "Launch zee when you log in"
+	// Greyed out, same title: a suffix like "(installed app only)" would widen
+	// the whole submenu to fit it. The tooltip carries the why.
+	loginTip := "Launch zee when you log in"
 	if !loginAvailable {
-		loginTitle, loginTip = "Start on Login (installed app only)", "Auto-start applies to Zee.app in /Applications, not to a dev build"
+		loginTip = "Auto-start applies to Zee.app in /Applications, not to a dev build"
 	}
-	mLogin = mSettings.AddSubMenuItemCheckbox(loginTitle, loginTip, loginOn)
+	mLogin = mSettings.AddSubMenuItemCheckbox("Start on Login", loginTip, loginOn)
 	if !loginAvailable {
 		mLogin.Disable()
 	}
