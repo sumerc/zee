@@ -99,7 +99,7 @@ Keys are stored per-provider in `credentials.json` (mode 0600) in zee's config d
 
 To replace a key later without re-running the wizard, use **Settings → Edit Credentials…** in the tray: it opens `credentials.json` in your editor, and the next recording uses the new key — no restart. The wizard is still the way to *add* a provider, since it live-tests the key; a hand edit isn't verified until you record.
 
-zee runs as a system tray app in the menu bar. Hold `Ctrl+Shift+Space` (the default — rebindable in `zee setup`) to record, release to transcribe. Result auto-pastes into the focused window.
+zee runs as a system tray app in the menu bar. Hold `Option+Space` (the default — rebindable in `zee setup`) to record, release to transcribe. Result auto-pastes into the focused window.
 
 Use the tray menu to switch microphones, providers, and languages.
 

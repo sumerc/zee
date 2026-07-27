@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make build                            # build binary
 make app                              # build macOS DMG (binary + icns + .app bundle)
-GROQ_API_KEY=xxx ./zee                # run (hold Ctrl+Shift+Space to record)
+GROQ_API_KEY=xxx ./zee                # run (hold Option+Space to record)
 ```
 
 ## Install
@@ -87,7 +87,7 @@ The tray's "Save Last Recording" persists the last clip (audio + `info.json`) to
 Push-to-talk transcription using Groq Whisper API:
 
 ```
-Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call → clipboard
+Option+Space keydown → record audio → encode (mode-based) → API call → clipboard
 ```
 
 **Files:**
@@ -95,7 +95,7 @@ Ctrl+Shift+Space keydown → record audio → encode (mode-based) → API call �
 - `tray/` - system tray icon, menus (devices, providers, languages, auto-paste), dynamic icons
 - `encoder/` - AudioEncoder interface, FLAC, MP3, and Adaptive implementations
 - `transcriber/` - STT providers (Groq, OpenAI, Deepgram, Mistral, ElevenLabs) with shared TracedClient for HTTP timing metrics
-- `hotkey/` - global hotkey registration (Ctrl+Shift+Space) with platform-specific backends
+- `hotkey/` - global hotkey registration (Option+Space) with platform-specific backends
 - `clipboard/` - platform-specific clipboard and paste operations (Cmd+V / Ctrl+V)
 - `audio/` - platform-specific audio I/O: capture (malgo on macOS, PulseAudio on Linux) and feedback-tone playback (`PlayStart/PlayEnd/...`); on macOS playback goes through AVAudioPlayer (fire-and-forget, in-memory WAV, no app-managed device), capture through one malgo context + a private device-lifecycle lock. Also owns the PCM format converters used across packages: `WAVToPCM` / `PCMToWAV` / `PCMToF32` (S16LE → the −1..1 float32 the local engine consumes)
 - `setup/` - interactive setup wizard (`zee setup`) and health check (`zee doctor`): providers + API keys, device, TCC permissions, hotkey capture + fire test, live mic/provider verification; absorbed the former `doctor/`

@@ -30,9 +30,9 @@ var linuxMods = map[string][]uint16{
 
 const keyEsc = 1
 
-// DefaultCombo is the built-in hotkey (Ctrl+Shift+Space); 57 is KEY_SPACE.
+// DefaultCombo is the built-in hotkey (Option/Alt+Space); 57 is KEY_SPACE.
 func DefaultCombo() Combo {
-	return Combo{Mods: []string{"ctrl", "shift"}, Key: 57, Label: "⌃⇧Space"}
+	return Combo{Mods: []string{"option"}, Key: 57, Label: "⌥Space"}
 }
 
 type linuxHotkey struct {

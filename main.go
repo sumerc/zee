@@ -596,6 +596,15 @@ func run() {
 		return true
 	})
 	tray.SetHintsEnabled(transcriber.SupportsHints(activeTranscriber))
+	// A dev build can't auto-start (login.Supported), and drops any entry an
+	// earlier build of itself left behind — otherwise launchd keeps relaunching
+	// a rebuilt, re-signed binary at login and macOS re-prompts for permissions.
+	if !login.Supported() {
+		if err := login.Disable(); err != nil {
+			log.Errorf("drop unsupported login item: %v", err)
+		}
+	}
+	tray.SetLoginAvailable(login.Supported())
 	tray.SetLogin(login.Enabled())
 	tray.SetVersion(version)
 	tray.OnSaveAudio(saveLastRecording)
@@ -604,7 +613,7 @@ func run() {
 	})
 	tray.OnEditSettings(func() {
 		// Materialize an unset hotkey as the active default so the opened file
-		// shows a readable combo (⌃⇧Space) instead of "key": 0 / empty label.
+		// shows a readable combo (⌥Space) instead of "key": 0 / empty label.
 		// config.Update also creates config.json if it's missing — open needs a file.
 		config.Update(func(s *config.Settings) {
 			if s.Hotkey.IsZero() {
@@ -818,7 +827,10 @@ func run() {
 			}
 		}
 
-		if s.AutoStart != login.Enabled() {
+		// Guarded on Supported: where auto-start doesn't apply, Enabled is always
+		// false, so an auto_start:true config would retry a no-op Enable on every
+		// reload. The preference stays saved and takes effect in the installed app.
+		if login.Supported() && s.AutoStart != login.Enabled() {
 			var err error
 			if s.AutoStart {
 				err = login.Enable()

@@ -26,7 +26,8 @@ func xmlEscape(s string) string {
 
 // plistName keys the login item (plist filename, launchd Label, target binary)
 // off config.IsAppBundle so a dev build never clobbers — or gets clobbered by —
-// the installed app's entry.
+// the installed app's entry. Only Disable reaches the dev name now (see
+// login.go): a dev build never registers one, it only cleans up its own.
 func plistName() string {
 	if config.IsAppBundle() {
 		return plistNameApp
@@ -42,7 +43,7 @@ func plistPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", plistName()), nil
 }
 
-func Enabled() bool {
+func enabled() bool {
 	path, err := plistPath()
 	if err != nil {
 		return false
@@ -51,7 +52,7 @@ func Enabled() bool {
 	return err == nil
 }
 
-func Enable() error {
+func enable() error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
@@ -97,7 +98,7 @@ func Enable() error {
 	return nil
 }
 
-func Disable() error {
+func disable() error {
 	path, err := plistPath()
 	if err != nil {
 		return err

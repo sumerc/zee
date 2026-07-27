@@ -250,7 +250,14 @@ func onReady() {
 		}
 	})
 
-	mLogin = mSettings.AddSubMenuItemCheckbox("Start on Login", "Launch zee when you log in", loginOn)
+	loginTitle, loginTip := "Start on Login", "Launch zee when you log in"
+	if !loginAvailable {
+		loginTitle, loginTip = "Start on Login (installed app only)", "Auto-start applies to Zee.app in /Applications, not to a dev build"
+	}
+	mLogin = mSettings.AddSubMenuItemCheckbox(loginTitle, loginTip, loginOn)
+	if !loginAvailable {
+		mLogin.Disable()
+	}
 	mLogin.Click(func() {
 		want := !mLogin.Checked()
 		if loginCb != nil {

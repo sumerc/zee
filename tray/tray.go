@@ -51,8 +51,9 @@ var (
 	autoPasteOn bool
 	autoPasteCb func(bool)
 
-	loginOn bool
-	loginCb func(bool) error
+	loginOn        bool
+	loginAvailable = true
+	loginCb        func(bool) error
 
 	models  []Model
 	modelCb func(provider, model string)
@@ -73,7 +74,7 @@ var (
 	editSettingsCb func()
 	editCredsCb    func()
 	reloadCfgCb    func()
-	hotkeyLabel    string // display-only current push-to-talk combo (e.g. "⌃⇧Space")
+	hotkeyLabel    string // display-only current push-to-talk combo (e.g. "⌥Space")
 )
 
 var languages []transcriber.Language // set via SetLanguages
@@ -97,6 +98,15 @@ func SetLogin(on bool) {
 	loginOn = on
 	trayMu.Unlock()
 	updateLoginItem(on)
+}
+
+// SetLoginAvailable greys out "Start on Login" when auto-start does not apply to
+// this build (see login.Supported). Must be called before Init — it is read once
+// while the menu is built.
+func SetLoginAvailable(ok bool) {
+	trayMu.Lock()
+	loginAvailable = ok
+	trayMu.Unlock()
 }
 
 // SetRecording flips the menu between start and stop, and locks the device and

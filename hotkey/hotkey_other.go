@@ -18,10 +18,10 @@ type xHotkey struct {
 	keyup   chan struct{}
 }
 
-// DefaultCombo is the built-in hotkey (Ctrl+Shift+Space). KeySpace resolves to
-// the correct platform keycode.
+// DefaultCombo is the built-in hotkey (Option+Space). KeySpace resolves to the
+// correct platform keycode.
 func DefaultCombo() Combo {
-	return Combo{Mods: []string{"ctrl", "shift"}, Key: int(hotkey.KeySpace), Label: "⌃⇧Space"}
+	return Combo{Mods: []string{"option"}, Key: int(hotkey.KeySpace), Label: "⌥Space"}
 }
 
 func New(c Combo) Hotkey {
