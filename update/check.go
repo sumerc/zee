@@ -4,14 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 )
 
 type ghRelease struct {
 	TagName string `json:"tag_name"`
 }
 
+// describeSuffix matches the tail `git describe` adds to a working-copy build:
+// v0.3.8-89-g6537b3f, optionally -dirty. Such a build is AHEAD of its base tag,
+// so semver's "prerelease sorts below release" rule would otherwise offer that
+// base tag as an update to a developer running a newer binary than it.
+var describeSuffix = regexp.MustCompile(`-\d+-g[0-9a-f]{7,40}(-dirty)?$`)
+
 func CheckLatest(currentVersion string) (*Release, error) {
-	if currentVersion == "dev" {
+	if currentVersion == "dev" || describeSuffix.MatchString(currentVersion) {
 		return nil, nil
 	}
 

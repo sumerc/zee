@@ -34,6 +34,11 @@ checksum:
   name_template: checksums.txt
 
 release:
+  # A tag carrying a prerelease suffix (v0.4.0-rc.1) publishes as a GitHub
+  # prerelease, so it stays out of /releases/latest — which is what both
+  # install.sh and the in-app update check resolve. An rc can therefore be
+  # tested on a clean machine without moving existing users' "latest".
+  prerelease: auto
   github:
     owner: sumerc
     name: zee
