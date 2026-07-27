@@ -16,20 +16,17 @@
 
 ## Highlights
 
-- **Offline, on-device** — on Apple Silicon, transcribes fully locally with **no API key and no network**, working from the first launch. Two engines, both GPU-accelerated (Metal): **Parakeet** for fast English, **Whisper** (large-v3 turbo) for multilingual with auto-detect. Cloud providers are optional and switchable from the tray.
-- **System tray app** — lives in the menu bar. Switch microphones, transcription providers, and languages from the tray menu. Dynamic icons show recording and warning states.
-- **Two recording modes** — push-to-talk (hold hotkey) or tap-to-toggle (tap to start/stop).
-- **Real-time streaming** — when a streaming-capable model is selected (e.g. Deepgram Nova-3), words appear as you speak and auto-paste into the focused window incrementally.
-- **Fast batch mode** — HTTP keep-alive, TLS connection reuse, pre-warmed connections, streaming encoder runs during recording (not after). Typical key-release to clipboard: under 500ms.
-- **Auto-paste** — transcribed text goes straight to clipboard and pastes into the active window. In streaming mode, each new phrase pastes as it arrives.
-- **Silence detection** — VAD-based voice activity detection warns when no speech is heard. In streaming mode, auto-closes recording after 30 seconds of silence.
-- **Pure Go encoding** — MP3 and FLAC encoders, no CGO. Three formats: `mp3@16` (smallest), `mp3@64` (balanced), `flac` (lossless).
-- **Multiple providers** — local Parakeet and Whisper, plus Groq, OpenAI, Mistral, ElevenLabs, and Deepgram, switchable from the tray menu at runtime.
-- **36 languages** — select transcription language from the tray menu or via `-lang` flag.
+- **Offline, on-device** — fully local on Apple Silicon, **no API key, no network**, from the first launch. Two Metal-accelerated engines: **Parakeet** for fast English, **Whisper** large-v3 turbo for ~99 languages with auto-detect.
+- **Two recording modes** — hold the hotkey to talk, or tap once to start and again to stop.
+- **Real-time streaming** — with a streaming model (Deepgram Nova-3), words appear and paste as you speak.
+- **Sub-second** — under 500 ms from key release to clipboard: the encoder runs *during* recording, connections are pre-warmed and reused.
+- **Auto-paste** — the transcript goes to your clipboard and into the focused window.
+- **Silence detection** — VAD warns when nothing is heard, and closes a streaming recording after 30 s of silence.
+- **Providers, switchable at runtime** — local Parakeet and Whisper, plus Groq, OpenAI, Mistral, ElevenLabs and Deepgram, all from the tray menu.
 - **Cross-platform** — minimal dependencies, pure Go where possible.
   - [x] macOS (Apple Silicon)
-  - [ ] Linux
-  - [ ] Windows
+  - [ ] Linux — planned
+  - [ ] Windows — planned
 
 ## Install
 
@@ -37,14 +34,13 @@
 curl -fsSL https://raw.githubusercontent.com/sumerc/zee/main/install.sh | bash
 ```
 
-That's everything — models included, nothing to configure. macOS asks for
-Microphone and Accessibility the first time you record; grant both and you're
-done.
+Downloads the local models once, then runs the setup wizard, which asks for
+Microphone and Accessibility. Grant both and you're done.
 
 ## Use
 
-Hold **⌥Space** to record, release to transcribe. The text lands in your
-clipboard and pastes into whatever window you're in.
+Hold your configured hotkey to record, release to transcribe. The text lands in
+your clipboard and pastes into whatever window you're in.
 
 Microphone, provider, language, and hotkey all live in the tray menu. To add a
 cloud provider (Groq, OpenAI, Deepgram, Mistral, ElevenLabs), run `zee setup` —
@@ -72,4 +68,4 @@ what installs it.
 
 ## About
 
-Started as a vibe-coding project but turned into a standalone app I use daily for all my speech-to-text. Built with AI, love, and care — the kind of polish you get when you actually use the thing you're building.
+Started as a vibe-coding project but turned into a standalone app I use daily for all my speech-to-text. Built with AI, ❤️, and care — the kind of polish you get when you actually use the thing you're building.
