@@ -16,13 +16,13 @@
 
 ## Highlights
 
-- **Offline, on-device** — fully local on Apple Silicon, **no API key, no network**, from the first launch. Two Metal-accelerated engines: **Parakeet** for fast English, **Whisper** large-v3 turbo for ~99 languages with auto-detect.
+- **Offline, on-device** — fully local on Apple Silicon, **no API key, no network**, from the first launch. Two Metal-accelerated engines: **Parakeet** for fast English, **Whisper** large-v3 turbo for **~99** languages with auto-detect.
 - **Two recording modes** — hold the hotkey to talk, or tap once to start and again to stop.
 - **Real-time streaming** — with a streaming model (Deepgram Nova-3), words appear and paste as you speak.
-- **Sub-second** — under 500 ms from key release to clipboard: the encoder runs *during* recording, connections are pre-warmed and reused.
-- **Auto-paste** — the transcript goes to your clipboard and into the focused window.
-- **Silence detection** — VAD warns when nothing is heard, and closes a streaming recording after 30 s of silence.
-- **Providers, switchable at runtime** — local Parakeet and Whisper, plus Groq, OpenAI, Mistral, ElevenLabs and Deepgram, all from the tray menu.
+- **Very fast** — under **~500 ms** from key release to clipboard, for most models, cloud ones included.
+- **Auto-paste** — the transcript pastes into the focused window.
+- **Silence detection** — VAD warns when nothing is heard.
+- **Providers, switchable at runtime** — local Parakeet and Whisper, plus Groq, OpenAI, Mistral, ElevenLabs and Deepgram, all from the menu bar.
 - **Cross-platform** — minimal dependencies, pure Go where possible.
   - [x] macOS (Apple Silicon)
   - [ ] Linux — planned
