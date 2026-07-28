@@ -646,3 +646,21 @@ Ordinary prompt-conditioning side effects come with it (a repeated word at the
 end of one clip, a dropped comma). Biasing is a trade, not a free win — which is
 why it stays opt-in per user rather than being seeded with defaults.
 
+
+## Why the login item is written but never bootstrapped (2026-07-28)
+
+`login.Enable()` writes `~/Library/LaunchAgents/com.zee.app.plist` and stops
+there. It used to follow the write with `launchctl bootstrap gui/<uid>`, which
+is what a "register it now" API looks like — but bootstrap honours `RunAtLoad`
+at bootstrap time, so launchd started the job immediately and the user ended up
+with two tray instances: the app they clicked the toggle in, plus a
+launchd-parented clone. Rejected alternatives: bootstrap then `launchctl kill`
+the job (racy, and a visible flash of a second icon), or dropping `RunAtLoad`
+(that key *is* the start-at-login behaviour).
+
+launchd loads every plist in `~/Library/LaunchAgents` at login on its own, so
+the file alone is the whole feature. `Enabled()` is a file-stat for the same
+reason — the plist's presence, not a launchd query, is the source of truth.
+
+`Disable()` still boots the job out before removing the plist: an entry
+bootstrapped by an older build may be live in the current session.

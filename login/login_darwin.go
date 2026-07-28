@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	plistNameApp = "com.zee.app.plist"     // installed /Applications/Zee.app
-	plistNameDev = "com.zee.app.dev.plist" // local dev build
+	labelApp = "com.zee.app"     // installed /Applications/Zee.app
+	labelDev = "com.zee.app.dev" // local dev build
 )
 
 func xmlEscape(s string) string {
@@ -24,16 +24,18 @@ func xmlEscape(s string) string {
 	return b.String()
 }
 
-// plistName keys the login item (plist filename, launchd Label, target binary)
-// off config.IsAppBundle so a dev build never clobbers — or gets clobbered by —
-// the installed app's entry. Only Disable reaches the dev name now (see
-// login.go): a dev build never registers one, it only cleans up its own.
-func plistName() string {
+// label keys the login item (launchd Label, plist filename, target binary) off
+// config.IsAppBundle so a dev build never clobbers — or gets clobbered by — the
+// installed app's entry. Only Disable reaches the dev name now (see login.go):
+// a dev build never registers one, it only cleans up its own.
+func label() string {
 	if config.IsAppBundle() {
-		return plistNameApp
+		return labelApp
 	}
-	return plistNameDev
+	return labelDev
 }
+
+func plistName() string { return label() + ".plist" }
 
 func plistPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -76,7 +78,7 @@ func enable() error {
 	<string>Aqua</string>
 </dict>
 </plist>
-`, plistName(), xmlEscape(exe))
+`, label(), xmlEscape(exe))
 
 	path, err := plistPath()
 	if err != nil {
@@ -86,14 +88,12 @@ func enable() error {
 		return fmt.Errorf("create LaunchAgents dir: %w", err)
 	}
 
+	// Writing the plist is the whole job: launchd loads ~/Library/LaunchAgents
+	// at login, and RunAtLoad starts zee there. Deliberately no `launchctl
+	// bootstrap` — it honors RunAtLoad immediately, so ticking the tray toggle
+	// would spawn a second instance beside the running one.
 	if err := os.WriteFile(path, []byte(plist), 0600); err != nil {
 		return fmt.Errorf("write plist: %w", err)
-	}
-
-	domain := fmt.Sprintf("gui/%d", os.Getuid())
-	exec.Command("launchctl", "bootout", domain, path).Run()
-	if out, err := exec.Command("launchctl", "bootstrap", domain, path).CombinedOutput(); err != nil {
-		return fmt.Errorf("launchctl bootstrap: %w (%s)", err, out)
 	}
 	return nil
 }
