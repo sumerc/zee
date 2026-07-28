@@ -31,10 +31,12 @@
 // Reveal timing. Textream waits for the shape to finish expanding before
 // fading its contents in, which suits a panel full of text; ours says one word
 // and has to be readable the instant you press the key, so the fade starts
-// while the shape is still opening.
+// while the shape is still opening. FADE_AFTER is only long enough for the
+// notch to outgrow the label — at 0 the text is briefly drawn wider than the
+// shape carrying it, which reads as spilling out.
 #define GROW_DUR   0.22
-#define FADE_AFTER 0.10
-#define FADE_DUR   0.16
+#define FADE_AFTER 0.04
+#define FADE_DUR   0.14
 
 #define ROW_DOT    11.0
 #define ROW_LABEL  28.0
