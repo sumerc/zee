@@ -5,6 +5,7 @@
   <strong>Runs fully on-device — no account, no API key, no network.</strong><br>
   Local Parakeet and Whisper on Metal, or Groq, OpenAI, Mistral, ElevenLabs and Deepgram.<br>
   Push-to-talk, tap-to-toggle, or real-time streaming. Pure Go. Sub-second fast.<br><br>
+  <a href="https://github.com/sumerc/zee/actions/workflows/ci.yml"><img src="https://github.com/sumerc/zee/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <img src="https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white" alt="Go 1.24">
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple" alt="macOS">
   <a href="https://freepalestine.dev"><img src="https://freepalestine.dev/badge?t=d&u=0&r=1" alt="From the river to the sea, Palestine will be free"></a>
