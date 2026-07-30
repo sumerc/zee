@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+
+- Local providers no longer fail every recording when the model saved in
+  config.json belongs to a different engine; they fall back to their own default
+
 ## v0.4.0
 
 - Recording overlay wnd
