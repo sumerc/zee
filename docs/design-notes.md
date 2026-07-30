@@ -664,3 +664,68 @@ reason — the plist's presence, not a launchd query, is the source of truth.
 
 `Disable()` still boots the job out before removing the plist: an entry
 bootstrapped by an older build may be live in the current session.
+
+
+## Qwen3-ASR POC: CPU-only, and where the time goes (2026-07-29, branch qwen-asr-int)
+
+antirez/qwen-asr (b00b789) vendored into `third_party/qwen-asr` as plain C
+sources. Dependency-free, so the build is `cc` + `ar` — no cmake, no submodule,
+and none of the ggml-sharing hazard `whisper-lib` exists to prevent: it links
+its own kernels plus Accelerate and shares nothing with parakeet/whisper.
+
+**It is CPU-only.** There is no GPU backend upstream at all; matmuls go through
+`cblas_sgemm` (Accelerate on macOS, OpenBLAS on Linux — `qwen_asr_kernels.c:181`).
+Parakeet and Whisper both run on Metal here, so this is a different performance
+class, not a slower constant.
+
+**The library defaults to one thread.** `qwen_set_threads()` is not tuning, it
+is required: the worker pool in `qwen_asr_kernels.c` starts at `n_threads = 1`
+and only upstream's CLI raises it, so a binding that forgets runs a 0.6B model
+on a single core. Missing it cost ~2× here before it was caught.
+
+Measured on M5 Pro (15 CPUs), 23.0 s of real dictation, 87 output tokens,
+engine's own timers (`ZEE_QWEN_VERBOSE=2`), milliseconds:
+
+```
+threads     mel   encoder   prefill   decode          total
+1            17       488      1000     2288 (26.3/tok) 3793
+5            17       477       489     1029 (11.8/tok) 2012
+8            17       477       442     1008 (11.6/tok) 1944
+15           17       475       431     1095 (12.6/tok) 2018
+```
+
+Two things that table settles:
+
+- **The encoder does not parallelise** (488 → 475 ms). It is already one big
+  `cblas_sgemm`, and Accelerate uses the AMX coprocessor internally; there is no
+  headroom left for the thread pool to find.
+- **Decode dominates and is memory-bandwidth-bound**: 87 tokens × ~11.6 ms, each
+  token streaming all 1.8 GB of bf16 weights. That is ~100 GB/s, near what the
+  machine can do, which is why 5, 8 and 15 threads are within 4% of each other.
+
+So the remaining lever is **fewer bytes per token, not more cores**: int8/int4
+weights would cut decode roughly linearly. Upstream has no quantized format, and
+that is the single biggest obstacle to shipping this — `whisper-turbo-q5` is
+574 MB against 1.8 GB here (and 4.7 GB for the 1.7B), with ~2.8 GB RSS resident.
+
+**Compiler flags are not the lever either.** `-mcpu=native` measured no better
+than the portable `-mcpu=apple-m1` (encoder 499 vs 477 ms, decode 1058 vs 1008 —
+i.e. slightly worse, within noise), for the same reason: the hot paths are in
+Accelerate, not in code the compiler is vectorising for us. The build keeps
+`-mcpu=apple-m1`, matching parakeet/whisper, so the archive stays shippable in a
+universal binary. Upstream's `-march=native` is deliberately not copied.
+
+End to end on that clip, wall clock including model load: qwen 2.15 s vs
+whisper-turbo-q5 1.10 s. Quality was a wash — identical transcripts at 1 and 8
+threads (so the thread pool is not corrupting output), and character-exact on a
+Turkish TTS clip plus correct en/fr/ru. No WER run has been done; a clean TTS
+signal says nothing about real microphone audio.
+
+Two things block a release beyond the POC:
+- Accelerate resolves to `cblas_sgemm$NEWLAPACK`, the macOS 13.3+ ABI, while
+  zee's deployment target is 11.0. Ships fine here, would fail to load on
+  11–13.2.
+- The model is a DIRECTORY (safetensors + tokenizer JSON), which the
+  single-file + one-sha256 contract behind install.sh and `localmodel.Download`
+  cannot express. `localmodel.Model.IsDir` marks it so it is skipped by the
+  manifest and refuses to download; `make download-qwen` fetches it by hand.

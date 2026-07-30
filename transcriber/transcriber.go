@@ -230,6 +230,8 @@ func Providers() []ProviderInfo {
 		// the startup default, with Whisper the multilingual option next to it.
 		parakeetProvider(),
 		whisperProvider(),
+		qwenProvider(), // POC (qwen-asr-int): CPU-only, hand-fetched model
+
 		cloudProvider("deepgram", "Deepgram", DeepgramModels, func(k string) Transcriber { return NewDeepgram(k) }),
 		cloudProvider("openai", "OpenAI", OpenAIModels, func(k string) Transcriber { return NewOpenAI(k) }),
 		cloudProvider("groq", "Groq", GroqModels, func(k string) Transcriber { return NewGroq(k) }),

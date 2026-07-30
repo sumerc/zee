@@ -40,6 +40,7 @@ const baseURL = "https://github.com/sumerc/zee/releases/download/models-" + Vers
 const (
 	EngineParakeet = "parakeet"
 	EngineWhisper  = "whisper"
+	EngineQwen     = "qwen" // POC (qwen-asr-int branch); CPU-only, directory model
 )
 
 // Model IDs (stable; persisted in config.json and shown in the tray).
@@ -47,6 +48,7 @@ const (
 	ID110mEN    = "parakeet-110m-en"  // default, English-only, loaded at startup
 	IDWhisperQ5 = "whisper-turbo-q5"  // multilingual, pre-fetched
 	IDV3Multi   = "parakeet-v3-multi" // multilingual fast path, opt-in download
+	IDQwen06B   = "qwen3-asr-0.6b"    // POC: multilingual, CPU-only, hand-fetched
 )
 
 // retiredIDs maps model IDs that no longer exist to their successor, so a
@@ -72,6 +74,15 @@ type Model struct {
 	Decoder      int  // parakeet head: 0=default, 1=ctc, 2=tdt (ignored by whisper)
 	Multilingual bool // true => non-English supported; false => English-only
 	PreFetch     bool // install.sh pre-fetches it (currently every model)
+
+	// IsDir marks a model that is a DIRECTORY of files rather than one weights
+	// file. Qwen ships safetensors + tokenizer JSON that its loader reads by
+	// name from a directory, so Filename is that directory and SizeBytes is the
+	// weights file inside it (SizeFile). Such a model is outside the
+	// single-file, one-sha256 contract the models release and install.sh are
+	// built on: it is skipped by Manifest and cannot be Downloaded.
+	IsDir    bool
+	SizeFile string // IsDir only: the file under Filename that SizeBytes describes
 }
 
 // URL is where the gguf is hosted under the pinned models tag.
@@ -127,6 +138,19 @@ var models = []Model{
 		Multilingual: true,
 		PreFetch:     true,
 	},
+	{
+		// POC (qwen-asr-int). Not in any models-vN release: bf16 and
+		// unquantized at 1.8 GB, and a directory rather than a gguf, so it is
+		// fetched by hand with `make download-qwen` and never by install.sh.
+		ID:           IDQwen06B,
+		Label:        "Multilingual — Qwen3-ASR 0.6B (CPU, POC)",
+		Engine:       EngineQwen,
+		Filename:     "qwen3-asr-0.6b",
+		SizeBytes:    1876091704,
+		SizeFile:     "model.safetensors",
+		IsDir:        true,
+		Multilingual: true,
+	},
 }
 
 // All returns the registry in display order.
@@ -142,6 +166,9 @@ func Manifest() string {
 	b.WriteString("# zee local model manifest — generated from localmodel.go (make manifest); do not edit by hand\n")
 	b.WriteString("# filename\tsha256\tprefetch\n")
 	for _, m := range models {
+		if m.IsDir {
+			continue // no single file, no sha256 — install.sh cannot fetch it
+		}
 		fmt.Fprintf(&b, "%s\t%s\t%t\n", m.Filename, m.SHA256, m.PreFetch)
 	}
 	return b.String()
@@ -194,7 +221,11 @@ func Path(m Model) string { return filepath.Join(Dir(), m.Filename) }
 // (A size check is cheap and catches truncated/aborted downloads; the full
 // sha256 is verified at download time, not on every startup.)
 func Present(m Model) bool {
-	fi, err := os.Stat(Path(m))
+	p := Path(m)
+	if m.IsDir {
+		p = filepath.Join(p, m.SizeFile)
+	}
+	fi, err := os.Stat(p)
 	return err == nil && fi.Size() == m.SizeBytes
 }
 
@@ -210,6 +241,9 @@ const stallTimeout = 60 * time.Second
 func Download(m Model, progress func(fraction float64)) error {
 	if Present(m) {
 		return nil
+	}
+	if m.IsDir {
+		return fmt.Errorf("%s is a multi-file model; fetch it with `make download-qwen`", m.ID)
 	}
 	dir := Dir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {

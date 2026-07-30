@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark bench-local bench-save clean bump-version release icns app parakeet-lib whisper-lib download-models manifest model-release
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark bench-local bench-save clean bump-version release icns app parakeet-lib whisper-lib qwen-lib download-models download-qwen manifest model-release
 
 # --match 'v*' keeps model-release tags (models-vN) out of the app version.
 VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo "dev")
@@ -21,7 +21,7 @@ ifeq ($(HOST),darwin/arm64)
 CGO_ENV := MACOSX_DEPLOYMENT_TARGET=$(MACOS_MIN) CGO_CFLAGS=-mmacosx-version-min=$(MACOS_MIN) CGO_LDFLAGS=-mmacosx-version-min=$(MACOS_MIN)
 endif
 
-build: whisper-lib download-models
+build: whisper-lib qwen-lib download-models
 	$(CGO_ENV) go build -ldflags="-X main.version=$(VERSION)" -o zee
 
 # The dev model folder `localmodels download` writes to (cmd/localmodels keeps
@@ -88,6 +88,54 @@ whisper-lib: parakeet-lib
 	    -DCMAKE_C_FLAGS="-mcpu=apple-m1" -DCMAKE_CXX_FLAGS="-mcpu=apple-m1"; \
 	fi && \
 	cmake --build $(WHISPER_DIR)/build-release -j
+
+# Qwen3-ASR (POC, qwen-asr-int branch): antirez/qwen-asr is dependency-free C,
+# vendored as plain sources — no cmake, no submodule, so a plain ar of the
+# objects is the whole build. It shares nothing with ggml (its own kernels +
+# Accelerate BLAS), so unlike whisper-lib there is no cross-library ggml hazard.
+#
+# Upstream builds with -march=native, which we do NOT copy: it bakes in the
+# build host's CPU and this archive ships in a universal binary. -mcpu=apple-m1
+# is the same baseline parakeet/whisper use here.
+QWEN_DIR := third_party/qwen-asr
+QWEN_LIB := $(QWEN_DIR)/build-release/libqwen_asr.a
+QWEN_SRCS := $(wildcard $(QWEN_DIR)/*.c)
+QWEN_OBJS := $(patsubst $(QWEN_DIR)/%.c,$(QWEN_DIR)/build-release/%.o,$(QWEN_SRCS))
+QWEN_CFLAGS := -Wall -O3 -mcpu=apple-m1 -ffast-math -DUSE_BLAS \
+               -DACCELERATE_NEW_LAPACK -mmacosx-version-min=$(MACOS_MIN)
+
+$(QWEN_DIR)/build-release/%.o: $(QWEN_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(QWEN_CFLAGS) -c -o $@ $<
+
+qwen-lib:
+	@if [ "$(HOST)" != "darwin/arm64" ]; then exit 0; fi; \
+	$(MAKE) $(QWEN_LIB)
+
+$(QWEN_LIB): $(QWEN_OBJS)
+	ar rcs $@ $(QWEN_OBJS)
+
+# Fetch the Qwen model straight from HuggingFace. It is NOT in a models-vN
+# release: 1.8 GB of unquantized bf16 in a directory of five files, which the
+# single-file+sha256 contract behind install.sh and localmodel.Download cannot
+# express. POC only — this is the one model a user fetches by hand.
+# Into the dev model folder, the same one download-models writes to, so a
+# `make build && ./zee` picks it up (localmodel.Dir prefers it over the config
+# dir for non-bundle builds). Running the .app instead means copying it to
+# ~/Library/Application Support/zee/models/.
+QWEN_MODEL_DIR := $(MODELS_DEV_DIR)/qwen3-asr-0.6b
+QWEN_HF_BASE   := https://huggingface.co/Qwen/Qwen3-ASR-0.6B/resolve/main
+download-qwen:
+	@mkdir -p "$(QWEN_MODEL_DIR)"
+	@for f in config.json generation_config.json vocab.json merges.txt model.safetensors; do \
+	  if [ -f "$(QWEN_MODEL_DIR)/$$f" ]; then \
+	    echo "  [skip] $$f"; \
+	  else \
+	    echo "  [get ] $$f"; \
+	    curl -fL --progress-bar -o "$(QWEN_MODEL_DIR)/$$f" "$(QWEN_HF_BASE)/$$f"; \
+	  fi; \
+	done
+	@echo "==> model in $(QWEN_MODEL_DIR)"
 
 build-linux-amd64:
 	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-amd64
