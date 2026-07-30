@@ -38,10 +38,11 @@ type localProvider struct {
 	loadErr  error
 	lang     string
 
-	name     string                                      // provider name, e.g. "parakeet"
-	hints    bool                                        // engine can bias decoding toward a vocabulary
-	open     func(localmodel.Model) (localEngine, error) // load a model with this engine
-	langsFor func(localmodel.Model) []Language
+	name      string                                      // provider name, e.g. "parakeet"
+	defaultID string                                      // this engine's model, used when modelID belongs to another
+	hints     bool                                        // engine can bias decoding toward a vocabulary
+	open      func(localmodel.Model) (localEngine, error) // load a model with this engine
+	langsFor  func(localmodel.Model) []Language
 }
 
 // newLocalProvider builds a provider around one engine and warms its default
@@ -54,12 +55,13 @@ func newLocalProvider(name, defaultID, defaultLang string, hints bool,
 	langsFor func(localmodel.Model) []Language) *localProvider {
 
 	p := &localProvider{
-		modelID:  defaultID,
-		lang:     defaultLang,
-		name:     name,
-		hints:    hints,
-		open:     open,
-		langsFor: langsFor,
+		modelID:   defaultID,
+		defaultID: defaultID,
+		lang:      defaultLang,
+		name:      name,
+		hints:     hints,
+		open:      open,
+		langsFor:  langsFor,
 	}
 	go p.load()
 	return p
@@ -156,6 +158,21 @@ func (p *localProvider) load() {
 		eng localEngine
 		err error
 	)
+	// A model ID belonging to another engine is not an error, it is the normal
+	// state right after a provider switch: the ID persisted in config.json is
+	// whatever the PREVIOUS provider had selected, and it arrives here via
+	// SetModel before the tray ever offers this engine's own list. Fall back to
+	// this engine's default instead of failing every recording until the user
+	// happens to open the model menu. Falling back is safe because the default
+	// is by construction the right engine's file — what must never happen is
+	// loading another engine's weights, which is a hang, not an error.
+	if m, ok := localmodel.ByID(want); !ok || m.Engine != p.name {
+		want = p.defaultID
+		p.mu.Lock()
+		p.modelID = want
+		p.mu.Unlock()
+	}
+
 	if m, ok := localmodel.ByID(want); !ok || m.Engine != p.name {
 		err = fmt.Errorf("unknown %s model %q", p.name, want)
 	} else if !localmodel.Present(m) {
