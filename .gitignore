@@ -8,6 +8,10 @@ packaging/Zee.icns
 # Local STT models (downloaded / dev-placed ggufs — never committed)
 /models/
 
+# Vendored qwen-asr build output (sources are committed, objects are not).
+# parakeet.cpp/whisper.cpp are submodules so their build dirs never show up here.
+/third_party/qwen-asr/build-release/
+
 # Dev-build state (config.json, credentials.json, samples — dev/app split)
 /.zee/
 

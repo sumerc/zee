@@ -664,3 +664,165 @@ reason — the plist's presence, not a launchd query, is the source of truth.
 
 `Disable()` still boots the job out before removing the plist: an entry
 bootstrapped by an older build may be live in the current session.
+
+
+## Qwen3-ASR POC: CPU-only, and where the time goes (2026-07-29, branch qwen-asr-int)
+
+antirez/qwen-asr (b00b789) vendored into `third_party/qwen-asr` as plain C
+sources. Dependency-free, so the build is `cc` + `ar` — no cmake, no submodule,
+and none of the ggml-sharing hazard `whisper-lib` exists to prevent: it links
+its own kernels plus Accelerate and shares nothing with parakeet/whisper.
+
+**It is CPU-only.** There is no GPU backend upstream at all; matmuls go through
+`cblas_sgemm` (Accelerate on macOS, OpenBLAS on Linux — `qwen_asr_kernels.c:181`).
+Parakeet and Whisper both run on Metal here, so this is a different performance
+class, not a slower constant.
+
+**The library defaults to one thread.** `qwen_set_threads()` is not tuning, it
+is required: the worker pool in `qwen_asr_kernels.c` starts at `n_threads = 1`
+and only upstream's CLI raises it, so a binding that forgets runs a 0.6B model
+on a single core. Missing it cost ~2× here before it was caught.
+
+Measured on M5 Pro (15 CPUs), 23.0 s of real dictation, 87 output tokens,
+engine's own timers (`ZEE_QWEN_VERBOSE=2`), milliseconds:
+
+```
+threads     mel   encoder   prefill   decode          total
+1            17       488      1000     2288 (26.3/tok) 3793
+5            17       477       489     1029 (11.8/tok) 2012
+8            17       477       442     1008 (11.6/tok) 1944
+15           17       475       431     1095 (12.6/tok) 2018
+```
+
+Two things that table settles:
+
+- **The encoder does not parallelise** (488 → 475 ms). It is already one big
+  `cblas_sgemm`, and Accelerate uses the AMX coprocessor internally; there is no
+  headroom left for the thread pool to find.
+- **Decode dominates and is memory-bandwidth-bound**: 87 tokens × ~11.6 ms, each
+  token streaming all 1.8 GB of bf16 weights. That is ~100 GB/s, near what the
+  machine can do, which is why 5, 8 and 15 threads are within 4% of each other.
+
+So the remaining lever is **fewer bytes per token, not more cores**: int8/int4
+weights would cut decode roughly linearly. Upstream has no quantized format, and
+that is the single biggest obstacle to shipping this — `whisper-turbo-q5` is
+574 MB against 1.8 GB here (and 4.7 GB for the 1.7B), with ~2.8 GB RSS resident.
+
+**Compiler flags are not the lever either.** `-mcpu=native` measured no better
+than the portable `-mcpu=apple-m1` (encoder 499 vs 477 ms, decode 1058 vs 1008 —
+i.e. slightly worse, within noise), for the same reason: the hot paths are in
+Accelerate, not in code the compiler is vectorising for us. The build keeps
+`-mcpu=apple-m1`, matching parakeet/whisper, so the archive stays shippable in a
+universal binary. Upstream's `-march=native` is deliberately not copied.
+
+End to end on that clip, wall clock including model load: qwen 2.15 s vs
+whisper-turbo-q5 1.10 s. The thread pool is not corrupting output — transcripts
+at 1 and 8 threads are byte-identical.
+
+~~Quality was a wash.~~ **Superseded 2026-07-29 by the real-audio test below.**
+That claim came from a Turkish TTS clip (character-exact) plus correct en/fr/ru
+samples. A clean synthetic signal in one language turned out to say nothing
+about the case that matters here.
+
+Two things block a release beyond the POC:
+- Accelerate resolves to `cblas_sgemm$NEWLAPACK`, the macOS 13.3+ ABI, while
+  zee's deployment target is 11.0. Ships fine here, would fail to load on
+  11–13.2.
+- The model is a DIRECTORY (safetensors + tokenizer JSON), which the
+  single-file + one-sha256 contract behind install.sh and `localmodel.Download`
+  cannot express. `localmodel.Model.IsDir` marks it so it is skipped by the
+  manifest and refuses to download; `make download-qwen` fetches it by hand.
+
+
+## Why Qwen3-ASR was parked: loanwords, not latency (2026-07-29)
+
+Speed was never the blocker. On real dictation — Turkish carrying English
+technical vocabulary, which is the actual workload — Qwen resolves loanwords
+through Turkish phonology where Whisper keeps them in English:
+
+```
+spoken                 qwen3-asr-0.6b        whisper-turbo-q5
+"sample"               "sempol"              "sample"
+"check edebilirsin"    "çekebilirsin"        "check edebilirsin"
+"transcribe"           "transkribe"          "transcribe"
+```
+
+`çekebilirsin` is the dangerous one: a real Turkish word ("you can pull"), so the
+error is silent — no garbled text to notice, just a wrong meaning.
+
+**It is intrinsic, not configuration.** Three attempts, same 23 s clip:
+
+```
+forced language (-lang tr)   baseline
+auto-detect (no language)    byte-identical to forced
++ vocabulary hints           worse ("çekedebilirsin", "Sip")
+```
+
+Note that forcing a language in this engine injects the literal text prompt
+`"language Turkish"` into the decoder (`qwen_asr.c:524`) rather than
+conditioning on a token the way whisper does — a plausible cause that the
+auto-detect run rules out.
+
+The mechanism is the decoder. Qwen3-ASR is an audio encoder on a Qwen3 **LLM**
+(`qwen3vl` architecture); Whisper's decoder is a plain seq2seq text head trained
+only to transcribe. An LLM carries a much stronger "keep writing in this
+language" prior, so once it is emitting Turkish, a token sequence spelling an
+English word is low-probability and it picks the same-sounding Turkish
+orthography. The same prior is why it is *better* on monolingual speech —
+context disambiguation, long-form coherence, punctuation. Same mechanism,
+opposite sign. It can write English when the word is unambiguous: "Whisper" came
+out right every time.
+
+Held loosely, and why it was still decisive: this is one clip, not a WER run,
+and published benchmarks put Qwen3-ASR **above** Whisper-large-v3 across
+languages. Those benchmarks are monolingual read speech and do not measure
+code-switching at all. Both facts can be true; zee's use case sits in the gap.
+
+
+## Qwen3-ASR: what was tested, and what was not (2026-07-29)
+
+Everything above measures **antirez/qwen-asr** specifically — pure C, CPU only,
+bf16, no quantization. That is one implementation of the model, and the slowest
+one available. Three faster runtimes exist and were NOT tested:
+
+```
+runtime                      backend        quant      status here
+antirez/qwen-asr             CPU/Accelerate bf16       tested (this branch)
+predict-woo/qwen3-asr.cpp    ggml + Metal   Q8_0       not tested
+mlx-qwen3-asr / mlx-audio    MLX (Metal)    4/5/8-bit  not tested (Python)
+qwen3-asr-onnx               CoreML/CPU     int4/int8  not tested
+```
+
+The only third-party number found for qwen3-asr.cpp: 92 s of Korean in 5.007 s
+on an **M2 Pro**, ~247 MB RSS + ~294 MB Metal. Against our own measurement of
+the C engine, and whisper from `benchmark.txt`:
+
+```
+                            machine   realtime factor    RSS
+antirez C (measured)        M5 Pro     11.8x            ~2.8 GB
+qwen3-asr.cpp (published)   M2 Pro     18.4x            ~540 MB
+whisper-turbo-q5 (measured) M5 Pro     39x              —
+```
+
+Treat that middle row as an indication only: different clip, different language,
+different machine, and not verified here. The direction is credible though —
+Metal plus Q8_0 on older silicon still beating our CPU bf16 build on newer
+silicon suggests 2–3x on equal hardware, which would put Qwen near or past
+Whisper on speed.
+
+**It was not pursued because none of it addresses the reason for parking.** All
+three alternatives buy speed and memory against the *same weights*; quantization
+moves WER slightly the wrong way (published: +0.4pp at int4 per-group, +2.3pp at
+naive int8, +0.8pp with AWQ smoothing). A faster Qwen is a marginally worse Qwen,
+and it was already the weaker model at full precision on this workload.
+
+If it is ever revisited, `qwen3-asr.cpp` is the right target rather than MLX or
+ONNX: it is ggml-based, so it follows the `whisper-lib` pattern this repo
+already has — including the requirement to build against parakeet's patched ggml
+rather than its own vendored copy (see `internal/whisper/whisper.go`). MLX is
+the worst fit despite being the fastest: `mlx-c` exposes array ops, not the
+model, so every existing Qwen3-ASR implementation on it is Python and using it
+from Go would mean reimplementing the encoder and decoder. Caveat on maturity:
+qwen3-asr.cpp was ~102 stars / 35 commits when checked; llama.cpp mainline also
+consumes the official `ggml-org/Qwen3-ASR-0.6B-GGUF` weights (Q8_0, 805 MB) and
+is the safer-but-heavier alternative.
