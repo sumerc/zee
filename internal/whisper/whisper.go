@@ -130,21 +130,24 @@ const sampleRate = 16000
 // our 1 s warm-up only triggered it because it ran at the full window, turning
 // every later sized call into a shrink.
 //
-// Two facts kill the lever for zee regardless:
-//   - utterance lengths vary, so per-clip sizing inevitably shrinks sometimes;
-//   - auto-detect (our default) shrinks WITHIN one whisper_full call: the
-//     detection encode runs before exp_n_audio_ctx is set (whisper.cpp:6836 vs
-//     :6972), i.e. at the full window, then the main pass runs sized.
-//
 // At ac=0 every pass uses the full grid, sizes never change, and the bug cannot
-// trigger. A future grow-only or fresh-state-per-utterance scheme could revisit
-// this; re-run the fault matrix (ZEE_AC_DEBUG=1) before believing anything.
+// trigger. Re-run the fault matrix (ZEE_AC_DEBUG=1) before believing anything.
 //
 // Re-verified 2026-07-26 after no_timestamps was turned off: the matrix is
 // UNCHANGED (D/F/G/H/I/J/L garble, A/B/C/E/K pass). Different layer — that fix
 // is in the decoder loop, this fault is in the encoder state. Upstream has not
 // fixed it either: 154 commits since v1.9.1 (still the newest tag), none
 // touching exp_n_audio_ctx.
+//
+// This comment used to say auto-detect shrinks WITHIN one whisper_full call and
+// that this killed the lever outright. Measured 2026-07-31: wrong. The detect
+// encode reads whatever the PREVIOUS call left in exp_n_audio_ctx, so it only
+// shrinks from a cold state (0, which every read site expands to 1500). Primed
+// once at a small size, later auto calls at a LARGER size are grows and are
+// correct (matrix cases M/N). Returning 0 is now a cost decision, not a
+// correctness one — measured ~1.9x at a floor of 800, with an over-tight window
+// actively slower. See design-notes "audio_ctx sizing" for the numbers and the
+// open questions.
 func audioCtxFor(int) int { return 0 }
 
 // Available reports whether local Whisper transcription is compiled in.

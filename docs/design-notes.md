@@ -389,6 +389,47 @@ fixed language). Auto-detect is only special in that it makes the shrink
 Upstream has not fixed it either: v1.9.1 is still the newest tag and none of
 the 154 commits since it touch `exp_n_audio_ctx`.
 
+**Partly superseded 2026-07-31.** The fault itself is unchanged — the full
+matrix re-ran identical (D/F/G/H/I/J/L garble, A/B/C/E/K pass). What was wrong
+is the conclusion drawn from auto-detect. "Auto-detect makes the shrink
+unavoidable" holds only on a **cold** state: there `exp_n_audio_ctx` is 0, which
+every read site expands to `hparams.n_audio_ctx` (1500), so the first sized call
+is a shrink from the full window. It is not a property of auto-detect. The
+detect encode at :6836 reads whatever the *previous* call left behind, so if the
+state is primed once at a small size with a forced language, later auto calls at
+a **larger** size are grows, and grows are safe. Three cases added to the matrix:
+
+```
+en@200  -> auto@400   (grow, auto)    correct
+en@200  -> auto@200   (same, auto)    correct
+auto@400 -> auto@400  (cold, auto)    garbage, and stays garbled
+```
+
+So a grow-only scheme does not require forcing a language, which was the main
+reason it looked unattractive. Two further facts, measured the same day
+(`internal/whisper/audioctx_bench_test.go`, M5 Pro, primed cold context per
+size, best of 3 auto calls):
+
+- The win is real and linear in `audio_ctx` — 77 / 132 / 263 / 513 ms at
+  200 / 400 / 800 / 1500 on `en.wav`, i.e. ~6.6× at the smallest window.
+- **But it needs a floor.** `short.wav` hallucinated at ac=200 and cost
+  1113 ms at ac=400 — four times ac=800's 275 ms — because the
+  temperature-fallback ladder re-decoded what a too-tight window had broken.
+  An over-tight window is both wrong and slower than not sizing at all.
+  Upstream #1855's formula picks ~208 for that clip, straight into the failure.
+  At ac=800 all four test clips are correct at ~265 ms vs ~511 ms: 1.9×.
+
+Still rejected in the shipped code (`audioCtxFor` returns 0), because the
+remaining cost is not obviously worth ~245 ms: the ratchet is sticky — 800
+frames is ~16 s of audio, so one long dictation pins the mark at 1500 for the
+session — and un-sticking it means a fresh `whisper_state` per utterance, whose
+`whisper_init_state` (`src/whisper.cpp:3374`) starts with a full
+`whisper_backend_init`, i.e. the Metal setup `whisper.New`'s warm-up exists to
+hide. That cost is unmeasured. Note also that sizing and `temperature_inc = 0`
+are now known to conflict: the ladder is what repairs the decodes a tight window
+breaks. Working notes and the full tables are in `whisper-optimize.md` item 1.
+
+
 Ruled out while chasing it (each tested, not assumed): sampling strategy (beam
 search — whisper-cli's actual default at `beam_size=5` — garbles identically),
 `no_timestamps` (not a cause *here* — but a serious bug in its own right, see
