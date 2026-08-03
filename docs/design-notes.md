@@ -705,3 +705,92 @@ reason — the plist's presence, not a launchd query, is the source of truth.
 
 `Disable()` still boots the job out before removing the plist: an entry
 bootstrapped by an older build may be live in the current session.
+
+
+## CTranslate2 as a local Whisper backend: measured, rejected (2026-07-31)
+
+Evaluated in `~/Desktop/p/personal/zee-ctranslate-poc` (kept as a separate PoC
+repo; nothing here imports it). Question: could CTranslate2's CPU inference
+beat whisper.cpp+Metal on Apple Silicon? Measured on an M5 Pro, best of 5,
+inference only, greedy decode both sides:
+
+| Model | Clip | CT2 fp32 (Accelerate) | whisper.cpp Metal | whisper.cpp CPU |
+|---|---|---|---|---|
+| tiny | 1.2 s | 82 ms | 31 ms | — |
+| tiny | 11 s | 115 ms | 57 ms | 101 ms |
+| base.en | 1.2 s | 160 ms | 32 ms | — |
+| base.en | 11 s | 240 ms | 67 ms | 193 ms |
+| large-v3-turbo | 1.2 s | 2182 ms | 277 ms (q5_0) | — |
+| large-v3-turbo | 11 s | 2382 ms | 308 ms (q5_0) | — |
+
+The turbo row is the one that matters — it is the tier zee ships (measured
+2026-08-03 via whisper-cli against zee's own `ggml-large-v3-turbo-q5_0.bin`;
+the ~280–310 ms matches zee's in-process M5 numbers above, 272–295 ms). The
+gap widens with model size (~2.5× at tiny, ~8× at turbo): CT2's fp32 CPU
+weights double the memory traffic of q5_0 with no GPU offload, and CT2 int8
+is actively harmful at this tier (3.8 s vs 2.4 s fp32).
+
+Three independent findings, each enough to reject it:
+
+- **CT2 is CPU-only on macOS** (no Metal backend; the official wheel uses
+  Accelerate BLAS), and whisper.cpp *CPU-only* still edges it out.
+- **CT2 int8 gives no speedup in the official macOS wheel build** (int8 ≈ fp32
+  at tiny, 1.6× *slower* at turbo). CT2's headline int8 wins are x86/MKL
+  territory.
+- **CT2 must be fed the full 3000-frame (30 s) window.** Variable-length
+  features are accepted by the encoder and are ~9× faster on short clips
+  (9 ms vs 82 ms for 1.2 s, tiny), but the decoder then fails to emit EOT and
+  loops to max_length when speech fills the window. Reproduced with CT2's own
+  Python API (4.8.1), so it is not an integration bug; faster-whisper simply
+  never exercises that path (always pads to 3000). whisper.cpp-the-CLI
+  encodes variable lengths correctly — but note the symmetry: **zee cannot
+  use that lever either**, because shrinking `audio_ctx` on a reused
+  whisper_state garbles output (see "audio_ctx sizing"). In zee's production
+  shape both engines pay full-window encoder cost on every clip; the
+  variable-length advantage is real in the engine benchmark but not shippable
+  here.
+
+Integration notes if this is ever revisited: CT2 has no C API (a ~300-line
+C++ shim is needed), no audio frontend (mel spectrogram implemented in the
+shim via Accelerate sgemm), and no detokenizer in the C++ API (byte-level BPE
+inverse in Go). The pip wheel's dylib links cleanly (Accelerate + libc++
+only) but needs `install_name_tool` + ad-hoc `codesign` after extraction.
+
+
+## Smaller multilingual whispers (small/medium) vs turbo-q5: measured, rejected (2026-08-03)
+
+Question: could `ggml-small` or `ggml-medium` serve the multilingual path
+faster than `whisper-turbo-q5`? Measured on M5 Pro, whisper.cpp+Metal, greedy,
+best of 5, inference only, on a real 9.8 s saved Turkish dictation with
+embedded English terms ("Agent Bootstrap", "ram pask" — the code-switching
+case zee exists for):
+
+| Model | `-l tr` | auto | encode | decode |
+|---|---|---|---|---|
+| small (fp16, 244M) | 187 ms | 245 ms | 63 ms | 111 ms |
+| medium (fp16, 769M) | 381 ms | 540 ms | 168 ms | 201 ms |
+| turbo q5_0 (809M, shipped) | 332 ms | 600 ms | 279 ms | 42 ms |
+
+Two findings, each sufficient on its own:
+
+- **medium is dominated, never an option.** It is *slower* than the quantized
+  turbo on both language settings AND less accurate. The reason is structural:
+  turbo pairs the large encoder with a 4-layer decoder, medium carries a full
+  24-layer decoder — and decode runs on CPU, so medium pays 201 ms vs turbo's
+  42 ms on this clip. There is no clip length or hardware where medium wins.
+- **small's speed is real but its accuracy is not good enough.** ~1.8× faster
+  than turbo with a forced language, ~2.4× with auto-detect (detect cost
+  scales with encoder size: +58 ms vs +265 ms). But on the code-switched clip
+  it mangles exactly the English terms that are the point of the multilingual
+  path: "Agent Bootstrap" → "Ejens Boots Shop", plus repetition. medium gets
+  the terms mostly right ("run task" for "ram pask"); only turbo tracks the
+  Groq large-v3-turbo reference closely.
+
+Quality caveat: the accuracy read is n=1 (one clip, one speaker, model outputs
+adjudicated against the Groq reference, not a human transcript) — directional,
+not a WER. The latency numbers are solid. Benchmarks ran `-nt`; zee runs
+timestamps-on, which adds a few percent to decode on all rows equally.
+
+Conclusion: turbo-q5 stays. The only smaller model worth revisiting would be a
+*quantized* small (q5_0) if its decode cost drops enough — but the accuracy
+gap on code-switching is the disqualifier, not the speed.
