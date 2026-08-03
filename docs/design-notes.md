@@ -794,3 +794,60 @@ timestamps-on, which adds a few percent to decode on all rows equally.
 Conclusion: turbo-q5 stays. The only smaller model worth revisiting would be a
 *quantized* small (q5_0) if its decode cost drops enough — but the accuracy
 gap on code-switching is the disqualifier, not the speed.
+
+
+## Open improvement: two-stage language detection (small detects, turbo transcribes)
+
+Not implemented — recorded 2026-08-03 as the next thing to try on the
+multilingual latency path.
+
+Auto-detect costs a full turbo encoder pass (~265 ms on M5 Pro, ~1.0 s on M1
+Pro) per clip. But language ID is a much easier problem than transcription and
+does not need the big model. Measured on saved clips: `ggml-small` detects
+Turkish (p=0.68 on a mixed tr/en dictation) and English (p=0.997) correctly;
+`ggml-tiny` is unreliable (detected German on the same Turkish clip — do not
+go below small). small's encoder pass is ~60 ms.
+
+Plan: small-detect (~60 ms) + turbo with forced language (~332 ms) ≈ 395 ms
+vs ~600 ms today — ~1.5× on the auto path with byte-identical transcription
+(same turbo model, same language auto would have picked). Harden with a
+two-language prior: take argmax over just the user's languages from
+`whisper_lang_auto_detect`'s prob array instead of all 99. Open questions:
+detection-agreement rate small-vs-turbo on real code-switched clips (fallback
+to turbo-auto on low confidence?), memory cost of a second loaded model
+(small-q5_0 ≈ 180 MB; detection uses only the encoder, quantization is
+irrelevant), and whether the detect pass can run on a short prefix.
+
+
+## STT landscape: what comparable apps ship (reference, verified 2026-08-03)
+
+Reference material for engine decisions, not a decision itself. Verified by
+reading the dependency manifests of the open-source apps (VoiceInk, Handy,
+Voquill cloned and inspected); superwhisper is closed-source, so its row is
+their marketing plus what's publicly known.
+
+| App | Local engines | Models | Acceleration | Turkish path |
+|---|---|---|---|---|
+| zee | whisper.cpp + parakeet.cpp (shared ggml) | whisper-turbo-q5_0, Parakeet 110m-en / v3-q4_k | Metal | whisper-turbo (only option) |
+| VoiceInk (OSS, Swift) | whisper.cpp + FluidAudio (CoreML Parakeet/Nemotron) + Apple Speech + cloud | whisper ggml (non-quantized paired w/ **Core ML encoder bundles**; q5/q8 without), Parakeet TDT v2/v3, Nemotron streaming | Metal (whisper), **ANE** (Parakeet) | whisper only — FluidAudio v3 has no tr |
+| Handy (OSS, Rust/Tauri) | transcribe-cpp (whisper GGUF) + transcribe-rs (ONNX: Parakeet, Moonshine, SenseVoice, GigaAM) | whisper ggml, parakeet v2/v3 int8-ONNX | Metal, Vulkan (Win), CPU ONNX | whisper only |
+| Voquill (OSS, Rust/Tauri) | whisper-rs (whisper.cpp) + cloud | whisper ggml | "optional GPU" | whisper only |
+| superwhisper (closed) | unknown, whisper family | "Whisper … Large" tiers + cloud LLMs | claims Apple-Silicon-optimized | whisper only |
+
+Takeaways:
+
+- **Nobody beats zee's Turkish path.** Every app runs the same whisper.cpp for
+  it; the only extra trick in the field is VoiceInk pairing *non-quantized*
+  whisper models with Core ML encoder bundles — the option already measured
+  and declined here (−15–21% on M5 for +1.2 GB/model, and upstream whisper.cpp
+  dropped Core ML after v1.9.1). Their payload/memory for equivalent latency
+  is worse than turbo-q5_0.
+- **The speed everyone else markets is Parakeet**, which zee already ships
+  (110m: 1.9 s → 18 ms on M5). VoiceInk's one real difference is running it on
+  the ANE via CoreML/FluidAudio instead of Metal-ggml — lower power, but
+  single-digit ms at zee's latencies; not worth a second engine.
+- **Choices worth borrowing, none urgent:** streaming partial results
+  (VoiceInk via Parakeet-EOU/Nemotron — the only categorically faster *feel*,
+  English-only today); Apple Speech as a zero-download built-in fallback
+  (offline, supports tr-TR, accuracy below turbo); ONNX Parakeet (Handy) only
+  matters for a Windows/Linux port.
