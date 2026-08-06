@@ -1,8 +1,13 @@
 package clipboard
 
 /*
-#cgo LDFLAGS: -framework ApplicationServices
+#cgo LDFLAGS: -framework AppKit -framework ApplicationServices
+#include <stdlib.h>
 #include <ApplicationServices/ApplicationServices.h>
+
+int clipCopy(const char *utf8);
+char *clipRead(void);
+void clipPaste(void);
 
 static int testAccessibility() {
 	return AXIsProcessTrusted();
@@ -11,50 +16,38 @@ static int testAccessibility() {
 import "C"
 
 import (
-	"os"
-	"strings"
-	"sync"
-
-	"github.com/micmonay/keybd_event"
+	"errors"
+	"unsafe"
 )
 
-var (
-	kb     keybd_event.KeyBonding
-	kbOnce sync.Once
-	kbErr  error
-)
+// Init is a no-op on macOS — NSPasteboard and CGEvent need no setup. It exists
+// because the Linux backend must open /dev/uinput before the first paste.
+func Init() error { return nil }
 
-// ensureUTF8Locale guarantees pbcopy/pbpaste interpret text as UTF-8.
-// GUI apps launched from Finder inherit no LANG/LC_CTYPE, so pbcopy falls
-// back to a legacy encoding and mangles multi-byte characters (e.g. Turkish
-// ğ ş ı İ ç ö ü). Setting LC_CTYPE to a UTF-8 locale fixes this for the child
-// process that atotto/clipboard exec's. We only override when the current
-// ctype locale is not already UTF-8, so an explicit tr_TR.UTF-8 etc. is kept.
-func init() {
-	isUTF8 := func(v string) bool {
-		v = strings.ToLower(v)
-		return strings.Contains(v, "utf-8") || strings.Contains(v, "utf8")
+func write(text string) error {
+	c := C.CString(text)
+	defer C.free(unsafe.Pointer(c))
+	if C.clipCopy(c) == 0 {
+		return errors.New("pasteboard rejected the write")
 	}
-	if isUTF8(os.Getenv("LC_ALL")) || isUTF8(os.Getenv("LC_CTYPE")) || isUTF8(os.Getenv("LANG")) {
-		return
-	}
-	os.Setenv("LC_CTYPE", "en_US.UTF-8")
+	return nil
 }
 
-func Init() error {
-	kbOnce.Do(func() {
-		kb, kbErr = keybd_event.NewKeyBonding()
-	})
-	return kbErr
+func read() (string, error) {
+	c := C.clipRead()
+	if c == nil {
+		return "", nil // no text on the pasteboard; not an error
+	}
+	defer C.free(unsafe.Pointer(c))
+	return C.GoString(c), nil
 }
 
+// Paste fires Cmd+V. macOS reports nothing when Accessibility is missing — the
+// events are simply dropped — so there is no error to return here; the setup
+// wizard uses CheckAccessibility to catch that case up front.
 func Paste() error {
-	if err := Init(); err != nil {
-		return err
-	}
-	kb.SetKeys(keybd_event.VK_V)
-	kb.HasSuper(true) // Cmd+V on macOS
-	return kb.Launching()
+	C.clipPaste()
+	return nil
 }
 
 func CheckAccessibility() bool {

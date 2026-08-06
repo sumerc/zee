@@ -37,6 +37,7 @@ func (s *localSession) Close() (SessionResult, error) {
 	raw := s.pcm
 	s.mu.Unlock()
 
+	convStart := time.Now()
 	f32 := audio.PCMToF32(raw)
 	n := len(f32)
 	if n == 0 {
@@ -44,6 +45,7 @@ func (s *localSession) Close() (SessionResult, error) {
 	}
 
 	audioData := audio.PCMToWAV(raw)
+	convertMs := float64(time.Since(convStart).Microseconds()) / 1000
 
 	start := time.Now()
 	text, err := s.engine.Transcribe(f32, s.lang, s.hints)
@@ -67,6 +69,7 @@ func (s *localSession) Close() (SessionResult, error) {
 			AudioLengthS: audioSec,
 			RawSizeKB:    rawKB,
 			InferenceMs:  inferenceMs,
+			ConvertMs:    convertMs,
 			TotalTimeMs:  inferenceMs,
 		},
 		Metrics: []string{

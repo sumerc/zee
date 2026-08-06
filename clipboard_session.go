@@ -19,18 +19,23 @@ type clipboardSession struct {
 
 var clip clipboardSession
 
-func (c *clipboardSession) PasteText(text string) {
+func (c *clipboardSession) PasteText(text string) (copyMs, keyMs float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Log failures — a broken paste (revoked Accessibility, pbcopy error) is
 	// otherwise indistinguishable from "no text" for the user.
+	t := time.Now()
 	if err := clipboard.Copy(text); err != nil {
 		log.Warnf("paste: clipboard copy failed: %v", err)
 		return
 	}
+	copyMs = float64(time.Since(t).Microseconds()) / 1000
+	t = time.Now()
 	if err := clipboard.Paste(); err != nil {
 		log.Warnf("paste: keystroke failed (Accessibility?): %v", err)
 	}
+	keyMs = float64(time.Since(t).Microseconds()) / 1000
+	return copyMs, keyMs
 }
 
 func (c *clipboardSession) SaveCurrent() string {
