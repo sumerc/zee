@@ -430,6 +430,118 @@ are now known to conflict: the ladder is what repairs the decodes a tight window
 breaks. Working notes and the full tables are in `whisper-optimize.md` item 1.
 
 
+**Superseded in part 2026-08-06** by the encoder-reuse patch below: case H (cold
+state, auto, sized) no longer garbles, so sizing no longer needs a forced
+language *or* a primed state — it needs a fresh state, and `whisper_init_state`
+is now measured at **~10 ms** (M5 Pro, best of 10, warm process), not the Metal
+setup this paragraph feared. What still stands: the reused-state shrink fault
+(D/F/G/I/J/L), the ~800 floor, and the ladder conflict.
+
+## Auto-detect costs one encoder pass, not two (patched 2026-08-06)
+
+`whisper_full_with_state` in auto mode encoded the same audio **twice**:
+`whisper_lang_auto_detect_with_state` runs the encoder at `seek = 0`, and the
+main decode loop then re-encodes that identical first window. On dictation-length
+clips the encoder is the whole cost, so auto-detect simply doubled it.
+
+`patches/whisper.cpp/0001-reuse-detect-encoder-output.patch` (applied by
+`make whisper-lib`) does two things:
+
+- tags the encoder output in `whisper_state` with the `(mel_offset, n_audio_ctx)`
+  it was computed from, and skips a re-encode that would reproduce it. The detect
+  decode only writes self-KV, so `embd_enc`/`kv_cross` are still valid; the mel
+  setters invalidate the tag.
+- assigns `exp_n_audio_ctx` **before** the detect block instead of after
+  (v1.9.1 :6862 vs :6997). One call now encodes at exactly one window size.
+
+Measured on the standard corpus (M5 Pro, `internal/localbench`, best of 5,
+whisper-turbo-q5), before → after:
+
+```
+clip            auto before   auto after   speedup    forced lang
+short (1.4 s)       530 ms       274 ms      1.94x     unchanged
+en (1.6 s)          538 ms       278 ms      1.94x     unchanged
+en-5.2s             538 ms       278 ms      1.94x     unchanged
+tr-9.8s             588 ms       329 ms      1.79x     unchanged
+en-70s             1383 ms      1137 ms      1.22x     unchanged
+en-183s            3343 ms      3075 ms      1.09x     unchanged
+```
+
+Transcripts are unchanged — the skipped work was bit-identical, and auto output
+now equals forced-language output on every corpus clip. The forced-language path
+never had the second encode and is untouched, within noise. Long clips gain less
+because one saved encode amortises over many windows.
+
+The second half of the patch also fixes fault-matrix case H, which is what
+reopens `audio_ctx` sizing (above). Sizing on top of this is worth a further
+~1.7× on clips under ~16 s (274 → ~160 ms at ac=800, fresh state per utterance)
+but is **not** transcript-preserving: a different window changes punctuation and
+wording, so it is a quality call, not a free win. Not taken; `audioCtxFor`
+still returns 0.
+
+This is upstream issue **#3954** (opened 2026-07-25 from this project, still
+unanswered), now implemented. The issue proposed restricting the reuse to
+`offset_ms == 0` with a default `audio_ctx`; keying it on the
+`(mel_offset, n_audio_ctx)` the output was computed from instead is both simpler
+and general — it holds for every window, not just the first.
+
+**Why the patch is guarded twice.** Every failure mode here is silent: an
+unpatched build is still *correct*, just 2× slower on auto, and no test can tell
+a correct-but-slow build from a fast one. Worse, `git apply` only matches
+context lines, so after an upstream bump the patch can apply cleanly onto a
+restructured encode path and quietly stop doing anything. So:
+
+- `make whisper-lib` refuses to build when the submodule HEAD is not the
+  `WHISPER_BASE` commit the patches were benchmarked against. A bump is a hard
+  stop until someone re-runs the fault matrix and the benchmark and moves the
+  pin — deliberate friction, on the rare operation that earns it.
+- `TestWhisperPatchesApplied` compares the submodule's diff to
+  `patches/whisper.cpp/*.patch` byte-for-byte. That catches a dropped patch, a
+  bump that shifted the hunks, and hand-edits to the submodule source — the last
+  of which `git status` cannot show, because `ignore = dirty` (needed since the
+  patches leave the checkout permanently dirty) suppresses it.
+
+A fork of whisper.cpp carrying the patch as a commit was considered instead.
+Rejected while it is a single upstream-bound patch: pinning the submodule to an
+*official* commit plus a readable in-tree diff is easier to audit than a
+personal fork, does not make the build depend on a personal repo staying alive,
+and unwinds to nothing (delete one file, bump the pin) the day #3954 merges.
+Revisit if the patch set grows past two or three, or if upstream declines it and
+the divergence becomes long-lived — at that point commit history beats a stack
+of `.patch` files.
+
+**Where the remaining time goes (M5 Pro, turbo-q5, whisper's own counters):**
+
+```
+clip            mel   sample   encode   decode   prompt    total
+en (1.6 s)      0.8      1.6    258.2     12.8      0.0    276.1
+en-5.2s         1.6      1.7    253.3     12.1      0.0    271.0
+trim-15s        3.8      8.4    258.9     58.6      0.0    332.1
+en-70s         16.8     38.4    772.7    259.6     13.9   1109.0
+```
+
+Auto and forced-language columns are within noise of each other, which is the
+patch working: one encode either way. The encoder is **94% of a dictation-length
+transcribe and flat in clip length** — 258 ms whether the audio is 1.6 s or 15 s
+— because it always processes the padded 30 s window. Everything else is
+single-digit milliseconds. So there is exactly one whisper-side lever left, and
+it is `audio_ctx` sizing; decode, mel, sampling and parameter tweaks have
+nothing left to give. (Checked while looking: `flash_attn` and `use_gpu` are
+already on by `whisper_context_default_params`, and greedy `best_of = 5` costs
+nothing at temperature 0 — `n_decoders_cur` is 1 until the fallback ladder
+fires, which is also what makes that ladder so expensive when a too-tight
+window triggers it.)
+
+**Newer ggml is not a lever (measured 2026-08-06).** whisper.cpp v1.9.2 is
+essentially "sync ggml" over v1.9.1 — every other change in it is VAD or
+bindings work zee does not use — so it isolates the ggml 0.13.0 → 0.18.1 jump.
+Built standalone and run over the same corpus with zee's own turbo-q5 model and
+zee's params (greedy, timestamps on): encode ~255 ms and auto ~515 ms on both,
+i.e. **no meaningful win on M5 Pro**; the 70 s/183 s clips moved 3–8%, at the
+edge of noise. So the shared-ggml bump — which would mean re-validating
+parakeet's in-tree ggml patches against a new base — buys nothing on its own
+here. Untested on M1/M2, where older Metal kernels might benefit more.
+
 Ruled out while chasing it (each tested, not assumed): sampling strategy (beam
 search — whisper-cli's actual default at `beam_size=5` — garbles identically),
 `no_timestamps` (not a cause *here* — but a serious bug in its own right, see
@@ -441,6 +553,13 @@ aborted on exit in the C driver; in zee both engines load and tear down cleanly
 (exit 0, repeatedly). That was the driver's teardown order, not ggml sharing.
 
 Raw measurement detail: `zee-whisper-poc/FINDINGS.md`.
+
+**Conditional on `audio_ctx = 0` (noted 2026-08-06).** The whole argument below
+rests on the encoder window being fixed at 1500 frames. If `audioCtxFor` ever
+returns a sized window, trimming silence shortens the clip, which shrinks the
+window, which cuts encode time — the two levers multiply instead of being
+independent. Re-measure this entry before reusing it in a world where sizing
+ships.
 
 **Silence trimming (VAD before inference): not a whisper speed lever.**
 Handy runs Silero VAD during capture and drops non-speech before the model
@@ -895,6 +1014,78 @@ to turbo-auto on low confidence?), memory cost of a second loaded model
 (small-q5_0 ≈ 180 MB; detection uses only the encoder, quantization is
 irrelevant), and whether the detect pass can run on a short prefix.
 
+
+## The alternative-engine search space collapses (surveyed 2026-08-06)
+
+Prompted by "did we try every other library?". The budget above is what settles
+it: after the detect-encode patch, a dictation-length whisper transcribe is 94%
+one encoder pass over a **padded 30 s window**, and that padding is a property
+of the *Whisper architecture*, not of whisper.cpp. So a runtime swap can only
+make the same fixed encode faster by a constant; it cannot make the cost scale
+with audio length. That splits every candidate into two piles.
+
+**Engines that avoid the fixed window are already in the repo — but only for
+languages Parakeet covers.** Moonshine (useful-sensors) is the headline example
+— no zero-padding, compute proportional to audio, ~5× Whisper — and SenseVoice
+via sherpa-onnx is the same idea. Inside Parakeet's language set they are
+dominated by what zee already ships: Parakeet has no fixed window either, runs
+18 ms (110m-en) / 33 ms (v3-multi) on a short clip, and beats Moonshine
+tiny/base on accuracy (12.7% / 10.1% WER). sherpa-onnx would additionally mean a
+second inference runtime (onnxruntime) next to ggml to run a Parakeet zee
+already runs. Rejected on architecture, without benchmarking: no capability zee
+lacks.
+
+**That scoping matters more than it looks.** Parakeet v3's "25 languages" are
+the EU official set plus Russian and Ukrainian — **Turkish is not among them**,
+and neither are Arabic, Hebrew, Hindi, Japanese, Korean, Mandarin or any other
+non-European language. For those users Whisper is not the slow fallback, it is
+the *only* local engine, so the fast-path escape hatch above does not exist for
+them and every millisecond of the padded 30 s window is their daily latency.
+Ranking the remaining levers, weight `audio_ctx` sizing accordingly: it is the
+only whisper-side lever left, and for a Turkish or Japanese dictation it is the
+only lever there is.
+
+**So the only open question is coverage, not speed.** Whisper earns its place
+purely as the ~99-language fallback; anything replacing it must match that
+coverage, which Moonshine (en + 4), SenseVoice (5) and Parakeet v3 (25) do not.
+Only the Whisper family survives that filter, which is what makes MLX — the same
+weights on a different runtime — the one alternative still worth timing.
+
+**MLX: genuinely open, but the widely-cited number does not transfer.** A
+January 2026 benchmark reports `mlx_whisper` 2.03 ± 0.06× faster than
+whisper.cpp on large-v3-turbo. Reading the method: one long file, CLI defaults
+on both sides, model load included, hardware unstated. whisper.cpp's CLI default
+is beam search at `beam_size = 5` where zee decodes greedy, so an unknown part
+of that ratio is a sampling-strategy mismatch rather than runtime speed, and a
+long-file throughput ratio says little about a 1.6 s clip whose cost is one
+fixed encode. Untested here. The blocker is embedding, not plausibility:
+`mlx-whisper` is a Python package, there is no mainstream C/C++ Whisper on MLX,
+and MLX would be a *second* GPU runtime beside ggml in a Go binary. Worth
+timing before ever being worth integrating.
+
+**Lead worth following (build simplification, not latency): upstream
+whisper.cpp now ships Parakeet itself.** v1.9.2 builds `parakeet-cli` and
+`parakeet-quantize`, converts its own GGUFs (`ggml-org/parakeet-GGUF`), and runs
+`parakeet-tdt-0.6b-v3` — the same model as `parakeet-v3-multi`. Its
+implementation is TDT-only (`parakeet-arch.h` has the TDT duration hparams, no
+CTC path), and both of zee's Parakeet models use `Decoder: 2` (TDT), so both are
+candidates on paper. If it holds, the parakeet.cpp submodule, its *patched*
+ggml, the `WHISPER_USE_SYSTEM_GGML` prefix dance and `TestGGMLPinUnchanged` all
+collapse into one upstream submodule on an unpatched ggml — which would also
+make future ggml bumps free.
+
+**Priced 2026-08-06, and the price is a model release.** The formats are *not*
+compatible: upstream's Parakeet loads whisper.cpp-style `.bin` files, and
+feeding it `models-v3`'s `tdt-0.6b-v3-q4_k.gguf` fails outright with
+`parakeet_model_load: invalid model data (bad magic)`. Upstream publishes its
+own conversions at `ggml-org/parakeet-GGUF` (f32/f16/q8_0/q4_0/**q4_k** — the
+same quantization zee ships), so migrating means re-releasing the model set as
+`models-v4`, re-validating accuracy on both models, and every user
+re-downloading ~900 MB. It buys build simplicity, not latency or quality: same
+weights, same quantization. Park it until something else forces a model release,
+and fold it in then. Speed parity with mudler's build was never measured — the
+comparison was started and dropped as not worth the download, since the outcome
+cannot change the migration's value.
 
 ## Open/untested: Voxtral as a local engine (recorded 2026-08-04)
 
