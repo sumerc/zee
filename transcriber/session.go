@@ -38,6 +38,7 @@ type BatchStats struct {
 	TLSProtocol      string
 	Confidence       float64
 	InferenceMs      float64
+	ConvertMs        float64 // local path: PCM→f32 + PCM→WAV conversion before inference
 }
 
 type StreamStats struct {

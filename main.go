@@ -109,6 +109,15 @@ type recordingConfig struct {
 	tailWait        time.Duration // mic kept open after release so a fast keyup doesn't clip the last word
 	pressToRecordMs float64       // press→mic-live, filled at record start; logged with the transcription metrics
 	releasedAt      time.Time     // recording end, filled once it happens; start of the felt-latency metric
+	micStopMs       float64       // capture stop duration, filled after the record loop ends
+}
+
+// clipSave carries the saved clipboard content plus how long the pbpaste fork
+// took, so the felt-latency breakdown can separate the fork's cost from how
+// long the finish path actually waited on it.
+type clipSave struct {
+	prev   string
+	saveMs float64
 }
 
 var configMu sync.Mutex
@@ -1156,9 +1165,15 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 	// kernel clones the page tables (~0.5s with a local model loaded), which
 	// delays keyup delivery and misreads a quick tap as a hold. Saved lazily
 	// instead: at the first streamed paste, or once recording has ended.
-	clipCh := make(chan string, 1)
+	clipCh := make(chan clipSave, 1)
 	var clipOnce sync.Once
-	saveClip := func() { clipOnce.Do(func() { clipCh <- clip.SaveCurrent() }) }
+	saveClip := func() {
+		clipOnce.Do(func() {
+			t := time.Now()
+			prev := clip.SaveCurrent()
+			clipCh <- clipSave{prev: prev, saveMs: float64(time.Since(t).Microseconds()) / 1000}
+		})
+	}
 
 	updatesDone := make(chan struct{})
 	go func() {
@@ -1191,6 +1206,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 	}
 	rec.Wait()
 	cfg.releasedAt = rec.ReleasedAt()
+	cfg.micStopMs = rec.micStopMs
 
 	if rec.totalFrames < uint64(encoder.SampleRate/10) {
 		tSess.Close()
@@ -1209,13 +1225,18 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 	return done, nil
 }
 
-func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDone <-chan struct{}, skipPaste bool, recDur time.Duration, cfg recordingConfig) {
+func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updatesDone <-chan struct{}, skipPaste bool, recDur time.Duration, cfg recordingConfig) {
 	result, closeErr := sess.Close()
 	<-updatesDone
 
 	var clipPrev string
+	var lat log.LatencyBreakdown
 	if cfg.autoPaste {
-		clipPrev = <-clipCh
+		t := time.Now()
+		cs := <-clipCh
+		clipPrev = cs.prev
+		lat.ClipSaveMs = cs.saveMs
+		lat.ClipWaitMs = float64(time.Since(t).Microseconds()) / 1000
 	}
 
 	if closeErr != nil {
@@ -1244,7 +1265,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	}
 
 	if closeErr == nil && !cfg.stream && result.HasText && cfg.autoPaste && !skipPaste {
-		clip.PasteText(result.Text)
+		lat.PasteCopyMs, lat.PasteKeyMs = clip.PasteText(result.Text)
 	}
 
 	// The text is delivered by here on both paths — streamed pastes were joined
@@ -1252,7 +1273,13 @@ func finishTranscription(sess transcriber.Session, clipCh chan string, updatesDo
 	// the wait the user perceives, whether it ended in a paste or in text they
 	// still have to hit Cmd+V for.
 	if closeErr == nil && result.HasText && !cfg.releasedAt.IsZero() {
-		log.ReleaseToText(float64(time.Since(cfg.releasedAt).Microseconds()) / 1000)
+		lat.TailWaitMs = float64(cfg.tailWait.Milliseconds())
+		lat.MicStopMs = cfg.micStopMs
+		if result.Batch != nil {
+			lat.ConvertMs = result.Batch.ConvertMs
+			lat.InferenceMs = result.Batch.InferenceMs
+		}
+		log.ReleaseToText(float64(time.Since(cfg.releasedAt).Microseconds())/1000, lat)
 	}
 
 	if cfg.autoPaste && !skipPaste {

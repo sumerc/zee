@@ -509,6 +509,77 @@ Kept enabled because it only costs when it fires, and when it fires it is
 rescuing quality on hard audio. Revisit if diagnostics ever show an
 `inference_ms` far above its `audio_s` peers (the stall signature).
 
+## How the Core ML/ANE path actually works (mechanism, source-verified 2026-08-04)
+
+Reference for the entry above ("Metal, not Core ML/ANE"). Recorded because the
+shape of this path is counter-intuitive and the decision only makes sense once
+you see it. Verified by reading `third_party/whisper.cpp` at v1.9.1 (`f049fff9`)
+and inspecting the PoC bundle in `~/Desktop/p/personal/zee-whisper-poc/models`.
+
+**The ANE runs the encoder only. It never runs the model.** `whisper_encode_
+external()` (`src/whisper.cpp:1958`) returns true when a Core ML context is
+loaded; the mel-conv and encoder ggml graphs are then skipped entirely and
+`whisper_coreml_encode()` writes straight into `wstate.embd_enc`
+(`src/whisper.cpp:2412`). Everything after that — the autoregressive decoder,
+KV caches, sampling — stays on ggml/Metal, untouched. Split:
+
+```
+audio → mel → [conv + ENCODER] → ANE, Core ML, fp16, .mlmodelc, one pass
+                    ↓ embd_enc
+              [DECODER loop]   → ggml/Metal + CPU, q5_0, .gguf
+                    ↓
+                  text
+```
+
+**Why only the encoder, structurally.** The encoder is a single pass over a
+fixed 1500-frame window — static shapes, big matmuls, exactly what the ANE
+compiler wants. The decoder runs once per token with a growing KV cache and
+variable length; Core ML can't express that usefully. Upstream converted it
+once and shelved it: `models/convert-whisper-to-coreml.py` still carries
+`convert_decoder()`, but `generate-coreml-model.sh` hardcodes
+`--encoder-only True` and ends with `# TODO: decoder (sometime in the future
+maybe)`. This is a property of the ANE, not a whisper.cpp gap — the same
+constraint is why FluidAudio/VoiceInk can put *Parakeet* on the ANE (small,
+static, CTC/TDT head) but nobody ships an ANE Whisper decoder.
+
+**So you download both files, and the second one is additive.** The full gguf
+is always loaded (it holds the decoder); the mlmodelc is loaded *on top*
+(`src/whisper.cpp:3440`). Hence "+1.2 GB per model", not "1.2 GB instead of
+547 MB".
+
+**gguf quantization can never reach the ANE.** whisper derives the bundle path
+from the model path and explicitly strips a `-qX_X` suffix
+(`whisper_get_coreml_path_encoder`, `src/whisper.cpp:3326`): `ggml-large-v3-
+turbo-q5_0.bin` → `ggml-large-v3-turbo-encoder.mlmodelc`. One encoder bundle
+serves every quantization of a model family, by design. There is therefore no
+"quantized model on the ANE" configuration to test — the ANE measurements in
+the entry above were *already* q5_0-gguf + fp16-ANE-encoder, which is the only
+shape this path has.
+
+**What the bundle is, measured.** `weight.bin` = 1,273,969,152 B ≈ 635 M params
+× 2 B → fp16. `metadata.json`: `storagePrecision: Float16`, `computePrecision:
+Mixed (Float16, Float32, Int32)`. Note the converter's `--quantize` flag means
+*fp32 → fp16*, not int8 (`convert-whisper-to-coreml.py:303`, default False, and
+`generate-coreml-model.sh` never passes it) — our 1.27 GB bundle is fp16 because
+it came prebuilt from HuggingFace, not from that script. A leftover empty
+`ggml-large-v3-turbo-q5_0-encoder.mlmodelc/` in the PoC is the dead end from
+before the strip logic was understood.
+
+**The one untested variant, and why it is not the win it sounds like.** The
+mlmodelc has its own compression track — `coremltools.optimize.coreml`
+(palettization, int8 linear) — never tried here. It would attack payload
+(1.27 GB → maybe ~350 MB) but not latency: ANE compute is fp16 regardless, so
+compressed weights are expanded before the math. It also leaves both real
+blockers intact — the per-update ANE recompile (~2.5 min on M1) and a second
+asset pipeline. Worth trying only inside the still-open "ANE on M1-class
+hardware only" idea, where it makes the payload tolerable.
+
+**Corollary: ANE and `audio_ctx` sizing compete for the same win.** Both
+accelerate the encoder and nothing else — but Core ML fixes the encoder input
+at 1500 frames, so they are mutually exclusive, and sizing measured ~6× on the
+encoder against ANE's ~1.2×, with no second file and no recompile.
+
+
 ## Parakeet v3 back as the fast multilingual option (2026-07-26)
 
 models-v2 retired `parakeet-v3-multi` on the premise that Whisper *strictly*
@@ -776,8 +847,14 @@ Two findings, each sufficient on its own:
 - **medium is dominated, never an option.** It is *slower* than the quantized
   turbo on both language settings AND less accurate. The reason is structural:
   turbo pairs the large encoder with a 4-layer decoder, medium carries a full
-  24-layer decoder — and decode runs on CPU, so medium pays 201 ms vs turbo's
-  42 ms on this clip. There is no clip length or hardware where medium wins.
+  24-layer decoder, so medium pays 201 ms vs turbo's 42 ms on this clip. There
+  is no clip length or hardware where medium wins. (An earlier draft of this
+  note blamed "decode runs on CPU" — that is wrong. `sched_decode` is built
+  over the same `{Metal, CPU}` backend list as the encoder,
+  `third_party/whisper.cpp/src/whisper.cpp:874`. The cost is structural to
+  batch-1 autoregressive decoding — one sequential pass per token, dominated
+  by kernel-launch and weight-read latency rather than FLOPs — which is
+  exactly the regime where GPU offload buys the least.)
 - **small's speed is real but its accuracy is not good enough.** ~1.8× faster
   than turbo with a forced language, ~2.4× with auto-detect (detect cost
   scales with encoder size: +58 ms vs +265 ms). But on the code-switched clip
@@ -817,6 +894,49 @@ detection-agreement rate small-vs-turbo on real code-switched clips (fallback
 to turbo-auto on low confidence?), memory cost of a second loaded model
 (small-q5_0 ≈ 180 MB; detection uses only the encoder, quantization is
 irrelevant), and whether the detect pass can run on a short prefix.
+
+
+## Open/untested: Voxtral as a local engine (recorded 2026-08-04)
+
+**Never measured.** Voxtral exists in zee only as a cloud provider
+(`transcriber/mistral.go`, `voxtral-mini-latest`). No local Voxtral has been
+run, so nothing below is a measurement — it is desk research plus one
+structural argument that is itself unverified. Recorded so the next person
+starts from the open question rather than from scratch.
+
+Two candidate local paths, and why neither has been tried:
+
+- **`antirez/voxtral.c`** — runs Voxtral Realtime 4B (0.6B encoder + 3.4B
+  decoder). Rejected on size alone, without benchmarking: **BF16 only, no
+  quantization supported or planned**. 8.9 GB weights on disk, ~8.4 GB GPU
+  weight cache, ~1.8 GB KV. zee's whole multilingual model is 547 MB. Its
+  published M3 Max numbers — 284 ms encoder for 3.6 s of audio, 23.5 ms/decode
+  step — put a 10 s dictation somewhere near 1.5–2 s against turbo-q5's
+  ~330 ms, but that comparison was never run head-to-head here. It also
+  carries its own hand-written Metal kernels rather than ggml, so it would be
+  a *third* engine outside the single-ggml build, not a backend swap. Author's
+  own caveat: "mostly tested against few samples, and likely requires some
+  more work to be production quality."
+- **Voxtral-Mini-3B via llama.cpp `mtmd`** — this is the path that is actually
+  open. Quantized GGUFs exist (`ggml-org/Voxtral-Mini-3B-2507-GGUF`,
+  bartowski's variants; Q4_K ≈ 2 GB), and it is the same ggml family zee
+  already builds. **The reason it looks unattractive is a hypothesis, not a
+  result:** a 3B LLM decoder generating token-by-token should land in the same
+  regime that made whisper-medium lose to turbo (see the note above) — the
+  cost of autoregressive decode scales with decoder depth × tokens and is
+  latency-bound, so Metal offload does not rescue it. But that reasoning is
+  extrapolated from whisper's 24-layer decoder to a different architecture on
+  a different runtime, and llama.cpp is far better optimised for exactly this
+  workload (batched KV, flash-attn, Metal graph reuse) than whisper.cpp's
+  decode path is. **It could be wrong.** Nobody has timed a Q4 Voxtral-Mini on
+  an M-series chip against turbo-q5 on the same clip.
+
+Cheapest way to close the question, in order: (1) run the existing *cloud*
+Voxtral over saved samples (`/wer-wolf`) — if its accuracy on code-switched
+tr/en is not clearly better than turbo, the local port is moot regardless of
+speed; (2) only if it is, time `llama-mtmd-cli` with a Q4 GGUF against
+`whisper-cli` with `ggml-large-v3-turbo-q5_0.bin` on the same clip, and
+settle the decode-cost hypothesis with a number.
 
 
 ## STT landscape: what comparable apps ship (reference, verified 2026-08-03)

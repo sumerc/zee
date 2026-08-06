@@ -29,6 +29,8 @@ type recordingSession struct {
 	mon             *silenceMonitor
 	tailWait        time.Duration // mic stays open this long after release (anti-clip)
 
+	micStopMs float64 // capture.Stop()+ClearCallback duration; written by Wait, read after it returns
+
 	mu          sync.Mutex
 	totalFrames uint64
 	meterLevel  float32
@@ -361,8 +363,10 @@ func (r *recordingSession) ReleasedAt() time.Time {
 func (r *recordingSession) Wait() {
 	<-r.done
 
+	stopStart := time.Now()
 	r.capture.Stop()
 	r.capture.ClearCallback()
+	r.micStopMs = float64(time.Since(stopStart).Microseconds()) / 1000
 
 	r.mu.Lock()
 	r.stopped = true

@@ -232,16 +232,54 @@ func HotkeyPress(downToUpMs float64, mode string) {
 	diagLog.Info().Float64("down_to_up_ms", downToUpMs).Str("mode", mode).Msg("hotkey_press")
 }
 
+// LatencyBreakdown itemizes the release→text window so a slow felt_latency line
+// decomposes into its stages. ClipSaveMs is the pbpaste fork's own duration; it
+// runs concurrently with inference, so only ClipWaitMs — how long the finish
+// path actually blocked waiting for it — belongs to the serial sum. Zero fields
+// are stages that didn't run (stream path, autoPaste off) and are omitted.
+type LatencyBreakdown struct {
+	TailWaitMs  float64 // configured mic tail-wait after release
+	MicStopMs   float64 // capture device stop + callback clear
+	ConvertMs   float64 // local path: PCM→f32 + PCM→WAV before inference
+	InferenceMs float64 // engine/provider time (repeated from the transcription line)
+	ClipSaveMs  float64 // pbpaste fork, concurrent with inference — informational
+	ClipWaitMs  float64 // block on the pbpaste fork after inference returned
+	PasteCopyMs float64 // pbcopy fork inside PasteText
+	PasteKeyMs  float64 // Cmd+V keystroke synthesis inside PasteText
+}
+
 // ReleaseToText records the one latency the user actually feels: hotkey release
 // (or silence auto-close) → text delivered to the clipboard/paste. It spans the
 // whole tail — mic tail-wait, device stop, encode, inference, network, paste — so
 // it is the number to watch for "why did that feel slow", and it is emitted for
 // batch and streaming providers alike, unlike the per-mode metrics lines.
-func ReleaseToText(ms float64) {
+// unaccounted_ms is the window minus every measured serial stage; a large value
+// means something unmeasured (scheduling, updatesDone) is eating time.
+func ReleaseToText(ms float64, b LatencyBreakdown) {
 	if !logReady.Load() {
 		return
 	}
-	diagLog.Info().Float64("release_to_text_ms", ms).Msg("felt_latency")
+	serial := b.TailWaitMs + b.MicStopMs + b.ConvertMs + b.InferenceMs +
+		b.ClipWaitMs + b.PasteCopyMs + b.PasteKeyMs
+	ev := diagLog.Info().Float64("release_to_text_ms", ms)
+	for _, f := range []struct {
+		key string
+		val float64
+	}{
+		{"tail_wait_ms", b.TailWaitMs},
+		{"mic_stop_ms", b.MicStopMs},
+		{"convert_ms", b.ConvertMs},
+		{"inference_ms", b.InferenceMs},
+		{"clip_save_ms", b.ClipSaveMs},
+		{"clip_wait_ms", b.ClipWaitMs},
+		{"paste_copy_ms", b.PasteCopyMs},
+		{"paste_key_ms", b.PasteKeyMs},
+	} {
+		if f.val > 0 {
+			ev = ev.Float64(f.key, f.val)
+		}
+	}
+	ev.Float64("unaccounted_ms", ms-serial).Msg("felt_latency")
 }
 
 func TranscriptionText(text string) {
