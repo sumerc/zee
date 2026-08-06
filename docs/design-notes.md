@@ -971,3 +971,40 @@ Takeaways:
   English-only today); Apple Speech as a zero-download built-in fallback
   (offline, supports tr-TR, accuracy below turbo); ONNX Parakeet (Handy) only
   matters for a Windows/Linux port.
+
+## The felt-latency tail is paste, not inference (measured 2026-08-06)
+
+`felt_latency` used to log one number, so "parakeet feels slow" could not be
+attributed. It now itemizes the release→text window (tail wait, mic stop, PCM
+convert, inference, clipboard save, paste copy, paste keystroke, plus an
+`unaccounted_ms` remainder). What that showed, over ~57 dictations:
+
+- **Felt latency was near-constant (~900–1100 ms) while inference swung
+  100→700 ms.** That signature means fixed overhead dominated, not the model.
+  It also explains an earlier misreading: inference looked *inversely*
+  correlated with clip length, which was an artifact of the constant total.
+- **The overhead was the clipboard, not the engine.** On a representative
+  22.6 s clip: inference 298 ms against 255 ms of serial paste work —
+  `paste_copy_ms` 141 ms (pbcopy) + `paste_key_ms` 114 ms (keybd_event).
+
+Two distinct causes, both now removed on macOS (`clipboard/clipboard_darwin.m`):
+
+- **fork() cost scales with resident memory.** atotto's Copy/Read exec pbcopy
+  and pbpaste; fork freezes every thread while the kernel clones page tables,
+  which is ~140–250 ms once a local model is resident (RSS ~660 MB). Replaced
+  with NSPasteboard: **172 µs** for a copy, ~800x faster, and it removes the
+  `LC_CTYPE=en_US.UTF-8` hack that existed only so the pbcopy *child* would not
+  mangle Turkish characters — NSString carries the encoding itself.
+- **keybd_event slept 100 ms between key down and key up** (`tapKey`, with the
+  comment "ignore if speed is most in my test system"). Replaced with a direct
+  CGEvent pair, deliberately using the same mechanism it had proven — NULL
+  source, `kCGAnnotatedSessionEventTap`, explicit flags — minus the sleep.
+
+**The clipboard *save* fork was already free, and that is worth remembering.**
+`clip_save_ms` ran 241 ms but `clip_wait_ms` was 0: it overlaps inference by
+design (saved lazily after recording ends, never during the press — see
+`main.go`). It only becomes visible when inference is faster than the fork, so
+the fix had to cover Read as well as Copy, not just the obviously-serial half.
+
+Linux keeps the atotto backend: no local model inflates RSS there, so the fork
+is cheap and a second native backend would not pay for itself.

@@ -1,11 +1,7 @@
 package clipboard
 
-import cb "github.com/atotto/clipboard"
+// Read returns the clipboard's current text, or "" when it holds none.
+func Read() (string, error) { return read() }
 
-func Read() (string, error) {
-	return cb.ReadAll()
-}
-
-func Copy(text string) error {
-	return cb.WriteAll(text)
-}
+// Copy replaces the clipboard contents with text.
+func Copy(text string) error { return write(text) }

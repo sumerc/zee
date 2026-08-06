@@ -7,7 +7,14 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	cb "github.com/atotto/clipboard"
 )
+
+// xclip/xsel via atotto: the fork cost that made macOS go native is not worth
+// a second native backend here, where no local model inflates resident memory.
+func read() (string, error)   { return cb.ReadAll() }
+func write(text string) error { return cb.WriteAll(text) }
 
 // ioctl constants from linux/uinput.h
 const (
