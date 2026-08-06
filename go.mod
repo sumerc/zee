@@ -12,7 +12,6 @@ require (
 	github.com/jfreymuth/pulse v0.1.1
 	github.com/maxhawkins/go-webrtcvad v0.0.0-20210121163624-be60036f3083
 	github.com/mewkiz/flac v1.0.13
-	github.com/micmonay/keybd_event v1.1.2
 	github.com/rs/zerolog v1.34.0
 	github.com/shirou/gopsutil/v4 v4.26.5
 	golang.design/x/hotkey v0.4.1

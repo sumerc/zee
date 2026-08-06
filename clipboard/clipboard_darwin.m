@@ -6,10 +6,10 @@
 // live in a cgo preamble — it is compiled as C — so it goes here, mirroring
 // permissions/permissions_darwin.m.)
 //
-// Both replace things that cost real felt latency, measured: pbcopy/pbpaste
-// fork(), and fork freezes every thread for O(resident memory) — ~140-250 ms
-// once a local model is resident — while keybd_event held Cmd+V down for a
-// hardcoded 100 ms. See docs/design-notes.md.
+// Both replace things that cost real felt latency: pbcopy/pbpaste fork(), and
+// fork freezes every thread for O(resident memory), which is significant once a
+// local model is resident — while keybd_event held Cmd+V down for a hardcoded
+// 100 ms sleep. Measurements in docs/design-notes.md.
 
 // clipCopy replaces the pasteboard with one UTF-8 text item. Returns 1 on
 // success. No locale involved, unlike the pbcopy child process it replaces.

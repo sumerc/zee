@@ -1000,6 +1000,22 @@ Two distinct causes, both now removed on macOS (`clipboard/clipboard_darwin.m`):
   CGEvent pair, deliberately using the same mechanism it had proven — NULL
   source, `kCGAnnotatedSessionEventTap`, explicit flags — minus the sleep.
 
+**The feedback beep was blocking the release path (M5 Pro).** With the clipboard
+fixed, a stubborn ~50 ms remainder was left in `unaccounted_ms`. One-off probes
+across every unmeasured segment found all of them clean (tray 0.18 ms, meter
+stats 0.09 ms, goroutine handoff 0.04 ms, `updatesDone` 0.00 ms, `captureRSS`
+23 us despite gopsutil dlopen/dlclose-ing libproc per call) except one:
+`audio.PlayEnd()` at **46-49 ms**, matching the remainder almost exactly.
+
+AVAudioPlayer's `-play` blocks while it starts the audio hardware. `prepareToPlay`
+at load does not prevent it, and the cost recurs every time — the hardware powers
+back down between beeps — so it was not warmup. The header comment claiming
+"fire-and-forget" was aspirational; the call was inline and synchronous. Now
+dispatched to a serial queue (`audio/beep_darwin.m`): the tone still sounds at the
+same instant, the caller no longer waits. It was on the push-to-talk path *twice*
+per dictation, so `PlayStart` at press was paying it too, inflating
+`press_to_record_ms`.
+
 **The clipboard *save* fork was already free, and that is worth remembering.**
 `clip_save_ms` ran 241 ms but `clip_wait_ms` was 0: it overlaps inference by
 design (saved lazily after recording ends, never during the press — see
