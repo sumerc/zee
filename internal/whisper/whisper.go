@@ -57,7 +57,7 @@ static char *zee_wsp_transcribe(struct whisper_context *ctx, const float *pcm,
     // a fixed 30 s per decode and skips the retry-on-failed-decode path, so
     // whatever the model does not emit in a window is lost for good.
     p.translate        = false;   // transcribe in-language, never translate to English
-    p.language         = lang;    // "auto" => detect (costs one extra encoder pass)
+    p.language         = lang;    // "auto" => detect (one extra decode step; see audioCtxFor)
     p.audio_ctx        = audio_ctx;  // 0 = full window; see audioCtxFor
 
     // Vocabulary hints ride in as the initial prompt — the same string the
@@ -144,10 +144,15 @@ const sampleRate = 16000
 // encode reads whatever the PREVIOUS call left in exp_n_audio_ctx, so it only
 // shrinks from a cold state (0, which every read site expands to 1500). Primed
 // once at a small size, later auto calls at a LARGER size are grows and are
-// correct (matrix cases M/N). Returning 0 is now a cost decision, not a
-// correctness one — measured ~1.9x at a floor of 800, with an over-tight window
-// actively slower. See design-notes "audio_ctx sizing" for the numbers and the
-// open questions.
+// correct (matrix cases M/N).
+//
+// Superseded 2026-08-06 for the cold case: patches/whisper.cpp now assigns
+// exp_n_audio_ctx before the detect encode, so one call encodes at one size and
+// case H (cold, auto, sized) passes. Sizing on a REUSED state still garbles
+// (D/F/G/I/J/L unchanged), so the lever needs a fresh whisper_state per
+// utterance — measured ~10 ms, i.e. affordable. Returning 0 stays a deliberate
+// choice: sizing is worth a further ~1.7x but does not preserve the transcript
+// word-for-word. See design-notes "audio_ctx sizing".
 func audioCtxFor(int) int { return 0 }
 
 // Available reports whether local Whisper transcription is compiled in.
@@ -167,7 +172,7 @@ var hushOnce sync.Once
 // also warms up: one throwaway transcribe so the backend's first-use init
 // (Metal pipeline compilation, buffer/kernel setup) happens now rather than
 // stalling the first real dictation. The warm-up runs in auto-detect mode
-// because that is the default path, so both encoder passes get warmed.
+// because that is the default path.
 func New(path string) (*Ctx, error) {
 	c, err := newNoWarm(path)
 	if err != nil {
@@ -194,9 +199,10 @@ func newNoWarm(path string) (*Ctx, error) {
 }
 
 // Transcribe runs the model over mono 16 kHz float32 PCM and returns the
-// transcript. lang is an ISO-639-1 code; "" means auto-detect, which costs one
-// extra encoder pass but is the only mode that survives code-switching — a
-// wrong forced language garbles the output rather than merely mislabelling it.
+// transcript. lang is an ISO-639-1 code; "" means auto-detect, which is the
+// only mode that survives code-switching — a wrong forced language garbles the
+// output rather than merely mislabelling it. Detection is close to free: it
+// shares its encoder pass with the first decode window (patches/whisper.cpp).
 //
 // hints is optional vocabulary biasing (the same comma-separated string the
 // cloud providers take as `prompt`); "" disables it.

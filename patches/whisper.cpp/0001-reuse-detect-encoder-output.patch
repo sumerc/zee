@@ -1,0 +1,102 @@
+diff --git a/src/whisper.cpp b/src/whisper.cpp
+index 5ffc70af..9cc528f5 100644
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -920,6 +920,13 @@ struct whisper_state {
+     // [EXPERIMENTAL] speed-up techniques
+     int32_t exp_n_audio_ctx = 0; // 0 - use default
+ 
++    // Identifies the encoder pass whose output (embd_enc + kv_cross) the state
++    // currently holds, so an identical re-encode can be skipped. Auto-detect
++    // encodes exactly the window the first decode window needs. Invalidated
++    // whenever the mel changes, and while an encode is in flight.
++    int enc_mel_offset = -1;
++    int enc_n_ctx      = -1;
++
+     whisper_vad_context * vad_context = nullptr;
+ 
+     struct vad_segment_info {
+@@ -2364,6 +2371,20 @@ static bool whisper_encode_internal(
+                    void * abort_callback_data) {
+     const int64_t t_start_us = ggml_time_us();
+ 
++    const int n_ctx_enc = wstate.exp_n_audio_ctx > 0 ? wstate.exp_n_audio_ctx : wctx.model.hparams.n_audio_ctx;
++
++    // The encoder output already in the state was computed from this same mel
++    // window at this same size, so recomputing it would be bit-identical work.
++    // Only the decoder's self-KV changes between such calls, and that is reset
++    // per window by the caller.
++    if (wstate.enc_mel_offset == mel_offset && wstate.enc_n_ctx == n_ctx_enc) {
++        return !(abort_callback && abort_callback(abort_callback_data));
++    }
++
++    // A partially written embd_enc/kv_cross must never look reusable.
++    wstate.enc_mel_offset = -1;
++    wstate.enc_n_ctx      = -1;
++
+     // conv
+     {
+         auto & sched = wstate.sched_conv.sched;
+@@ -2449,6 +2470,9 @@ static bool whisper_encode_internal(
+         }
+     }
+ 
++    wstate.enc_mel_offset = mel_offset;
++    wstate.enc_n_ctx      = n_ctx_enc;
++
+     wstate.t_encode_us += ggml_time_us() - t_start_us;
+     wstate.n_encode++;
+ 
+@@ -3892,6 +3916,9 @@ int whisper_pcm_to_mel_with_state(struct whisper_context * ctx, struct whisper_s
+         return -1;
+     }
+ 
++    state->enc_mel_offset = -1;
++    state->enc_n_ctx      = -1;
++
+     return 0;
+ }
+ 
+@@ -3917,6 +3944,9 @@ int whisper_set_mel_with_state(
+     state->mel.data.resize(n_len*n_mel);
+     memcpy(state->mel.data.data(), data, n_len*n_mel*sizeof(float));
+ 
++    state->enc_mel_offset = -1;
++    state->enc_n_ctx      = -1;
++
+     return 0;
+ }
+ 
+@@ -6829,6 +6859,18 @@ int whisper_full_with_state(
+         }
+     }
+ 
++    // overwrite audio_ctx, max allowed is hparams.n_audio_ctx
++    //
++    // This has to happen before language auto-detection: detection runs the
++    // encoder too, and an encoder pass at a different window size than the
++    // decode that follows produces a cross-attention layout the decoder then
++    // misreads (the stride is derived from the same n_audio_ctx).
++    if (params.audio_ctx > whisper_n_audio_ctx(ctx)) {
++        WHISPER_LOG_ERROR("%s: audio_ctx is larger than the maximum allowed (%d > %d)\n", __func__, params.audio_ctx, whisper_n_audio_ctx(ctx));
++        return -5;
++    }
++    state->exp_n_audio_ctx = params.audio_ctx;
++
+     // auto-detect language if not specified
+     if (params.language == nullptr || strlen(params.language) == 0 || strcmp(params.language, "auto") == 0 || params.detect_language) {
+         std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
+@@ -6964,13 +7006,6 @@ int whisper_full_with_state(
+         }
+     }
+ 
+-    // overwrite audio_ctx, max allowed is hparams.n_audio_ctx
+-    if (params.audio_ctx > whisper_n_audio_ctx(ctx)) {
+-        WHISPER_LOG_ERROR("%s: audio_ctx is larger than the maximum allowed (%d > %d)\n", __func__, params.audio_ctx, whisper_n_audio_ctx(ctx));
+-        return -5;
+-    }
+-    state->exp_n_audio_ctx = params.audio_ctx;
+-
+     // these tokens determine the task that will be performed
+     std::vector<whisper_token> prompt_init = { whisper_token_sot(ctx), };
+ 
