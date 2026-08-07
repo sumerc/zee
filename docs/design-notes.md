@@ -720,6 +720,70 @@ English-shaped technical terms, or clear it when dictating other languages.
 Per-language hint files (`hints.en.txt`, …) would be the correct fix if this
 ever matters enough.
 
+**How comparable apps handle the same hazard** (read from source 2026-08-07,
+same checkouts as the STT-landscape survey). Both competitors keep user
+vocabulary **out of the decoder prompt entirely** — zee is the outlier in
+feeding raw user keywords to `initial_prompt`:
+
+- **VoiceInk**: the whisper prompt is a hardcoded *carrier sentence in the
+  selected language* — a 25-language table in `WhisperPrompt.swift` ("Hello,
+  how are you doing? …" / "Merhaba, nasılsın? …"), swapped whenever the
+  language changes, so the prompt always votes *with* the language parameter,
+  never against it. User vocabulary never enters that prompt: it is applied
+  afterwards as case-insensitive regex replacement over the finished transcript
+  (`WordReplacementService.swift`, called at `TranscriptionPipeline.swift:142`).
+  A user *can* overwrite the carrier per language (`setCustomPrompt(for:)`),
+  which reopens the hazard for power users — but per language, so a Turkish
+  prompt can only ever ride with Turkish selected. The replacements are
+  **manual**: the user authors explicit wrong→right pairs ("super whisper" →
+  "Superwhisper"), so the wrong form must be known in advance.
+- **Handy**: sends **no prompt at all**, and its replacement is **implicit**:
+  the user lists only the *correct* words, and `apply_custom_words`
+  (`audio_toolkit/text.rs`) finds near-misses on its own — length-guarded
+  Levenshtein (≤25% length difference), a Soundex phonetic boost (score ×0.3
+  on phonetic match; ASCII-only, guarded, so non-English terms get plain edit
+  distance), and n-gram merging for multi-word splits ("Charge B" →
+  "ChargeBee"). The prompt-steering failure class is structurally impossible
+  there; the trade is that replacement can only repair words the model nearly
+  got, it cannot bias recognition itself. Notably, its input format is exactly
+  zee's `hints.txt` — a bare list of correct terms — so it is the drop-in
+  semantics if hints ever move out of the prompt.
+
+Neither app is immune on the *detection* side — VoiceInk shipped and closed
+"Spoken English gets transcribed to written German", Handy closed a
+Canary-model always-translates-on-auto bug — reinforcing that wrong-language
+output is endemic to multilingual STT and only the prompt-steering half is
+designable-away. If hints biasing is ever revisited here, these are the two
+proven shapes: language-matched carrier only (VoiceInk), or post-processing
+replacement with no prompt (Handy).
+
+The closed-source apps (docs, 2026-08-07): **superwhisper** injects vocabulary
+into the prompt exactly like zee — and its
+[docs](https://superwhisper.com/docs/get-started/interface-vocabulary) carry
+the hazard as user-facing caveats: "adding too many words can confuse the AI
+transcription model", foreign-language vocabulary "may degrade accuracy", and
+vocabulary "affects not just spelling but also punctuation, **language
+detection**, and formatting". Their recommended posture is vocabulary
+minimally + post-hoc replacements for anything that must be reliable.
+**Wispr Flow** claims "word boosting" during transcription plus replacement
+rules after; mechanics unverifiable (own model stack). Also confirmed: the
+bare-list flip reproduces on Groq's hosted `whisper-large-v3-turbo` verbatim
+(same clip, `language=en`: no prompt → English 2/2, hints as prompt → Turkish
+2/2), so the hazard is the model family's, not our build's.
+
+The field at a glance:
+
+| app | vocab reaches the model? | mechanism | language-flip risk |
+|---|---|---|---|
+| zee | yes | raw list → `initial_prompt` | live, documented here |
+| superwhisper | yes | vocab → prompt | live, documented in their docs |
+| Wispr Flow | claimed | "word boosting" + replacements after | unknown (closed stack) |
+| VoiceInk | no | language-locked carrier prompt; regex replace after | designed out |
+| Handy | no | no prompt; fuzzy replace after | impossible |
+
+Nobody has both acoustic biasing and safety: the prompt-injectors carry the
+hazard, the post-processors gave up biasing to be rid of it.
+
 ## Known: parakeet.cpp aborts at exit under `-race` (do not re-investigate)
 
 `go test -race` on a package that loads a Parakeet model aborts *after* the
