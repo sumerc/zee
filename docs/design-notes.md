@@ -552,7 +552,55 @@ search — whisper-cli's actual default at `beam_size=5` — garbles identically
 aborted on exit in the C driver; in zee both engines load and tear down cleanly
 (exit 0, repeatedly). That was the driver's teardown order, not ggml sharing.
 
+> **Qualified 2026-08-07 — "tears down cleanly" is true only of Go's exit path.**
+> parakeet.cpp does *not* release all its Metal resources on close; you cannot
+> see it because Go exits via `exit_group`, which never runs the ObjC/C++ static
+> destructors that would notice. See "Known: parakeet.cpp aborts at exit under
+> `-race`" below before spending any time on it.
+
 Raw measurement detail: `zee-whisper-poc/FINDINGS.md`.
+
+## Known: parakeet.cpp aborts at exit under `-race` (do not re-investigate)
+
+`go test -race` on a package that loads a Parakeet model aborts *after* the
+tests pass:
+
+```
+third_party/parakeet.cpp/third_party/ggml/src/ggml-metal/ggml-metal-device.m:618:
+GGML_ASSERT([rsets->data count] == 0) failed
+```
+
+ggml's own comment on that line: "if you hit this assert, most likely you
+haven't deallocated all Metal resources before exiting." That is exactly what
+happens — in parakeet.cpp, not in zee.
+
+**It needs two conditions, which is why it looks like a regression when it
+appears.** `-race`, *and* the models actually being on disk. Under `-race` tsan
+finalises through libc `exit()`, which runs `__cxa_finalize` and therefore the
+ObjC destructor; Go's normal exit is an `exit_group` syscall that skips it
+entirely. And with an empty models directory every load fails, so nothing is
+ever allocated to leak. CI has neither (it sets no `ZEE_MODELS_DIR` and `make
+test` does not depend on `download-models`), so CI is green. It only shows up on
+a developer machine pointing tests at real models.
+
+**Cause is upstream, established by elimination (2026-08-07):**
+
+- `openParakeet(m)` followed immediately by `eng.Close()` — no provider, no
+  goroutines, no sessions, no concurrency — still aborts. That is the whole
+  reproduction.
+- `internal/whisper` under `-race` with the same models **passes**, so ggml's
+  Metal teardown is fine when a caller does release everything. The gap is
+  parakeet.cpp's.
+- No upstream issue exists for it (checked mudler/parakeet.cpp, ggml, llama.cpp).
+
+**Two zee-side theories were tested and both were wrong**, so do not retry them:
+the missing parentheses in `parakeet_async_test.go`'s `_ = s.Close` (a real
+typo, still there, but not this), and `localProvider.Close()` not being terminal
+against a `load()` queued behind it (fixing it changed nothing).
+
+**Impact is nil**: production exits via Go, so the destructor never runs and the
+leak dies with the process. Not worth carrying a patch for. If it ever needs
+fixing, it belongs upstream in parakeet.cpp's context teardown.
 
 **Conditional on `audio_ctx = 0` (noted 2026-08-06).** The whole argument below
 rests on the encoder window being fixed at 1500 frames. If `audioCtxFor` ever
