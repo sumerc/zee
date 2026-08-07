@@ -365,9 +365,12 @@ func run() {
 		}
 	}
 	streamEnabled = modelSupportsStream(activeTranscriber)
-	if *langFlag != "" {
-		activeTranscriber.SetLanguage(*langFlag)
-	}
+	// Applied even when empty, for the same reason the flag merge above keeps an
+	// empty value: "" is Auto-detect, a real choice. Skipping it would leave the
+	// provider's own default in place — "en" for whisper — so an explicit Auto
+	// (saved setting, or -lang "") would silently transcribe as English on any
+	// path the tray does not reach, -transcribe included.
+	activeTranscriber.SetLanguage(*langFlag)
 
 	log.SetTranscribeEnabled(*debugTranscribeFlag)
 	if err := log.Init(); err != nil {

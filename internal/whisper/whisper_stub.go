@@ -19,4 +19,6 @@ func New(string) (*Ctx, error) { return nil, errUnavailable }
 
 func (c *Ctx) Transcribe([]float32, string, string) (string, error) { return "", errUnavailable }
 
+func (c *Ctx) LastDetection() (string, float64) { return "", 0 }
+
 func (c *Ctx) Close() {}

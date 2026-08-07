@@ -472,6 +472,25 @@ now equals forced-language output on every corpus clip. The forced-language path
 never had the second encode and is untouched, within noise. Long clips gain less
 because one saved encode amortises over many windows.
 
+> **Superseded 2026-08-07 — "transcripts are unchanged" is false.** It holds for
+> the clean corpus clips it was checked against, and not in general. Measured by
+> running the patched binary against a pre-patch build of the same commit
+> (`../zee`, unpatched submodule) on identical audio, each binary bit-repeatable
+> across runs:
+>
+> - clean/loud audio, single window: identical output, as claimed.
+> - marginal audio (low SNR, accented): **37 of 48** transcripts differ.
+> - **> 30 s (multi-window): differs even on clean audio.** A 55.8 s synthetic
+>   clip decodes 5 phrases unpatched vs 10 + a hallucinated `"Thank you."`
+>   patched.
+>
+> Reusing the detect pass's encoder output is not numerically identical to
+> recomputing it, and marginal decodes flip on it. Across 48 marginal clips the
+> patch was not systematically worse (18 wrong-language unpatched vs 16
+> patched) — it reshuffles rather than degrades. The speedup is unaffected and
+> stands. What is retracted is only the correctness claim. No test covers
+> either case: the fixtures are ~1.6 s and clean.
+
 The second half of the patch also fixes fault-matrix case H, which is what
 reopens `audio_ctx` sizing (above). Sizing on top of this is worth a further
 ~1.7× on clips under ~16 s (274 → ~160 ms at ac=800, fresh state per utterance)
@@ -559,6 +578,147 @@ aborted on exit in the C driver; in zee both engines load and tear down cleanly
 > `-race`" below before spending any time on it.
 
 Raw measurement detail: `zee-whisper-poc/FINDINGS.md`.
+
+## Why English is the default language for every model, auto-detect included (2026-08-07)
+
+Auto-detect was the whisper default because "a wrong forced language garbles the
+output, and auto is the only mode that survives code-switching". **The second
+half of that is backwards**, per the upstream maintainers: whisper is
+*"intended for monolingual audio inputs"* and *"doesn't support code-switching
+inputs very well"*. Detection reads only the first 30 s and commits that
+language to the whole recording, so auto is the mode that *breaks* on mixed
+audio. Specifying the language is what preserves it
+([openai/whisper #2009](https://github.com/openai/whisper/discussions/2009),
+[#49](https://github.com/openai/whisper/discussions/49)).
+
+The first half is wrong too, and in a way that matters more. A mismatched
+forced language does not garble — it **translates**, fluently. Measured on real
+dictation (turbo-q5, M5 Pro):
+
+| audio | `-lang auto` | `-lang tr` | `-lang en` |
+|---|---|---|---|
+| Turkish, 5.3 s | Turkish ✅ | Turkish ✅ | `Is this working fine right now?` |
+| English, 15.1 s | English ✅ | `Yani ben de doğruyuyorum…` | English ✅ |
+
+The language token conditions the *output* language; `p.translate = false` only
+selects the task token and does not prevent this. So a wrong detection produces
+a fluent, on-topic transcript in the wrong language — the hardest error class to
+notice, and exactly what a mislabel would not do.
+
+**Why auto is not merely wrong-in-principle here.** Detection accuracy across
+whisper's 102 languages is ~65% for large-v2, near-100% only for the top few
+languages; specifying the language is reported as 5–10% more accurate
+([#1456](https://github.com/openai/whisper/discussions/1456)). On real saved
+samples (Turkish-accented English, speech −32 to −36 dBFS, SNR 4–13 dB — quiet,
+which is the realistic dictation case, not a contrived one), 4 of 6 clips
+detected wrong. The probability vector, dumped via
+`whisper_lang_auto_detect`:
+
+| clip | detected | p(top) | p(en) | correct? |
+|---|---|---|---|---|
+| 14-30-40 | en | 0.5082 | — | ✅ |
+| 14-39-00 | tr | 0.9125 | 0.0567 | ✅ (really Turkish) |
+| 14-47-18 | tr | 0.6829 | 0.2642 | ❌ |
+| 15-03-11 | ar | 0.6467 | 0.2432 | ❌ |
+| 15-07-10 | tr | 0.7008 | 0.2640 | ❌ |
+| 15-08-59 | tr | 0.6690 | 0.3000 | ❌ |
+
+Two things to take from that table. **A confidence threshold on the winner does
+not work** — the one *correct* English call is the least confident row (0.51)
+while the failures sit at 0.65–0.70. The discriminating signal is the
+runner-up (0.057 on genuinely-Turkish audio vs 0.24–0.30 on every failure), and
+reading it needs a further whisper.cpp patch. Fitted on six clips with one
+negative case, so it is a hypothesis, not a threshold.
+
+**Not a zee bug, and not the encoder-reuse patch.** Ruled out by measurement:
+detection probabilities are byte-identical between the patched and unpatched
+libwhisper; a synthetic sweep of 48 marginal clips flips at ~35% on *both*
+builds; and Groq's hosted `whisper-large-v3-turbo` — separate implementation,
+unquantized, no ggml, no patch — makes the same errors on the same audio, plus
+two the local model gets right (it returns French for 15-03-11 and Turkish for
+14-30-40). It is the whisper model family's language ID on quiet accented
+speech. Peak-normalising +15–22 dB fixes only 1 of 4.
+
+**Decision: default every model to `en`, including the multilingual ones.** The
+failure modes are asymmetric, which is what settles it:
+
+| | English speech | short Turkish (< ~25 s) | long Turkish |
+|---|---|---|---|
+| auto | ~35% → fluent Turkish translation | ✅ | ✅ |
+| forced `en` | ✅ | English translation (readable) | Turkish (readable) |
+
+Forced `en` never produces the unusable case. Long Turkish stays Turkish because
+the language token is a soft prior the acoustic evidence can override past one
+window — the same clip translates at 10 s and 25 s but not at 50 s.
+
+Auto remains available in the menu; it is the right choice when the language is
+genuinely unknown, which is what upstream built it for. It is no longer the
+cheaper option either: since the encoder-reuse patch, auto and forced cost the
+same (301 vs 314 ms on a 15 s clip, M5 Pro), so the old "auto costs one extra
+encoder pass" argument for *avoiding* it is also gone.
+
+`lang_detect lang=<code> p=<prob>` is now logged per auto transcription
+(scraped from whisper's own `WHISPER_LOG_INFO`, which `zee_wsp_hush` used to
+discard — zero added cost, no decode change). Forced-language calls log nothing.
+
+**What comparable apps default to** (read from source, not marketing):
+
+| App | Default | Source |
+|---|---|---|
+| VoiceInk | **`en`** | `LanguageSelectionView.swift:11` — `@AppStorage("SelectedLanguage") = "en"`; `WhisperPrompt.swift:88` falls back to `"en"` |
+| Handy | `auto` | `src-tauri/src/settings.rs:511` — `default_selected_language() -> "auto"` |
+| Voquill | not determined | no persisted default located in `apps/desktop/src` |
+
+The field is split, so this is not an appeal to consensus — VoiceInk, the
+closest comparable (macOS, whisper.cpp, same model), ships `en`.
+
+## Known: bare-list hints flip the transcription language (measured 2026-08-07, no fix shipped)
+
+Hints reach the whisper-family engines as free-text prompt — local
+`initial_prompt` (pinned to every window via `carry_initial_prompt`), Groq and
+OpenAI `prompt`. That prompt conditions **language**, not just vocabulary, and
+it outranks the `language` parameter. Found via a saved sample that transcribed
+as fluent Turkish although the speech was English (verified with Parakeet
+110m-en, which has no Turkish and recovered the real words) *and* the language
+was forced to `en`. Isolated to hints alone — same clip, `-lang en`:
+
+| prompt sent | output |
+|---|---|
+| none | English ✅ |
+| `Opus` (a single bare word) | Turkish |
+| the full hints.txt list | Turkish |
+| same terms inside an English sentence | English ✅ |
+
+A bare comma list carries no grammatical language signal, so it neutralises the
+language token and the acoustics decide — Turkish-accented English tips over.
+One word is enough. Groq reproduces it identically (same decoder behind the
+API). Deepgram/ElevenLabs/Mistral are immune: their hints go as structured
+keyword fields, never through a decoder.
+
+Auto-detect is unaffected in both directions: `whisper_lang_auto_detect` runs
+before the decode and never sees the prompt (probabilities byte-identical with
+and without hints). Two independent failure modes, one visible symptom.
+
+**Tried and reverted: wrapping hints in an English carrier sentence**
+("The following terms may appear: …"). It fixes the bare-list case and even
+made forced-`en` hold on 50 s Turkish clips where the bare token lost to the
+acoustics. Reverted because it does not survive adversarial hint content and
+breaks the other direction:
+
+| case | result |
+|---|---|
+| English audio, `-lang en`, hints = 8 Turkish words | Turkish — carrier outvoted |
+| Turkish audio, `-lang tr`, English carrier | English — carrier overrode the selection |
+
+There is no neutral prompt form: one text, its dominant language wins. Any
+carrier is an arms race against the hint content. The real constraint is on
+`hints.txt` itself — **hints must be written in the dictation language** — and
+no wrapper removes it. Current state: hints pass through unmodified (the
+pre-existing behaviour), the hazard is documented at the pass-through site, and
+the practical mitigations if it bites again are: keep hints.txt to
+English-shaped technical terms, or clear it when dictating other languages.
+Per-language hint files (`hints.en.txt`, …) would be the correct fix if this
+ever matters enough.
 
 ## Known: parakeet.cpp aborts at exit under `-race` (do not re-investigate)
 
