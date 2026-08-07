@@ -66,8 +66,14 @@ func (m *Mistral) Transcribe(audioData []byte, format, lang, hints string) (*Res
 		writer.WriteField("language", lang)
 	}
 	if hints != "" {
+		// Mistral 400s the WHOLE request if any context_bias item contains
+		// whitespace, and multi-word hints ("App Router") are legal in
+		// hints.txt — the shipped default even contains one. Split such terms
+		// into single words rather than failing the transcription.
 		for _, word := range strings.Split(hints, ",") {
-			writer.WriteField("context_bias[]", strings.TrimSpace(word))
+			for _, w := range strings.Fields(word) {
+				writer.WriteField("context_bias[]", w)
+			}
 		}
 	}
 	writer.Close()
