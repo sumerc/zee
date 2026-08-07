@@ -49,7 +49,11 @@ against concurrent init/uninit across the two malgo contexts.
 > v3 is back as the opt-in *fast* multilingual model and Whisper is the coverage
 > default. The v2 claims below are kept as the reasoning that held at the time;
 > see "Why Whisper for multilingual" and "Parakeet v3 back as the fast
-> multilingual option" for what replaced them.
+> multilingual option" for what replaced them. **Which Parakeet serves English is
+> also reopened** (2026-08-06): the 110m-vs-0.6b-v2 verdict below was measured on
+> CPU and does not survive Metal — see "Parakeet 0.6b-v2 beats the 110m on
+> English". Everything here about *CPU vs Metal* and *quantization on CPU* still
+> describes why the code looks the way it does.
 
 zee runs NVIDIA NeMo **Parakeet** locally (via `parakeet.cpp`/`libparakeet`/ggml)
 as the default engine, with cloud providers (Groq, OpenAI, …) as accuracy/noise
@@ -115,7 +119,9 @@ is ~4 MB and a relink when the C side changes — worth it for a drop-in app.
 - **110m ties the 0.6b-v2 on accuracy** on our 9-sample corpus (~14% WER, within
   noise) at **1/5 the size and 2.5x the speed** — the 0.6b buys nothing for
   English. (Handy/VoiceInk ship the 0.6b; revisit only if a larger eval shows a
-  real gap.)
+  real gap.) **Superseded 2026-08-06** — the larger eval showed the gap, and the
+  "2.5x the speed" half was a CPU-era number that Metal erased. See "Parakeet
+  0.6b-v2 beats the 110m on English".
 - **Keep the multilingual model warm** — its ~2.4 s load must never land
   per-utterance. Load once at startup, transcribe per clip.
 - **Don't quantize for speed.** q4_k is ~26% *slower* on CPU (per-matmul dequant
@@ -216,7 +222,8 @@ replaced it. Two models, two roles:
 
 Both pre-fetched; install payload *shrank* 942 → 814 MB. Dropped:
 `parakeet-v3-multi` (superseded) and `parakeet-v2-en-large` (1.4 GB; the 110m
-already covers English). Saved selections migrate **by role**, so a multilingual
+already covers English — **that premise fell 2026-08-06**, see "Parakeet 0.6b-v2
+beats the 110m on English"; the file is still published under `models-v1`). Saved selections migrate **by role**, so a multilingual
 user is never silently downgraded to English-only (`retiredIDs` in
 `localmodel/localmodel.go`). Old builds keep working — they pin `models-v1`,
 still published.
@@ -898,6 +905,15 @@ irrelevant), and whether the detect pass can run on a short prefix.
 
 ## Open/untested: Voxtral as a local engine (recorded 2026-08-04)
 
+> **Partly answered 2026-08-06, by a different model.** The core hypothesis
+> below — that a ~2-4B LLM decoder must be too slow locally — is now known to be
+> wrong *as stated*: Qwen3-ASR-1.7B (8-bit MLX, M5 Pro) transcribes a 9.8 s clip
+> in 0.58 s, i.e. a speech-LLM of that class is interactive on this hardware.
+> What survives is the conclusion, for two other reasons: it is only *level*
+> with whisper-auto at dictation lengths, and Voxtral has **no Turkish** in any
+> variant (Mini 3B: 8 languages, Realtime 4B: 13), so it cannot serve the role
+> this entry was written for. See "Qwen3-ASR-1.7B as a local engine".
+
 **Never measured.** Voxtral exists in zee only as a cloud provider
 (`transcriber/mistral.go`, `voxtral-mini-latest`). No local Voxtral has been
 run, so nothing below is a measurement — it is desk research plus one
@@ -939,6 +955,110 @@ speed; (2) only if it is, time `llama-mtmd-cli` with a Q4 GGUF against
 settle the decode-cost hypothesis with a number.
 
 
+## Parakeet 0.6b-v2 beats the 110m on English (measured 2026-08-06)
+
+`parakeet-v2-en-large` (`tdt-0.6b-v2-f16.gguf`) was retired in models-v2 on the
+premise that the 110m tied it. Re-measured against the shipped registry on an
+M5 Pro (warm, best of 3, real saved dictations), the premise does not hold — and
+the latency argument that backed it was a CPU-era number.
+
+```
++----------------------+--------------+--------------+---------------+
+| Model                | 1.9 s clip   | 5.2 s clip   | 182.7 s clip  |
++----------------------+--------------+--------------+---------------+
+| parakeet-110m (ship) |    18 ms     |    24 ms     |   1201 ms     |
+| parakeet-0.6b-v2     |    34 ms     |    41 ms     |   1815 ms     |
+| parakeet-v3 (ship)   |    32 ms     |    40 ms     |   1871 ms     |
+| whisper-turbo (ship) |   269 ms     |   271 ms     |   3070 ms     |
++----------------------+--------------+--------------+---------------+
+```
+
+**The 2.5x speed penalty is now ~15 ms.** On Metal the 0.6b costs 16–17 ms over
+the 110m at dictation length — under perception — and runs at v3's speed, which
+is expected: same architecture, same size. The old "2.5x slower" ratio came from
+the CPU path (see the superseded line above); it survives only on long clips
+(1.5x at 3 minutes), and there it is still 1.7x *faster* than whisper.
+
+**Accuracy: v2 fixed both errors the 110m made, and beat whisper on a third.**
+The short clips are identical across all four models — they do not discriminate.
+The 183 s technical dictation does:
+
+```
++---------------------+--------------------+------------------+---------------+
+| Spoken              | 110m (ships)       | 0.6b-v2          | whisper-turbo |
++---------------------+--------------------+------------------+---------------+
+| "the whisper model" | "the Visper model" | "whisper model"  | correct       |
+| "quantized version" | "contised version" | "quantized"      | correct       |
+| "ANE"               | "ANE"              | "ANE"            | "A&E" (3/3)   |
++---------------------+--------------------+------------------+---------------+
+```
+
+So on technical English v2 reads as whisper-class at parakeet-class latency.
+Style cost: v2 keeps more verbatim repeats ("I am I'm going") that the 110m
+smooths away — the same TDT-vs-corpus trait, not an error.
+
+**Read this as a direction, not a WER.** One discriminating clip, one speaker,
+differences adjudicated by ear against what was actually said. What makes it
+worth acting on is that an independent, much larger eval points the same way:
+the HF Open ASR leaderboard has 0.6b-v2 at 6.05% against the 110m's 7.49% (and
+whisper-large-v3-turbo at ~7.8%), i.e. the ~19% relative gap the 9-sample corpus
+could not resolve. That is exactly the "larger eval shows a real gap" condition
+the original entry set for revisiting.
+
+Not shipped yet — a registry change is a `models-v4` decision. Before making it:
+collect a batch of fresh dictations and re-run the harness
+(`internal/localbench/v2_compare_test.go`, which prints transcripts alongside
+warm latency; the standard bench discards the text), and quantize v2 to q4_k
+(~640 MB) — free on Metal per the entry above, and the f16 is 1.4 GB. Open
+question the numbers do not answer: whether this becomes a fourth "English —
+accurate" role or replaces the 110m as the English default.
+
+## Qwen3-ASR-1.7B as a local engine: measured, not adopted (2026-08-06)
+
+The first speech-LLM actually run on this machine rather than desk-researched
+(the Voxtral entry below is still untested). Alibaba, Apache-2.0, 30 languages
+**including Turkish** — the only 2025-26 release that clears zee's Turkish bar
+at all, which is why it was worth the setup. 8-bit MLX
+(`mlx-community/Qwen3-ASR-1.7B-8bit`, `mlx-qwen3-asr` runtime), M5 Pro, warm:
+
+```
++---------------+---------+----------+------+---------------------------+
+| Clip          | Audio   | Warm     | xRT  | whisper-turbo-q5 (M5)     |
++---------------+---------+----------+------+---------------------------+
+| en-short      |   1.9 s |  0.18 s  | 10x  | 272 ms en / 535 ms auto   |
+| tr-codeswitch |   9.8 s |  0.58 s  | 17x  | 295 ms en / 581 ms auto   |
+| en-otel       |  70.4 s |  2.61 s  | 27x  | ~1.1 s en / ~1.3 s auto   |
+| en-long       | 182.7 s |  6.50 s  | 28x  | ~2.4-4 s                  |
++---------------+---------+----------+------+---------------------------+
+```
+
+**The advertised ~36x realtime is a long-clip number and does not transfer to
+dictation.** At 2-10 s the run is prefill/fixed-cost dominated, so it lands at
+whisper-auto's latency, not below it — and on long clips it is *slower* than
+whisper with a forced language. Same shape as every other engine here: the
+figure that sells the model is measured where dictation never lives.
+
+**Context biasing works, is free, and is the only real find.** Qwen3-ASR takes
+injected vocabulary natively. On the code-switched Turkish clip, biasing with
+the task's own terms recovered "Agent Bootstrap" verbatim — which neither the
+unbiased run nor the Groq large-v3-turbo reference managed — at 0.57 s vs
+0.58 s unbiased. That is the `hints.txt` mechanism working on a model that was
+built for it, against exactly the failure mode whisper's `initial_prompt` only
+weakly addresses.
+
+Correctness was otherwise clean: Turkish auto-detected with no language hint,
+no hallucination, no dropped tails (the `no_timestamps` trap has no analogue
+here). It transcribes verbatim, keeping "I'm I'm", "Um", "Uh" that whisper and
+parakeet smooth away — arguably wrong for dictation-to-clipboard.
+
+Not adopted: no accuracy win over turbo on the hard Turkish clip (that clip is
+garbled in every engine including the cloud reference — the audio is the
+problem), ~2.3 GB resident against whisper's ~600 MB, and it is a **third engine
+outside the one-ggml build** — MLX or ONNX, not a backend swap. Revisit if the
+biasing win generalises over a batch of code-switched samples, since that is a
+capability whisper cannot match rather than a margin it can be tuned into.
+Raw transcripts and timings: scratchpad `qwen-asr-results.md` / `qwen-raw.json`.
+
 ## STT landscape: what comparable apps ship (reference, verified 2026-08-03)
 
 Reference material for engine decisions, not a decision itself. Verified by
@@ -971,6 +1091,36 @@ Takeaways:
   English-only today); Apple Speech as a zero-download built-in fallback
   (offline, supports tr-TR, accuracy below turbo); ONNX Parakeet (Handy) only
   matters for a Windows/Linux port.
+
+**Model-field refresh, 2026-08-06.** Desk research, not measurement — recorded
+so the next survey starts here rather than at the leaderboard.
+
+- **whisper-large-v3-turbo is no longer on the accuracy frontier at any latency
+  point.** The open-weights 5.0-5.6% WER tier is now ARK-ASR-0.6B/3B,
+  granite-speech-4.1-2b and canary-qwen-2.5b, against turbo's ~7.8%. None has a
+  proven Apple-Silicon latency story, and all are LLM-decoder models, i.e. the
+  regime that already lost to turbo when whisper-medium was measured.
+- **A 2026 code-switching benchmark rates turbo *worst* of the models tested**
+  (es/fr/de-English; without a forced language it drifts into translating).
+  No Turkish-English corpus exists, so zee's own samples remain the only
+  evidence for the case that actually matters here.
+- **The "nobody beats zee's Turkish path" takeaway holds.** Every 2026 arrival
+  that is faster than turbo still has no Turkish: Canary 1b-v2 (25 European
+  languages, same gap as Parakeet v3), Voxtral Mini 3B (8) and Realtime 4B (13),
+  Kyutai STT (en/fr), SenseVoice-small (5 Asian + en), Phi-4-multimodal audio
+  (8). Qwen3-ASR is the sole exception — measured above, not adopted.
+- **Apple SpeechTranscriber (macOS 26) does have Turkish**, and is free and
+  zero-download, but commits to **one language per session** — so it cannot do
+  the mid-utterance tr/en switching zee exists for. Still the cheapest possible
+  fallback if that ever stops mattering.
+- **whisper.cpp is still v1.9.1**; nothing since changes multilingual quality,
+  and there is no large-v4 or new open OpenAI ASR release.
+- **`transcribe.cpp`** (handy-computer, MIT, Mozilla.ai-backed) is the piece of
+  infrastructure worth tracking: one ggml/GGUF/Metal runtime covering ~16
+  families (Parakeet, Canary, Canary-Qwen, Qwen3-ASR, Voxtral, Moonshine,
+  SenseVoice, Granite). It would make that whole 5% tier testable without a
+  per-model integration, and could eventually replace maintaining separate
+  parakeet.cpp and whisper.cpp paths.
 
 ## The felt-latency tail is paste, not inference (measured 2026-08-06)
 
