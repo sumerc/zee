@@ -597,8 +597,13 @@ dictation (turbo-q5, M5 Pro):
 
 | audio | `-lang auto` | `-lang tr` | `-lang en` |
 |---|---|---|---|
-| Turkish, 5.3 s | Turkish ✅ | Turkish ✅ | `Is this working fine right now?` |
+| English, 5.3 s (14-39-00) | Turkish ❌ | Turkish (translation) | English ✅ |
 | English, 15.1 s | English ✅ | `Yani ben de doğruyuyorum…` | English ✅ |
+
+(The first row was originally recorded as "Turkish audio" on the strength of
+auto's own p=0.91 detection; Parakeet ground truth later proved the speech
+English. The mechanism conclusion is unchanged — the `-lang tr` column is a
+fluent Turkish *translation* of English speech either way.)
 
 The language token conditions the *output* language; `p.translate = false` only
 selects the task token and does not prevent this. So a wrong detection produces
@@ -617,18 +622,31 @@ detected wrong. The probability vector, dumped via
 | clip | detected | p(top) | p(en) | correct? |
 |---|---|---|---|---|
 | 14-30-40 | en | 0.5082 | — | ✅ |
-| 14-39-00 | tr | 0.9125 | 0.0567 | ✅ (really Turkish) |
+| 14-39-00 | tr | 0.9125 | 0.0567 | ❌ (later ground-truthed: English) |
 | 14-47-18 | tr | 0.6829 | 0.2642 | ❌ |
 | 15-03-11 | ar | 0.6467 | 0.2432 | ❌ |
 | 15-07-10 | tr | 0.7008 | 0.2640 | ❌ |
 | 15-08-59 | tr | 0.6690 | 0.3000 | ❌ |
+| 21-07-10 (live) | tr | 0.8041 | — | ❌ (Parakeet-verified English) |
+
+The last row is the first production capture from the `lang_detect` log line.
+Adjacent unsaved clips in the same session logged tr at 0.9981 and 0.9975; the
+one correct call logged en at 0.5473. On this speaker, wrong calls are
+consistently *more* confident than right ones.
 
 Two things to take from that table. **A confidence threshold on the winner does
-not work** — the one *correct* English call is the least confident row (0.51)
-while the failures sit at 0.65–0.70. The discriminating signal is the
-runner-up (0.057 on genuinely-Turkish audio vs 0.24–0.30 on every failure), and
-reading it needs a further whisper.cpp patch. Fitted on six clips with one
-negative case, so it is a hypothesis, not a threshold.
+not work** — the one correct call is the least confident row (0.51), and
+14-39-00 is a *wrong* call at **0.91**: ground-truthing it later the same day
+(Parakeet 110m-en, an English-only model with no translation ability, produced
+clean idiomatic English — "Is this working fine right now? I don't, I'm not
+sure") proved the speech was English. Detection on these samples is therefore
+1/7 correct, with its most confident answers wrong. **The runner-up rule died
+with that correction**: it read 14-39-00's p(en)=0.057 as the genuine-Turkish
+signature separating real Turkish from misdetections — but 14-39-00 was a
+misdetection too, so a wrong call can carry a runner-up of 0.057 and the
+claimed 4× separation was an artifact of one mislabeled clip. No probability
+read-out from a single detect pass — winner or runner-up — separates right
+from wrong on this data.
 
 **Not a zee bug, and not the encoder-reuse patch.** Ruled out by measurement:
 detection probabilities are byte-identical between the patched and unpatched
@@ -636,20 +654,33 @@ libwhisper; a synthetic sweep of 48 marginal clips flips at ~35% on *both*
 builds; and Groq's hosted `whisper-large-v3-turbo` — separate implementation,
 unquantized, no ggml, no patch — makes the same errors on the same audio, plus
 two the local model gets right (it returns French for 15-03-11 and Turkish for
-14-30-40). It is the whisper model family's language ID on quiet accented
-speech. Peak-normalising +15–22 dB fixes only 1 of 4.
+14-30-40). It is the whisper model family's language ID on accented speech.
+Loudness is secondary, not causal: peak-normalising the failing clips by
++15–22 dB fixed only 1 of 4 and made one *more* confidently wrong
+(15-07-10: tr 0.70 → 0.80). Low SNR widens the blast radius — the synthetic
+sweep flips ~35% at SNR 7–12 vs 0 at SNR 30 on the same accented voice — but
+gain alone does not rescue detection on the real recordings.
 
 **Decision: default every model to `en`, including the multilingual ones.** The
 failure modes are asymmetric, which is what settles it:
 
-| | English speech | short Turkish (< ~25 s) | long Turkish |
-|---|---|---|---|
-| auto | ~35% → fluent Turkish translation | ✅ | ✅ |
-| forced `en` | ✅ | English translation (readable) | Turkish (readable) |
+| | English speech | Turkish speech |
+|---|---|---|
+| auto | wrong-language coin toss on quiet/accented audio | untested — no real Turkish sample exists |
+| forced `en` | ✅ correct (7/7 saved samples + 1 live, hints off) | short: rough English translation · long (58 s): stays correct Turkish |
 
-Forced `en` never produces the unusable case. Long Turkish stays Turkish because
-the language token is a soft prior the acoustic evidence can override past one
-window — the same clip translates at 10 s and 25 s but not at 50 s.
+Forced `en` never produced an unusable output on any real sample. Caveats on
+the record: every "Turkish speech" behaviour rests on synthetic Yelda-TTS
+clips — Parakeet ground-truthing showed *all* real saved samples were English
+speech, so no genuine recording has been through this matrix. The original
+length-crossover evidence (translates at 10/25 s, stays Turkish at 50 s) was
+invalid twice over — measured on a clip later proven to be English speech, and
+contaminated by the auto-created default `hints.txt` — but the behaviour
+itself was then re-confirmed clean on genuine synthetic Turkish (hints off):
+9.6 s → lossy English translation ("yürüyüş yaptım" became "going to sleep"),
+58 s → correct Turkish transcript. The language token holds for about one
+window, then the acoustics win. Note the translation is *rough*, not faithful —
+"translates it for me" is not a feature to rely on, merely a readable failure.
 
 Auto remains available in the menu; it is the right choice when the language is
 genuinely unknown, which is what upstream built it for. It is no longer the
@@ -691,34 +722,56 @@ was forced to `en`. Isolated to hints alone — same clip, `-lang en`:
 
 A bare comma list carries no grammatical language signal, so it neutralises the
 language token and the acoustics decide — Turkish-accented English tips over.
-One word is enough. Groq reproduces it identically (same decoder behind the
-API). Deepgram/ElevenLabs/Mistral are immune: their hints go as structured
-keyword fields, never through a decoder.
+One word is enough. Groq reproduces it verbatim (same decoder behind the API;
+same clip, `language=en`: no prompt → English 2/2, hints as prompt → Turkish
+2/2, deterministic). Deepgram/ElevenLabs/Mistral are immune, verified live:
+their hints go as structured keyword fields (`keyterm`, `keyterms[]`,
+`context_bias[]`), never through a decoder — even 8 Turkish keyterms on
+`-lang en` left the output English on all three.
 
 Auto-detect is unaffected in both directions: `whisper_lang_auto_detect` runs
 before the decode and never sees the prompt (probabilities byte-identical with
 and without hints). Two independent failure modes, one visible symptom.
 
 **Tried and reverted: wrapping hints in an English carrier sentence**
-("The following terms may appear: …"). It fixes the bare-list case and even
-made forced-`en` hold on 50 s Turkish clips where the bare token lost to the
-acoustics. Reverted because it does not survive adversarial hint content and
-breaks the other direction:
+("The following terms may appear: …"). It fixed the bare-list case, but it
+does not survive adversarial hint content, and it breaks the other direction:
 
 | case | result |
 |---|---|
-| English audio, `-lang en`, hints = 8 Turkish words | Turkish — carrier outvoted |
+| English audio, `-lang en`, short carrier + 8 Turkish hint words | Turkish — carrier outvoted |
 | Turkish audio, `-lang tr`, English carrier | English — carrier overrode the selection |
 
-There is no neutral prompt form: one text, its dominant language wins. Any
-carrier is an arms race against the hint content. The real constraint is on
-`hints.txt` itself — **hints must be written in the dictation language** — and
-no wrapper removes it. Current state: hints pass through unmodified (the
-pre-existing behaviour), the hazard is documented at the pass-through site, and
-the practical mitigations if it bites again are: keep hints.txt to
-English-shaped technical terms, or clear it when dictating other languages.
-Per-language hint files (`hints.en.txt`, …) would be the correct fix if this
-ever matters enough.
+Follow-up measurements sharpened *why*, and killed the obvious repairs:
+
+- **Sizing works, per-language authoring required.** A long grammatical
+  carrier (~3× the hint tokens) beats the 8-Turkish-word attack, and a long
+  *Turkish* carrier holds `-lang tr` around 12 English tech terms. The app
+  controls both sides, so the ratio is controllable — up to whisper's
+  224-token prompt budget, and only with a hand-written sentence per language.
+- **Count-matching fails.** Padding the list with common English words at 1:1
+  and 2:1 against the Turkish terms changed nothing; order did not matter
+  either. The language signal is grammatical coherence, not token count: a
+  word bag reads as no language, gets discounted wholesale, and the acoustics
+  decide. There is no neutral prompt form and no cancellation trick — the
+  prompt channel has exactly two safe states, coherent prose in the
+  transcription language or empty.
+
+The real constraint is on `hints.txt` itself — **hints must be written in the
+dictation language** — and no wrapper removes it. Current state: hints pass
+through unmodified (the pre-existing behaviour), the hazard is documented at
+the pass-through site, and `-no-hints` disables the mechanism entirely. If it
+bites again: keep hints.txt to English-shaped technical terms, or run with
+`-no-hints`. Per-language hint files (`hints.en.txt`, …) would be the correct
+fix if this ever matters enough.
+
+Two adjacent facts caught in the same investigation: `config.GetHints`
+**auto-creates** `hints.txt` with the default template on first touch of a
+config dir, so "no hints" configurations silently carry the default list (this
+contaminated several controls before it was caught — beware in future A/Bs).
+And that default contains `App Router`, which Mistral rejects with a 400 for
+whitespace — until the sanitization in `mistral.go`, every Mistral
+transcription on a default config failed outright.
 
 **How comparable apps handle the same hazard** (read from source 2026-08-07,
 same checkouts as the STT-landscape survey). Both competitors keep user
@@ -766,10 +819,7 @@ vocabulary "affects not just spelling but also punctuation, **language
 detection**, and formatting". Their recommended posture is vocabulary
 minimally + post-hoc replacements for anything that must be reliable.
 **Wispr Flow** claims "word boosting" during transcription plus replacement
-rules after; mechanics unverifiable (own model stack). Also confirmed: the
-bare-list flip reproduces on Groq's hosted `whisper-large-v3-turbo` verbatim
-(same clip, `language=en`: no prompt → English 2/2, hints as prompt → Turkish
-2/2), so the hazard is the model family's, not our build's.
+rules after; mechanics unverifiable (own model stack).
 
 The field at a glance:
 
@@ -1146,8 +1196,11 @@ of capitalised terms pushes mid-sentence capitals the other way. Punctuation
 follows the same rule. Write `hints.txt` the way the output should look.
 
 Ordinary prompt-conditioning side effects come with it (a repeated word at the
-end of one clip, a dropped comma). Biasing is a trade, not a free win — which is
-why it stays opt-in per user rather than being seeded with defaults.
+end of one clip, a dropped comma). Biasing is a trade, not a free win.
+(Superseded detail: `GetHints` does seed a default `hints.txt` template on
+first run, so in practice hints are on by default. And the trade turned out
+far worse than style bleed — a bare hint list can flip the entire output
+language; see "Known: bare-list hints flip the transcription language".)
 
 
 ## Why the login item is written but never bootstrapped (2026-07-28)
