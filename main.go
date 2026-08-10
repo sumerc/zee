@@ -245,6 +245,7 @@ func run() {
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
+	noHintsFlag := flag.Bool("no-hints", false, "Disable vocabulary hints entirely (ignore hints.txt)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe audio file(s) and exit; extra files may follow as positional args (one transcript printed per line)")
 	providerFlag := flag.String("provider", "", "Transcription provider (e.g. parakeet, groq); overrides saved config")
 	modelFlag := flag.String("model", "", "Model ID for the selected provider; overrides saved config")
@@ -321,7 +322,9 @@ func run() {
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
 		activeFormat = *formatFlag
-		if *hintsFlag != "" {
+		if *noHintsFlag {
+			config.SetHints("") // pins hints empty; hints.txt is never read
+		} else if *hintsFlag != "" {
 			config.SetHints(*hintsFlag)
 		}
 	default:
@@ -965,6 +968,16 @@ func tryStartSession(sessions chan<- recSession) *atomic.Bool {
 	if !isRecording.CompareAndSwap(false, true) {
 		denyBusy("Already recording or transcribing.")
 		return nil
+	}
+	// After a long idle, macOS has paged the local model out and the first
+	// inference pays seconds of page-in. Re-touch it now, in parallel with the
+	// recording, so the cost is gone by release. The provider itself decides
+	// whether a warm is due (idle threshold) — a no-op for cloud providers.
+	configMu.Lock()
+	tr := activeTranscriber
+	configMu.Unlock()
+	if w, ok := tr.(interface{ Warm() }); ok {
+		go w.Warm()
 	}
 	sc := &atomic.Bool{}
 	audio.PlayStart() // reflexive: sound the press now, not after the record loop spins up (playOne is non-blocking)
