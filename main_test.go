@@ -291,3 +291,45 @@ func TestDeviceChangeAction(t *testing.T) {
 		}
 	}
 }
+
+// warmSpy is a Transcriber that records whether the optional Warm() hook
+// fired. It guards the structural assertion in tryStartSession: Warm is wired
+// through an anonymous interface, so a rename or receiver change would not
+// fail the build — only this test notices the trigger going dead.
+type warmSpy struct {
+	*transcriber.FakeTranscriber
+	warmed chan struct{}
+}
+
+func (w *warmSpy) Warm() {
+	select {
+	case w.warmed <- struct{}{}:
+	default:
+	}
+}
+
+func TestTryStartSessionTriggersWarm(t *testing.T) {
+	isRecording.Store(false)
+	defer isRecording.Store(false)
+
+	spy := &warmSpy{FakeTranscriber: transcriber.NewFake("", nil), warmed: make(chan struct{}, 1)}
+	configMu.Lock()
+	old := activeTranscriber
+	activeTranscriber = spy
+	configMu.Unlock()
+	defer func() {
+		configMu.Lock()
+		activeTranscriber = old
+		configMu.Unlock()
+	}()
+
+	sessions := make(chan recSession, 1)
+	if tryStartSession(sessions) == nil {
+		t.Fatal("expected the session to start")
+	}
+	select {
+	case <-spy.warmed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Warm() never fired on session start — tryStartSession's interface assertion no longer matches")
+	}
+}
