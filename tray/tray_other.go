@@ -17,5 +17,6 @@ func updateStatusItem(string)                        {}
 func updateModelItem(int)                            {}
 func setHintsEnabled(bool)                           {}
 func updateAutoPasteItem(bool)                       {}
+func updateListenItem(bool)                          {}
 func updateLoginItem(bool)                           {}
 func updateHotkeyDisplay()                           {}

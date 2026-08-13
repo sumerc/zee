@@ -20,6 +20,7 @@ var (
 
 	mSettings     *systray.MenuItem
 	mAutoPaste    *systray.MenuItem
+	mListen       *systray.MenuItem
 	mLogin        *systray.MenuItem
 	mHotkey       *systray.MenuItem
 	mEditHints    *systray.MenuItem
@@ -79,6 +80,17 @@ func updateAutoPasteItem(on bool) {
 		mAutoPaste.Check()
 	} else {
 		mAutoPaste.Uncheck()
+	}
+}
+
+func updateListenItem(on bool) {
+	if mListen == nil {
+		return
+	}
+	if on {
+		mListen.Check()
+	} else {
+		mListen.Uncheck()
 	}
 }
 
@@ -247,6 +259,15 @@ func onReady() {
 		}
 		if autoPasteCb != nil {
 			autoPasteCb(mAutoPaste.Checked())
+		}
+	})
+
+	mListen = mSettings.AddSubMenuItemCheckbox("Listen Mode",
+		"Keep the mic open and append each chunk to transcript.txt", listenOn)
+	mListen.Click(func() {
+		want := !mListen.Checked()
+		if listenCb != nil {
+			listenCb(want) // the app confirms via SetListen; a failed start turns it back off
 		}
 	})
 

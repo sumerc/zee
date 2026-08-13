@@ -106,6 +106,7 @@ type recordingConfig struct {
 	lang            string
 	hints           string
 	autoPaste       bool
+	listen          bool          // transcribe to transcript.txt instead of the clipboard
 	tailWait        time.Duration // mic kept open after release so a fast keyup doesn't clip the last word
 	pressToRecordMs float64       // press→mic-live, filled at record start; logged with the transcription metrics
 	releasedAt      time.Time     // recording end, filled once it happens; start of the felt-latency metric
@@ -315,6 +316,7 @@ func run() {
 	}
 	if !flagSet["autopaste"] {
 		autoPaste = cfg.AutoPaste
+		listenMode = cfg.ListenMode
 	} else {
 		autoPaste = *autoPasteFlag
 	}
@@ -476,6 +478,10 @@ func run() {
 		})
 	}
 	tray.SetAutoPaste(autoPaste)
+	// Seeded before Init, like auto-paste: the menu is built from these, so
+	// without it a persisted listen_mode=true renders as an unchecked box —
+	// the mode silently on while the UI says off.
+	tray.SetListen(listenMode)
 
 	var trayModels []tray.Model
 	modelIndex := map[string]transcriber.ModelInfo{}
@@ -648,6 +654,8 @@ func run() {
 		exec.Command("open", "-t", config.CredentialsPath()).Run()
 	})
 	tray.SetHotkeyLabel(cfg.Hotkey.OrDefault().Display())
+
+	tray.OnListen(setListenMode)
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
@@ -834,6 +842,7 @@ func run() {
 		configMu.Lock()
 		apChanged := autoPaste != s.AutoPaste
 		autoPaste = s.AutoPaste
+		listenMode = s.ListenMode
 		configMu.Unlock()
 		if apChanged {
 			tray.SetAutoPaste(s.AutoPaste)
@@ -1157,20 +1166,35 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		lang:      activeTranscriber.GetLanguage(),
 		hints:     config.GetHints(),
 		autoPaste: autoPaste,
+		listen:    listenMode,
 		tailWait:  time.Duration(config.Get().TailWaitMs) * time.Millisecond,
 	}
 	configMu.Unlock()
+	// Listen mode writes a meeting to a file; pasting each chunk into whatever
+	// window has focus would be actively harmful, and streaming partials have
+	// nowhere to go.
+	if cfg.listen {
+		cfg.autoPaste, cfg.stream = false, false
+	}
 	if cfg.autoPaste && !permissions.HasAccessibility() {
 		cfg.autoPaste = false
 		tray.SetError("Auto-paste is waiting for Accessibility permission")
 	}
 
-	tSess, err := cfg.tr.NewSession(context.Background(), transcriber.SessionConfig{
-		Stream:   cfg.stream,
-		Format:   cfg.format,
-		Language: cfg.lang,
-		Hints:    cfg.hints,
-	})
+	var tSess transcriber.Session
+	var err error
+	if cfg.listen {
+		// Same capture, VAD, overlay and feedback as a normal recording — only
+		// the destination differs. See listen.go.
+		tSess, err = newListenSink(cfg.tr, cfg.lang, cfg.hints)
+	} else {
+		tSess, err = cfg.tr.NewSession(context.Background(), transcriber.SessionConfig{
+			Stream:   cfg.stream,
+			Format:   cfg.format,
+			Language: cfg.lang,
+			Hints:    cfg.hints,
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1204,7 +1228,14 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		}
 	}()
 
-	rec, err := newRecordingSession(capture, sess.Stop, tSess, sess.SilenceClose, cfg.tailWait)
+	// A meeting has long quiet stretches, and toggle mode arms the silence
+	// auto-close — which would end the session after the first 30 s pause.
+	// Hand listen mode a handle that is never armed instead.
+	silenceClose := sess.SilenceClose
+	if cfg.listen {
+		silenceClose = &atomic.Bool{}
+	}
+	rec, err := newRecordingSession(capture, sess.Stop, tSess, silenceClose, cfg.tailWait)
 	if err != nil {
 		tSess.Close()
 		return nil, err
