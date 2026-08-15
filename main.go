@@ -19,7 +19,10 @@ import (
 	"zee/alert"
 	"zee/audio"
 	"zee/clipboard"
+	"strings"
+
 	"zee/config"
+	"zee/correct"
 	"zee/encoder"
 	"zee/hotkey"
 	"zee/log"
@@ -48,6 +51,8 @@ var transcriptionsMu sync.Mutex
 var transcriptionCount int
 var streamEnabled bool
 var activeFormat string
+var correctionOff bool
+var correctionHints string // -hints override for the correction dictionary
 
 type savedRecording struct {
 	AudioData   []byte
@@ -245,6 +250,8 @@ func run() {
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
+	noHintsFlag := flag.Bool("no-hints", false, "Disable vocabulary hints entirely (ignore hints.txt)")
+	noCorrectFlag := flag.Bool("no-correct", false, "Disable post-transcription vocabulary correction (hints.txt dictionary)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe audio file(s) and exit; extra files may follow as positional args (one transcript printed per line)")
 	providerFlag := flag.String("provider", "", "Transcription provider (e.g. parakeet, groq); overrides saved config")
 	modelFlag := flag.String("model", "", "Model ID for the selected provider; overrides saved config")
@@ -321,9 +328,15 @@ func run() {
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
 		activeFormat = *formatFlag
-		if *hintsFlag != "" {
+		if *noHintsFlag {
+			config.SetHints("") // pins hints empty; hints.txt is never read
+		} else if *hintsFlag != "" {
 			config.SetHints(*hintsFlag)
 		}
+		// -no-hints only controls provider prompt hints; the corrector has its
+		// own kill switch so the two stay independently testable.
+		correctionOff = *noCorrectFlag
+		correctionHints = *hintsFlag
 	default:
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
 	}
@@ -365,9 +378,12 @@ func run() {
 		}
 	}
 	streamEnabled = modelSupportsStream(activeTranscriber)
-	if *langFlag != "" {
-		activeTranscriber.SetLanguage(*langFlag)
-	}
+	// Applied even when empty, for the same reason the flag merge above keeps an
+	// empty value: "" is Auto-detect, a real choice. Skipping it would leave the
+	// provider's own default in place — "en" for whisper — so an explicit Auto
+	// (saved setting, or -lang "") would silently transcribe as English on any
+	// path the tray does not reach, -transcribe included.
+	activeTranscriber.SetLanguage(*langFlag)
 
 	log.SetTranscribeEnabled(*debugTranscribeFlag)
 	if err := log.Init(); err != nil {
@@ -521,7 +537,6 @@ func run() {
 			activeFormat = *formatFlag
 		}
 		langs := activeTranscriber.SupportedLanguages()
-		hints := transcriber.SupportsHints(activeTranscriber)
 		configMu.Unlock()
 
 		// Only Parakeet has a provider-level Close (frees the gguf); cloud
@@ -534,7 +549,6 @@ func run() {
 
 		config.Update(func(s *config.Settings) { s.Provider = p.Name; s.Model = model })
 		tray.SetLanguages(langs)
-		tray.SetHintsEnabled(hints)
 		tray.SetActiveModel(p.Name, model)
 	}
 
@@ -604,7 +618,8 @@ func run() {
 		}
 		return true
 	})
-	tray.SetHintsEnabled(transcriber.SupportsHints(activeTranscriber))
+	// "Edit Hints…" is never greyed out: hints.txt feeds the correct/ post-pass
+	// for every provider, even the ones that take no decode bias themselves.
 	// A dev build can't auto-start (login.Supported), and drops any entry an
 	// earlier build of itself left behind — otherwise launchd keeps relaunching
 	// a rebuilt, re-signed binary at login and macOS re-prompts for permissions.
@@ -963,6 +978,16 @@ func tryStartSession(sessions chan<- recSession) *atomic.Bool {
 		denyBusy("Already recording or transcribing.")
 		return nil
 	}
+	// After a long idle, macOS has paged the local model out and the first
+	// inference pays seconds of page-in. Re-touch it now, in parallel with the
+	// recording, so the cost is gone by release. The provider itself decides
+	// whether a warm is due (idle threshold) — a no-op for cloud providers.
+	configMu.Lock()
+	tr := activeTranscriber
+	configMu.Unlock()
+	if w, ok := tr.(interface{ Warm() }); ok {
+		go w.Warm()
+	}
 	sc := &atomic.Bool{}
 	audio.PlayStart() // reflexive: sound the press now, not after the record loop spins up (playOne is non-blocking)
 	sessions <- recSession{Stop: resetStop(), SilenceClose: sc, PressedAt: time.Now()}
@@ -1228,6 +1253,12 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updatesDone <-chan struct{}, skipPaste bool, recDur time.Duration, cfg recordingConfig) {
 	result, closeErr := sess.Close()
 	<-updatesDone
+	// Correct before any consumer sees the text (paste, clipboard, history).
+	// Stream mode already pasted incrementally; its final text is still
+	// corrected for the clipboard and logs.
+	if closeErr == nil && result.HasText {
+		result.Text = applyCorrection(result.Text)
+	}
 
 	var clipPrev string
 	var lat log.LatencyBreakdown
@@ -1483,6 +1514,33 @@ func providerByName(name string) (transcriber.ProviderInfo, bool) {
 // runTranscribeFiles transcribes one or more files with the already-loaded
 // engine — the model is loaded once at startup and reused across files — and
 // prints one transcript per line, in input order.
+// applyCorrection maps misheard vocabulary spans in transcribed text onto the
+// hints.txt dictionary (see the correct package). It runs for every language,
+// auto-detect included — dictionary terms are language-agnostic jargon, and
+// the matcher's guards keep non-English text untouched (measured; see
+// design-notes).
+func applyCorrection(text string) string {
+	if correctionOff {
+		return text
+	}
+	lines := config.HintLines()
+	if correctionHints != "" {
+		lines = strings.Split(correctionHints, ",")
+	}
+	corrected, reps := correct.Parse(lines).Correct(text)
+	// Diagnostics carry the replaced spans themselves — the corrector is the
+	// riskiest rewrite step in the pipeline, and a bad dictionary entry is
+	// only findable if the log names what changed.
+	if len(reps) > 0 {
+		pairs := make([]string, len(reps))
+		for i, r := range reps {
+			pairs[i] = r.From + "→" + r.To
+		}
+		log.Info(fmt.Sprintf("corrections n=%d [%s]", len(reps), strings.Join(pairs, ", ")))
+	}
+	return corrected
+}
+
 func runTranscribeFiles(files []string) {
 	for _, f := range files {
 		text, err := transcribeFile(f)
@@ -1520,7 +1578,7 @@ func transcribeFile(audioFile string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return result.Text, nil
+	return applyCorrection(result.Text), nil
 }
 
 func runBenchmark(wavFile string, runs int) {

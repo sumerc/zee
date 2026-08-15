@@ -88,9 +88,10 @@ func (g *Groq) Transcribe(audioData []byte, format, lang, hints string) (*Result
 	if lang != "" {
 		writer.WriteField("language", lang)
 	}
-	if hints != "" {
-		writer.WriteField("prompt", hints)
-	}
+	// hints are deliberately NOT sent: whisper-family models take them as the
+	// decoder prompt, which flips the transcription language on real dictation
+	// (measured — see design-notes "Vocabulary correction"). The correct/
+	// post-pass covers vocabulary instead.
 	writer.Close()
 
 	req, err := http.NewRequest("POST", g.apiURL, &body)

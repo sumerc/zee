@@ -79,6 +79,8 @@ overwriting. `BENCH_FILE=` overrides the destination.
 - `-runs N` - benchmark iterations (default: 3)
 - `-logpath <path>` - log directory (default: `$ZEE_LOG_PATH` or OS-specific, use `./` for current directory)
 - `-hints <words>` - comma-separated vocabulary hints (overrides `hints.txt`)
+- `-no-hints` - disable vocabulary hints entirely (ignore `hints.txt`)
+- `-no-correct` - disable the post-transcription vocabulary corrector (`correct/` package; on by default for all languages, maps misheard spans onto `hints.txt` terms, including `Term: alias1, alias2` spoken-form aliases)
 - `-transcribe <file>` - transcribe an audio file (mp3/flac/wav) and exit
 
 The tray's "Save Last Recording" persists the last clip (audio + `info.json`) to `<config>/samples/`; a failed transcription auto-saves there too, with the error recorded in `info.json`.

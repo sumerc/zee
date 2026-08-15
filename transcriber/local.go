@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"zee/audio"
+	"zee/encoder"
 	"zee/localmodel"
+	"zee/log"
 )
 
 // localEngine is the entire engine-specific surface of an on-device provider:
@@ -37,10 +40,11 @@ type localProvider struct {
 	engine   localEngine
 	loadErr  error
 	lang     string
+	lastUsed time.Time  // last time the engine's memory was touched (load, session, warm)
 
 	name      string                                      // provider name, e.g. "parakeet"
 	defaultID string                                      // this engine's model, used when modelID belongs to another
-	hints     bool                                        // engine can bias decoding toward a vocabulary
+	hints     bool                                        // engine receives hints.txt as decode bias; false = never sent (see NewSession)
 	open      func(localmodel.Model) (localEngine, error) // load a model with this engine
 	langsFor  func(localmodel.Model) []Language
 }
@@ -183,23 +187,51 @@ func (p *localProvider) load() {
 
 	p.mu.Lock()
 	p.engine, p.loadErr, p.loadedID = eng, err, want
+	p.lastUsed = time.Now() // a fresh load is resident by definition
+	p.mu.Unlock()
+}
+
+// warmIdleThreshold is the idle gap after which the next keydown pre-touches
+// the model. macOS compresses/evicts the loaded weights after long idle
+// (observed as RSS ~780 → 160 MB overnight), and the first inference then
+// pays the whole page-in serially — measured seconds, not milliseconds, see
+// design-notes "felt-latency" notes. Below the threshold the weights are
+// still resident and a warm pass would be pure battery cost.
+const warmIdleThreshold = 10 * time.Minute
+
+// Warm re-touches the loaded model if it has been idle long enough to have
+// been paged out, so the page-in overlaps the recording instead of delaying
+// the transcription. Runs one short silent inference — the only way through
+// the engine API to fault every weight page and GPU buffer back in. Blocking;
+// callers run it in a goroutine at recording start. The engine mutex
+// serializes it against the real inference, so a fast release never races it
+// — worst case the inference queues behind the tail of the page-in, which is
+// still never slower than paying it cold.
+func (p *localProvider) Warm() {
+	p.mu.Lock()
+	eng := p.engine
+	ready := eng != nil && p.loadErr == nil && p.loadedID == p.modelID
+	idle := time.Since(p.lastUsed)
+	p.mu.Unlock()
+	if !ready || idle < warmIdleThreshold {
+		return // loading, broken, or still resident
+	}
+	start := time.Now()
+	// Fixed language, not auto: a warm pass must not exercise detection (it
+	// would log a bogus lang_detect line for silence). Result discarded.
+	eng.Transcribe(make([]float32, encoder.SampleRate), "en", "")
+	log.Info(fmt.Sprintf("model_warm engine=%s idle_s=%.0f warm_ms=%.0f",
+		p.name, idle.Seconds(), float64(time.Since(start).Microseconds())/1000))
+	p.mu.Lock()
+	p.lastUsed = time.Now()
 	p.mu.Unlock()
 }
 
 // IsLocal reports whether tr is an on-device provider. Local decode has no
-// streaming and no audio encoding, so the UI greys those out. Hints are a
-// per-engine capability, not a local/cloud one — ask SupportsHints.
+// streaming and no audio encoding, so the UI greys those out.
 func IsLocal(tr Transcriber) bool {
 	_, ok := tr.(*localProvider)
 	return ok
-}
-
-// SupportsHints reports whether tr can bias decoding toward the vocabulary in
-// hints.txt, so the tray greys the hints entry out for the engines that cannot
-// (parakeet). Every cloud provider takes hints in some form.
-func SupportsHints(tr Transcriber) bool {
-	p, ok := tr.(*localProvider)
-	return !ok || p.hints
 }
 
 func (p *localProvider) Name() string { return p.name }
@@ -293,7 +325,18 @@ func (p *localProvider) NewSession(_ context.Context, cfg SessionConfig) (Sessio
 	if cfg.Language != "" {
 		lang = cfg.Language
 	}
-	return &localSession{engine: eng, lang: lang, hints: cfg.Hints, updates: make(chan string)}, nil
+	p.mu.Lock()
+	p.lastUsed = time.Now() // inference follows within this record cycle
+	p.mu.Unlock()
+	// Engines with hints=false never see the vocabulary: parakeet has no
+	// prompt surface, and whisper's initial prompt flips the transcription
+	// language on real dictation (measured — see design-notes "Vocabulary
+	// correction"). The correct/ post-pass covers vocabulary instead.
+	hints := cfg.Hints
+	if !p.hints {
+		hints = ""
+	}
+	return &localSession{engine: eng, lang: lang, hints: hints, updates: make(chan string)}, nil
 }
 
 // Close frees the loaded model. It waits out any in-flight background load
