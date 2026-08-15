@@ -2,19 +2,20 @@ package correct
 
 import "testing"
 
-// The dictionary used across tests mirrors a realistic hints.txt: fuzzy terms
-// plus alias lines for terms whose spoken form defeats phonetics.
+// The dictionary used across tests is a plain list of real terms — no
+// hand-written aliases. Acronym pronunciations (CGo → "seego") are generated
+// automatically by spokenTerm/spokenSpan.
 var testLines = []string{
 	"OpenTelemetry",
 	"OpenAI",
 	"deduplication",
-	"Zee: z",
+	"Zee",
 	"Bun",
 	"AppKit",
 	"ChatGPT",
 	"Node.js",
-	"CGo: seego, see go",
-	"ANE: a&e",
+	"CGo",
+	"ANE",
 	"R&D",
 }
 
@@ -28,9 +29,8 @@ func TestCorpusHighConfidencePairs(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"look at OpenTechnetic Contribute docs", "look at OpenTelemetry Contribute docs"},
 		{"does this did application happens", "does this deduplication happens"},
-		{"the Seego appkit was done", "the CGo AppKit was done"},
-		{"run it on A&E right now", "run it on ANE right now"},
-		{"I run z from main branch", "I run Zee from main branch"},
+		{"the Seego appkit was done", "the CGo AppKit was done"}, // via generated spoken key
+		{"I run z from main branch", "I run Zee from main branch"}, // "z" expands to "zee"
 	}
 	for _, c := range cases {
 		if got := apply(t, c.in); got != c.want {
@@ -140,8 +140,63 @@ func TestAliasParse(t *testing.T) {
 	if e.canonical != "CGo" {
 		t.Errorf("canonical = %q", e.canonical)
 	}
-	// Keys: cgo, seego (both "seego" and "see go" normalize to the same key).
+	// Keys: cgo, seego (the generated spoken key and both aliases collapse to
+	// the same "seego").
 	if len(e.keys) != 2 {
 		t.Errorf("keys = %v", e.keys)
+	}
+}
+
+func TestSpokenTerm(t *testing.T) {
+	cases := []struct{ term, want string }{
+		{"CGo", "seego"},       // letter C + word "Go"
+		{"ANE", "ayenee"},      // all letters
+		{"Zee", ""},            // plain word, no acronym segment
+		{"OpenTelemetry", ""},  // plain word
+		{"OpenAI", "openayeye"} , // word + trailing letters
+		{"dp1751.md", ""},      // digits: no spoken form
+	}
+	for _, c := range cases {
+		if got := spokenTerm(c.term); got != c.want {
+			t.Errorf("spokenTerm(%q) = %q, want %q", c.term, got, c.want)
+		}
+	}
+}
+
+func TestKnownMissAmpersandRendering(t *testing.T) {
+	// "A&E" (whisper's rendering of spoken A-N-E) is a documented miss with a
+	// plain "ANE" entry: "ayee" vs "ayenee" is ~0.33, above the threshold —
+	// deliberately NOT loosened to avoid fitting the corpus. The explicit
+	// alias remains the escape hatch.
+	if got := apply(t, "run it on A&E right now"); got != "run it on A&E right now" {
+		t.Errorf("plain dict: got %q, want unchanged", got)
+	}
+	d := Parse([]string{"ANE: a&e"})
+	if got := d.Apply("run it on A&E right now"); got != "run it on ANE right now" {
+		t.Errorf("alias escape hatch: got %q", got)
+	}
+}
+
+func TestSingleLettersInProseNotRewritten(t *testing.T) {
+	// General-case probes for the spoken expansion: ordinary single letters
+	// must never trigger a correction.
+	for _, text := range []string{
+		"plan b is better",
+		"vitamin c helps a lot",
+		"option a or option b",
+		"the u s market opened",
+	} {
+		if got := apply(t, text); got != text {
+			t.Errorf("Apply(%q) = %q, want unchanged", text, got)
+		}
+	}
+}
+
+func TestNoOpPreservesInputVerbatim(t *testing.T) {
+	// When nothing matches, the input must come back byte-for-byte —
+	// including newlines and spacing (cloud providers can return them).
+	text := "First paragraph.\n\nSecond  paragraph here."
+	if got := apply(t, text); got != text {
+		t.Errorf("got %q, want verbatim input", got)
 	}
 }

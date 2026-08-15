@@ -1527,7 +1527,18 @@ func applyCorrection(text string) string {
 	if correctionHints != "" {
 		lines = strings.Split(correctionHints, ",")
 	}
-	return correct.Parse(lines).Apply(text)
+	corrected, reps := correct.Parse(lines).Correct(text)
+	// Diagnostics carry the replaced spans themselves — the corrector is the
+	// riskiest rewrite step in the pipeline, and a bad dictionary entry is
+	// only findable if the log names what changed.
+	if len(reps) > 0 {
+		pairs := make([]string, len(reps))
+		for i, r := range reps {
+			pairs[i] = r.From + "→" + r.To
+		}
+		log.Info(fmt.Sprintf("corrections n=%d [%s]", len(reps), strings.Join(pairs, ", ")))
+	}
+	return corrected
 }
 
 func runTranscribeFiles(files []string) {

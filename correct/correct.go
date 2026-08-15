@@ -33,6 +33,7 @@ const maxCandidateLen = 50
 // two strings are different words no matter what Soundex says.
 const maxRawScore = 0.4
 
+
 type entry struct {
 	canonical string
 	keys      []string
@@ -40,8 +41,7 @@ type entry struct {
 
 // Dict is a parsed correction dictionary. The zero value corrects nothing.
 type Dict struct {
-	entries   []entry
-	Threshold float64
+	entries []entry
 }
 
 // Parse builds a Dict from hints lines. Each line is either a bare term
@@ -50,7 +50,7 @@ type Dict struct {
 // canonical term. Lines whose keys are empty or non-ASCII are skipped for
 // matching (they may still be valid prompt hints for cloud providers).
 func Parse(lines []string) Dict {
-	d := Dict{Threshold: DefaultThreshold}
+	var d Dict
 	for _, line := range lines {
 		canonical := strings.TrimSpace(line)
 		var aliases []string
@@ -66,20 +66,26 @@ func Parse(lines []string) Dict {
 			continue
 		}
 		var keys []string
-		add := func(word string, ampVariant bool) {
-			for _, k := range matchKeys(word, ampVariant) {
-				if !containsKey(keys, k) {
-					keys = append(keys, k)
-				}
+		add := func(text string) {
+			if isFuzzyKey(text) && !containsKey(keys, text) {
+				keys = append(keys, text)
 			}
 		}
+		add(matchKey(canonical))
 		// The "&"→"and" variant applies to the canonical term only ("R&D" →
 		// "randd" catches spoken "R and D"). For aliases it is a trap: the
 		// "aande" variant of an "a&e" alias fuzzy-matches every "and <word>"
 		// bigram in normal prose.
-		add(canonical, true)
+		if strings.Contains(canonical, "&") {
+			add(matchKey(strings.ReplaceAll(canonical, "&", " and ")))
+		}
+		// Acronym-segmented terms also match by pronunciation: "CGo" is
+		// spoken "see go", "ANE" is "ay en ee". Generated automatically so
+		// hints.txt stays a plain list of real terms; explicit aliases remain
+		// the escape hatch for renderings the expansion cannot predict.
+		add(spokenTerm(canonical))
 		for _, a := range aliases {
-			add(a, false)
+			add(matchKey(a))
 		}
 		if len(keys) > 0 {
 			d.entries = append(d.entries, entry{canonical: canonical, keys: keys})
@@ -88,18 +94,27 @@ func Parse(lines []string) Dict {
 	return d
 }
 
+// Replacement records one applied correction: the span as transcribed and the
+// dictionary term it became.
+type Replacement struct {
+	From, To string
+}
+
 // Apply corrects text against the dictionary and returns the result. Word
 // spacing is normalized to single spaces; punctuation and the case pattern of
 // replaced spans are preserved.
 func (d Dict) Apply(text string) string {
+	out, _ := d.Correct(text)
+	return out
+}
+
+// Correct is Apply plus the list of replacements made, for diagnostics.
+func (d Dict) Correct(text string) (string, []Replacement) {
 	if len(d.entries) == 0 {
-		return text
-	}
-	threshold := d.Threshold
-	if threshold == 0 {
-		threshold = DefaultThreshold
+		return text, nil
 	}
 
+	var applied []Replacement
 	words := strings.Fields(text)
 	result := make([]string, 0, len(words))
 	for i := 0; i < len(words); {
@@ -119,7 +134,15 @@ func (d Dict) Apply(text string) string {
 				continue
 			}
 			candidate := buildNgram(span)
-			repl, score, ok := d.findBest(candidate, threshold)
+			repl, score, ok := d.findBest(candidate)
+			// The span's pronunciation is a second candidate: single-letter
+			// tokens expand to letter names ("z" → "zee") so acronyms match
+			// without hand-written aliases.
+			if sp := spokenSpan(span); sp != "" && sp != candidate {
+				if r2, s2, ok2 := d.findBest(sp); ok2 && (!ok || s2 < score) {
+					repl, score, ok = r2, s2, true
+				}
+			}
 			if !ok {
 				continue
 			}
@@ -141,44 +164,51 @@ func (d Dict) Apply(text string) string {
 		}
 		prefix, _ := splitPunctuation(words[i])
 		_, suffix := splitPunctuation(words[i+bestN-1])
-		result = append(result, prefix+preserveCase(words[i], bestRepl)+suffix)
+		corrected := preserveCase(words[i], bestRepl)
+		if from := strings.Join(words[i:i+bestN], " "); from != prefix+corrected+suffix {
+			applied = append(applied, Replacement{From: from, To: corrected})
+		}
+		result = append(result, prefix+corrected+suffix)
 		i += bestN
 	}
-	return strings.Join(result, " ")
+	if len(applied) == 0 {
+		return text, nil
+	}
+	return strings.Join(result, " "), applied
 }
 
 // findBest returns the canonical term with the lowest combined score below
-// threshold, if any.
-func (d Dict) findBest(candidate string, threshold float64) (string, float64, bool) {
+// DefaultThreshold, if any.
+func (d Dict) findBest(candidate string) (string, float64, bool) {
 	if !isFuzzyKey(candidate) || len(candidate) > maxCandidateLen {
 		return "", 0, false
 	}
-	best, bestScore := "", threshold
+	best, bestScore := "", DefaultThreshold
 	found := false
 	candSoundex := soundex(candidate)
 	for _, e := range d.entries {
-		for _, key := range e.keys {
+		for _, k := range e.keys {
+			// Short keys are wildcards under fuzzy matching ("ae" would
+			// capture "ah"); they only ever match exactly.
+			if len(k) <= 3 && candidate != k {
+				continue
+			}
 			// Length guard: max 25% difference (at least 2 chars), so an
 			// n-gram cannot swallow a much shorter term ("openaigpt" vs
 			// "openai").
-			// Short keys are wildcards under fuzzy matching ("ae" would
-			// capture "ah"); they only ever match exactly.
-			if len(key) <= 3 && candidate != key {
-				continue
-			}
-			maxLen := max(len(candidate), len(key))
-			diff := abs(len(candidate) - len(key))
+			maxLen := max(len(candidate), len(k))
+			diff := abs(len(candidate) - len(k))
 			if float64(diff) > max(float64(maxLen)*0.25, 2.0) {
 				continue
 			}
-			score := float64(levenshtein(candidate, key)) / float64(maxLen)
+			score := float64(levenshtein(candidate, k)) / float64(maxLen)
 			// The Soundex boost must not rescue genuinely distant strings:
 			// "nowdoes" is 0.43 from "nodejs" yet shares its code. Cap the
 			// raw edit distance before any boost applies.
 			if score > maxRawScore {
 				continue
 			}
-			if candSoundex != "" && candSoundex == soundex(key) {
+			if candSoundex != "" && candSoundex == soundex(k) {
 				score *= soundexBoost
 			}
 			if score < bestScore {
@@ -187,22 +217,6 @@ func (d Dict) findBest(candidate string, threshold float64) (string, float64, bo
 		}
 	}
 	return best, bestScore, found
-}
-
-// matchKeys normalizes a dictionary word into comparison keys: lowercase
-// alphanumerics only, plus (optionally) an "&"→"and" variant ("R&D" → "rd",
-// "randd").
-func matchKeys(word string, ampVariant bool) []string {
-	var keys []string
-	if k := matchKey(word); isFuzzyKey(k) {
-		keys = append(keys, k)
-	}
-	if ampVariant && strings.Contains(word, "&") {
-		if k := matchKey(strings.ReplaceAll(word, "&", " and ")); isFuzzyKey(k) && !containsKey(keys, k) {
-			keys = append(keys, k)
-		}
-	}
-	return keys
 }
 
 func matchKey(word string) string {
@@ -243,6 +257,76 @@ func isFuzzyKey(key string) bool {
 
 func containsKey(keys []string, k string) bool {
 	return slices.Contains(keys, k)
+}
+
+// letterNames are the spoken English names of a–z, used to expand acronyms on
+// the dictionary side and single-letter tokens on the transcript side.
+var letterNames = [26]string{
+	"ay", "bee", "see", "dee", "ee", "ef", "gee", "aitch", "eye", "jay",
+	"kay", "el", "em", "en", "oh", "pee", "cue", "ar", "es", "tee",
+	"you", "vee", "doubleyou", "ex", "why", "zee",
+}
+
+// spokenTerm builds the pronunciation key of a dictionary term with acronym
+// segments: an uppercase letter NOT followed by a lowercase letter is spoken
+// by name, an uppercase-initial word reads as a word. "CGo" → "seego"
+// (see+go), "ANE" → "ayenee", "Zee" → "" (plain word, no acronym segment).
+// Terms with digits or non-ASCII letters get no spoken key.
+func spokenTerm(term string) string {
+	runes := []rune(term)
+	var b strings.Builder
+	acronym := false
+	for i := 0; i < len(runes); {
+		r := runes[i]
+		switch {
+		case r >= 'A' && r <= 'Z' && (i+1 >= len(runes) || !unicode.IsLower(runes[i+1])):
+			b.WriteString(letterNames[r-'A'])
+			acronym = true
+			i++
+		case unicode.IsLetter(r) && r < 128:
+			// A word segment: initial (possibly uppercase) letter plus the
+			// following lowercase run.
+			b.WriteRune(unicode.ToLower(r))
+			i++
+			for i < len(runes) && unicode.IsLower(runes[i]) && runes[i] < 128 {
+				b.WriteRune(runes[i])
+				i++
+			}
+		default:
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				return "" // digits and non-ASCII have no letter-name form
+			}
+			i++ // punctuation ("&", ".") separates segments
+		}
+	}
+	if !acronym {
+		return ""
+	}
+	return b.String()
+}
+
+// spokenSpan builds the pronunciation form of a transcript span: single-letter
+// tokens and single letters around "&" expand to letter names ("z" → "zee",
+// "A&E" → "ayee"); other words pass through normalized. Returns "" when the
+// span has no letter to expand.
+func spokenSpan(span []string) string {
+	var b strings.Builder
+	expanded := false
+	for _, w := range span {
+		for part := range strings.SplitSeq(w, "&") {
+			k := matchKey(part)
+			if len(k) == 1 && k[0] >= 'a' && k[0] <= 'z' {
+				b.WriteString(letterNames[k[0]-'a'])
+				expanded = true
+			} else {
+				b.WriteString(k)
+			}
+		}
+	}
+	if !expanded {
+		return ""
+	}
+	return b.String()
 }
 
 // allCommon reports whether every word of a span is a common English word.
