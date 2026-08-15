@@ -19,7 +19,10 @@ import (
 	"zee/alert"
 	"zee/audio"
 	"zee/clipboard"
+	"strings"
+
 	"zee/config"
+	"zee/correct"
 	"zee/encoder"
 	"zee/hotkey"
 	"zee/log"
@@ -48,6 +51,8 @@ var transcriptionsMu sync.Mutex
 var transcriptionCount int
 var streamEnabled bool
 var activeFormat string
+var correctionOff bool
+var correctionHints string // -hints override for the correction dictionary
 
 type savedRecording struct {
 	AudioData   []byte
@@ -246,6 +251,7 @@ func run() {
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
 	noHintsFlag := flag.Bool("no-hints", false, "Disable vocabulary hints entirely (ignore hints.txt)")
+	noCorrectFlag := flag.Bool("no-correct", false, "Disable post-transcription vocabulary correction (hints.txt dictionary)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe audio file(s) and exit; extra files may follow as positional args (one transcript printed per line)")
 	providerFlag := flag.String("provider", "", "Transcription provider (e.g. parakeet, groq); overrides saved config")
 	modelFlag := flag.String("model", "", "Model ID for the selected provider; overrides saved config")
@@ -327,6 +333,10 @@ func run() {
 		} else if *hintsFlag != "" {
 			config.SetHints(*hintsFlag)
 		}
+		// -no-hints only controls provider prompt hints; the corrector has its
+		// own kill switch so the two stay independently testable.
+		correctionOff = *noCorrectFlag
+		correctionHints = *hintsFlag
 	default:
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
 	}
@@ -1244,6 +1254,12 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updatesDone <-chan struct{}, skipPaste bool, recDur time.Duration, cfg recordingConfig) {
 	result, closeErr := sess.Close()
 	<-updatesDone
+	// Correct before any consumer sees the text (paste, clipboard, history).
+	// Stream mode already pasted incrementally; its final text is still
+	// corrected for the clipboard and logs.
+	if closeErr == nil && result.HasText {
+		result.Text = applyCorrection(result.Text)
+	}
 
 	var clipPrev string
 	var lat log.LatencyBreakdown
@@ -1499,6 +1515,21 @@ func providerByName(name string) (transcriber.ProviderInfo, bool) {
 // runTranscribeFiles transcribes one or more files with the already-loaded
 // engine — the model is loaded once at startup and reused across files — and
 // prints one transcript per line, in input order.
+// applyCorrection maps misheard vocabulary spans in transcribed text onto the
+// hints.txt dictionary (see the correct package). English-only: the fuzzy
+// phonetic matching is unsound for other languages, so any other configured
+// language skips it.
+func applyCorrection(text string) string {
+	if correctionOff || activeTranscriber.GetLanguage() != "en" {
+		return text
+	}
+	lines := config.HintLines()
+	if correctionHints != "" {
+		lines = strings.Split(correctionHints, ",")
+	}
+	return correct.Parse(lines).Apply(text)
+}
+
 func runTranscribeFiles(files []string) {
 	for _, f := range files {
 		text, err := transcribeFile(f)
@@ -1536,7 +1567,7 @@ func transcribeFile(audioFile string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return result.Text, nil
+	return applyCorrection(result.Text), nil
 }
 
 func runBenchmark(wavFile string, runs int) {

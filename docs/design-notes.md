@@ -1540,3 +1540,55 @@ the fix had to cover Read as well as Copy, not just the obviously-serial half.
 
 Linux keeps the atotto backend: no local model inflates RSS there, so the fork
 is cheap and a second native backend would not pay for itself.
+
+## Vocabulary correction: deterministic post-pass instead of whisper prompt hints (2026-08-15)
+
+Measured on 32 real saved dictations (one speaker, M5 Pro, zee @ 3a7ee78): feeding
+hints.txt as whisper's initial prompt (`-lang en`, default hints) flipped **9
+of 32** clips into Turkish and produced exactly **2** hint-term corrections in
+the entire set. On one of the two, hints "corrected" *OpenTechnetic* (spoken:
+OpenTelemetry) to **OpenAI** — prompt biasing steers toward the wrong listed
+term with no distance bound. Prompt hints are net damage for local whisper;
+correction moved to a deterministic post-pass (`correct/` package) and hints
+stay out of the whisper prompt. Providers with keyterm-style biasing
+(Deepgram `keywords`, ElevenLabs `keyterms[]`, Mistral `context_bias[]`)
+keep receiving hints — that mechanism boosts tokens and cannot flip language.
+Parakeet has no prompt surface and was never affected.
+
+The algorithm is a port of Handy's `apply_custom_words`
+(github.com/cjpais/Handy, MIT — src-tauri/src/audio_toolkit/text.rs):
+n-gram (1–3 word) scan, normalized-Levenshtein score with a ×0.3 Soundex
+boost, accept < 0.18 (Handy's shipped default), length guard, case/punctuation
+preservation. VoiceInk (GPL-3, no code taken) was also examined: its
+"word replacements" are a literal find-replace table with no phonetics; that
+capability is subsumed here as alias keys — `CGo: seego, see go` in hints.txt
+makes "seego" an exact match key for CGo, covering letter-pronounced acronyms
+that defeat phonetic scoring (CGo, ANE, single-letter Z→Zee).
+
+The scan skeleton is Handy's unchanged. There are five deliberate departures —
+one addition (the alias keys above) and four guards, each guard forced by a
+false positive observed on the 32 clips. When extending the matcher, check any
+new behavior against this list before assuming Handy's choice is safe:
+
+- **Ties prefer the shorter span** (Handy iterates longest-first): "CHARGE B
+  is" swallowed "is" on a Soundex tie with "CHARGE B".
+- **Keys ≤ 3 chars match exactly only**: alias key "ae" captured "Ah".
+- **Pre-boost distance cap 0.4**: Soundex-equal junk at 0.43 distance
+  ("now does"/"note is"/"not easy" → Node.js) got rescued by the ×0.3 boost.
+- **All-common-word spans never fuzzy-match** (~230-word embedded list):
+  "been" → Bun, "and a" → ANE (the `&`→"and" key variant is also restricted
+  to canonical terms; an "a&e" alias generated wildcard key "aande").
+
+Handy ships none of these guards: with the same dictionary it reproduces
+exactly the false positives listed. That is why this is a guarded port, not a
+dependency on (or contribution back to) Handy's matcher as-is.
+
+Result on the 32 clips after guards: 14 correct rewrites across 7 clips
+(ANE, Zee, OpenTelemetry, tail sampling, CGo, AppKit, Amphetamine, dp1751.md,
+deduplication), zero false positives. Known misses, accepted: single common
+words colliding with dict terms ("spend kind" → span kind — unsafe to fix),
+phonetically-distant errors ("stiffness" → stickiness, Soundex differs),
+grammar-type errors ("taught" → talked — needs an LLM pass, out of scope).
+Correction is gated to `-lang en`: Soundex's letter→sound groups are
+English-specific, and ASCII-spelled Turkish words fuzzy-hit English terms
+("bunu" → Bun).
