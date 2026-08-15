@@ -1589,6 +1589,17 @@ deduplication), zero false positives. Known misses, accepted: single common
 words colliding with dict terms ("spend kind" → span kind — unsafe to fix),
 phonetically-distant errors ("stiffness" → stickiness, Soundex differs),
 grammar-type errors ("taught" → talked — needs an LLM pass, out of scope).
-Correction is gated to `-lang en`: Soundex's letter→sound groups are
-English-specific, and ASCII-spelled Turkish words fuzzy-hit English terms
-("bunu" → Bun).
+### Why correction runs on every language, auto-detect included
+
+Mixed-language dictation is the common case, not the edge case — technical
+terms (OpenTelemetry, CGo, GitHub) appear mid-sentence in Turkish speech all
+the time, and those are exactly the words the dictionary holds. Hints are
+mostly language-agnostic jargon, so gating correction to English would drop
+the corrections where they are needed most. Handy runs its matcher ungated
+too. An earlier draft did gate to `-lang en` because pre-guard fuzzy matching
+hit ASCII-spelled Turkish words ("bunu" → Bun); with the guards in place the
+full 32-clip eval — Turkish and code-switching clips included — shows zero
+non-English rewrites, so the gate was dropped. Accepted residual risk: the
+common-word stoplist is English-only, so a non-English common word 1–2 edits
+from a mid-length key could still fuzzy-match; if one ever shows up, add a
+per-language stoplist then, with the measurement in hand.

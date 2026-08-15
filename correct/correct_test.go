@@ -107,13 +107,17 @@ func TestAmpersandVariants(t *testing.T) {
 }
 
 func TestNonASCIISkipped(t *testing.T) {
-	// Non-ASCII words can never be candidates. ASCII-spelled Turkish words
-	// (e.g. "bunu" vs a "Bun" entry) CAN fuzzy-match, which is why the caller
-	// only applies correction when the transcription language is English.
-	text := "Belki de audio'a gönderin"
-	d := Parse(testLines)
-	if got := d.Apply(text); got != text {
-		t.Errorf("got %q, want unchanged", got)
+	// Non-ASCII words can never be candidates, and correction runs on every
+	// language, so foreign text must pass through untouched. ASCII-spelled
+	// Turkish words near dictionary terms are covered by the guards: "bunu"
+	// cannot fuzzy-match "Bun" because keys ≤ 3 chars match exactly only.
+	for _, text := range []string{
+		"Belki de audio'a gönderin",
+		"bunu da bir optimizasyon olarak bana yaz",
+	} {
+		if got := Parse(testLines).Apply(text); got != text {
+			t.Errorf("Apply(%q) = %q, want unchanged", text, got)
+		}
 	}
 }
 

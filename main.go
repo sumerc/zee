@@ -1516,11 +1516,12 @@ func providerByName(name string) (transcriber.ProviderInfo, bool) {
 // engine — the model is loaded once at startup and reused across files — and
 // prints one transcript per line, in input order.
 // applyCorrection maps misheard vocabulary spans in transcribed text onto the
-// hints.txt dictionary (see the correct package). English-only: the fuzzy
-// phonetic matching is unsound for other languages, so any other configured
-// language skips it.
+// hints.txt dictionary (see the correct package). It runs for every language,
+// auto-detect included — dictionary terms are language-agnostic jargon, and
+// the matcher's guards keep non-English text untouched (measured; see
+// design-notes).
 func applyCorrection(text string) string {
-	if correctionOff || activeTranscriber.GetLanguage() != "en" {
+	if correctionOff {
 		return text
 	}
 	lines := config.HintLines()
