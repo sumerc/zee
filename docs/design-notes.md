@@ -1549,8 +1549,11 @@ of 32** clips into Turkish and produced exactly **2** hint-term corrections in
 the entire set. On one of the two, hints "corrected" *OpenTechnetic* (spoken:
 OpenTelemetry) to **OpenAI** — prompt biasing steers toward the wrong listed
 term with no distance bound. Prompt hints are net damage for local whisper;
-correction moved to a deterministic post-pass (`correct/` package) and hints
-stay out of the whisper prompt. Providers with keyterm-style biasing
+correction moved to a deterministic post-pass (`correct/` package) and the
+whisper providers (local whisper, Groq whisper-large-v3) no longer send the
+prompt field at all — hints cannot reach a whisper decoder even without
+`-no-hints`. OpenAI's gpt-4o-transcribe is not whisper and keeps its prompt
+until its own flip behavior is measured. Providers with keyterm-style biasing
 (Deepgram `keywords`, ElevenLabs `keyterms[]`, Mistral `context_bias[]`)
 keep receiving hints — that mechanism boosts tokens and cannot flip language.
 Parakeet has no prompt surface and was never affected.

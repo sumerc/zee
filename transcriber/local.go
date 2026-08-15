@@ -44,7 +44,7 @@ type localProvider struct {
 
 	name      string                                      // provider name, e.g. "parakeet"
 	defaultID string                                      // this engine's model, used when modelID belongs to another
-	hints     bool                                        // engine can bias decoding toward a vocabulary
+	hints     bool                                        // engine receives hints.txt as decode bias; false = never sent (see NewSession)
 	open      func(localmodel.Model) (localEngine, error) // load a model with this engine
 	langsFor  func(localmodel.Model) []Language
 }
@@ -228,19 +228,10 @@ func (p *localProvider) Warm() {
 }
 
 // IsLocal reports whether tr is an on-device provider. Local decode has no
-// streaming and no audio encoding, so the UI greys those out. Hints are a
-// per-engine capability, not a local/cloud one — ask SupportsHints.
+// streaming and no audio encoding, so the UI greys those out.
 func IsLocal(tr Transcriber) bool {
 	_, ok := tr.(*localProvider)
 	return ok
-}
-
-// SupportsHints reports whether tr can bias decoding toward the vocabulary in
-// hints.txt, so the tray greys the hints entry out for the engines that cannot
-// (parakeet). Every cloud provider takes hints in some form.
-func SupportsHints(tr Transcriber) bool {
-	p, ok := tr.(*localProvider)
-	return !ok || p.hints
 }
 
 func (p *localProvider) Name() string { return p.name }
@@ -337,7 +328,15 @@ func (p *localProvider) NewSession(_ context.Context, cfg SessionConfig) (Sessio
 	p.mu.Lock()
 	p.lastUsed = time.Now() // inference follows within this record cycle
 	p.mu.Unlock()
-	return &localSession{engine: eng, lang: lang, hints: cfg.Hints, updates: make(chan string)}, nil
+	// Engines with hints=false never see the vocabulary: parakeet has no
+	// prompt surface, and whisper's initial prompt flips the transcription
+	// language on real dictation (measured — see design-notes "Vocabulary
+	// correction"). The correct/ post-pass covers vocabulary instead.
+	hints := cfg.Hints
+	if !p.hints {
+		hints = ""
+	}
+	return &localSession{engine: eng, lang: lang, hints: hints, updates: make(chan string)}, nil
 }
 
 // Close frees the loaded model. It waits out any in-flight background load

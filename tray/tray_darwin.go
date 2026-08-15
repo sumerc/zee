@@ -283,12 +283,6 @@ func onReady() {
 			go editHintsCb()
 		}
 	})
-	trayMu.Lock()
-	he := hintsEnabled
-	trayMu.Unlock()
-	if !he {
-		mEditHints.Disable()
-	}
 
 	mEditSettings = mSettings.AddSubMenuItem("Edit Settings…", "Open config.json (apply with Reload Config)")
 	mEditSettings.Click(func() {
@@ -568,17 +562,6 @@ func refreshLanguageMenu() {
 func updateStatusItem(text string) {
 	if mStatus != nil {
 		mStatus.SetTitle(text)
-	}
-}
-
-func setHintsEnabled(on bool) {
-	if mEditHints == nil {
-		return
-	}
-	if on {
-		mEditHints.Enable()
-	} else {
-		mEditHints.Disable()
 	}
 }
 

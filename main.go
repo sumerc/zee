@@ -537,7 +537,6 @@ func run() {
 			activeFormat = *formatFlag
 		}
 		langs := activeTranscriber.SupportedLanguages()
-		hints := transcriber.SupportsHints(activeTranscriber)
 		configMu.Unlock()
 
 		// Only Parakeet has a provider-level Close (frees the gguf); cloud
@@ -550,7 +549,6 @@ func run() {
 
 		config.Update(func(s *config.Settings) { s.Provider = p.Name; s.Model = model })
 		tray.SetLanguages(langs)
-		tray.SetHintsEnabled(hints)
 		tray.SetActiveModel(p.Name, model)
 	}
 
@@ -620,7 +618,8 @@ func run() {
 		}
 		return true
 	})
-	tray.SetHintsEnabled(transcriber.SupportsHints(activeTranscriber))
+	// "Edit Hints…" is never greyed out: hints.txt feeds the correct/ post-pass
+	// for every provider, even the ones that take no decode bias themselves.
 	// A dev build can't auto-start (login.Supported), and drops any entry an
 	// earlier build of itself left behind — otherwise launchd keeps relaunching
 	// a rebuilt, re-signed binary at login and macOS re-prompts for permissions.

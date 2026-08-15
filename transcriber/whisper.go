@@ -52,7 +52,7 @@ func whisperProvider() ProviderInfo {
 	return localProviderInfo(
 		localmodel.EngineWhisper, "Local (Whisper)",
 		localmodel.IDWhisperQ5, "en", // multilingual, but English by default — see above
-		whisper.Available(), true, // hints: fed in as whisper's initial prompt
+		whisper.Available(), false, // hints: the initial prompt flips the language on real dictation (see design-notes); correct/ covers vocabulary
 		openWhisper, whisperLanguages,
 	)
 }

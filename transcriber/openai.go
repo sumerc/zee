@@ -69,6 +69,9 @@ func (o *OpenAI) Transcribe(audioData []byte, format, lang, hints string) (*Resu
 	if lang != "" {
 		writer.WriteField("language", lang)
 	}
+	// gpt-4o-transcribe is not whisper: its prompt has not shown the
+	// language-flip that made the whisper-family providers drop hints (see
+	// design-notes "Vocabulary correction"), so hints stay on until measured.
 	if hints != "" {
 		writer.WriteField("prompt", hints)
 	}

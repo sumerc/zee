@@ -217,19 +217,6 @@ func SetLastRecording(dur time.Duration, totalMs float64) {
 	updateCopyLastTitle(fmt.Sprintf("Copy Last Recorded Text (%.1fs | %dms)", dur.Seconds(), int(totalMs)))
 }
 
-// hintsEnabled gates the "Edit Hints…" item: local providers ignore hints
-// (greedy decode has no biasing), so the item is greyed out when local is active.
-var hintsEnabled = true
-
-// SetHintsEnabled greys out / restores the "Edit Hints…" menu item. Safe to
-// call before Init (the state is applied when the menu is built).
-func SetHintsEnabled(on bool) {
-	trayMu.Lock()
-	hintsEnabled = on
-	trayMu.Unlock()
-	setHintsEnabled(on)
-}
-
 func SetVersion(v string)         { appVersion = v }
 func OnCheckUpdate(fn func())     { checkUpdateCb = fn }
 func OnSaveAudio(fn func())       { saveAudioCb = fn }
