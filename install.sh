@@ -143,9 +143,15 @@ if [[ -n "$DMG_PATH" ]]; then
 else
   if [[ -z "$VERSION" ]]; then
     log "Resolving latest release..."
-    VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | awk -F'"' '/"tag_name"/ {print $4; exit}')"
-    [[ -n "$VERSION" ]] || err "could not resolve latest version (GitHub API rate limit?). Set VERSION=vX.Y.Z and retry."
+    # Resolve the tag from the /releases/latest redirect, not the GitHub API:
+    # parsing the API JSON with awk assumed pretty-printed one-field-per-line
+    # output and broke when a TLS-inspecting middlebox re-served the response
+    # minified (see design-notes). A Location header has no shape to mangle,
+    # and skipping api.github.com also removes its unauthenticated rate limit.
+    VERSION="$(curl -fsS -o /dev/null -w '%{redirect_url}' \
+      "https://github.com/${REPO}/releases/latest")"
+    VERSION="${VERSION##*/}"
+    [[ "$VERSION" == v* ]] || err "could not resolve latest version. Set VERSION=vX.Y.Z and retry."
   fi
   log "Installing Zee ${VERSION}"
 fi

@@ -1174,3 +1174,11 @@ the fix had to cover Read as well as Copy, not just the obviously-serial half.
 
 Linux keeps the atotto backend: no local model inflates RSS there, so the fork
 is cheap and a second native backend would not pay for itself.
+
+## install.sh resolves the release tag from a redirect, not the API (2026-08-17)
+
+A user's install failed with `download failed: .../releases/download/https://api.github.com/...` — the "version" was the release's API URL (`.../releases/361182589`, the release *id*). Cause: version resolution parsed the `releases/latest` API JSON with `awk -F'"' '/"tag_name"/ {print $4; exit}'`, which assumes GitHub's pretty-printed one-field-per-line layout. Their machine (personal, likely TLS-inspecting security software) received the same JSON minified onto one line; the awk then matched the whole object and `$4` was the value of its *first* quoted field, `"url"`. Reproduced locally by piping the API response through `jq -c` — output matched the user's screenshot exactly.
+
+Fix: resolve the tag from the `https://github.com/<repo>/releases/latest` redirect (`curl -w '%{redirect_url}'`, take the basename). Rejected alternative: a shape-tolerant JSON grep (`grep -o '"tag_name" *: *"[^"]*"'`) — still a hand-rolled JSON parser, and it keeps the api.github.com dependency with its 60 req/hour unauthenticated rate limit, which the old error message already had to apologize for. The redirect removes both failure modes. The Go-side check (`update/check.go`) was never affected — `encoding/json` is whitespace-immune.
+
+Audit of every other download: model `manifest.txt` (TSV) and `checksums.txt` are line-oriented by design; ggufs/DMG/update-zip are SHA256-gated. The awk was the only shape-dependent parse in the product.
