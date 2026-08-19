@@ -5,9 +5,21 @@ choice was made, so we don't relitigate it (or silently regress it) later.
 
 Entries record what was **measured**, not what was expected — including options
 that were tried and rejected, so a future attempt starts from the evidence
-rather than the intuition. When a later measurement supersedes an earlier one,
-the old entry is marked superseded rather than deleted: the fact that something
-*used to be true* is usually why the code looks the way it does.
+rather than the intuition.
+
+**Facts are updated; decisions are superseded.** These notes hold two kinds of
+statement and they age differently:
+
+- A **fact** about the world — what an API offers, what a model file contains,
+  what a library supports. When we learn it was wrong or has changed, edit it
+  in place. A knowingly-wrong sentence left standing for the record helps
+  nobody, and the next reader has no way to tell it from a live one.
+- A **decision** — what we chose, and the measurement behind it. When later
+  evidence overturns one, mark it superseded rather than deleting it: the fact
+  that something *used to be the right call* is usually why the code looks the
+  way it does, and the rejected option needs to stay rejected on the record.
+
+In short: never preserve a false fact for history. Preserve the reasoning.
 
 ## Why the audio device is re-init'd on every recording
 
@@ -300,8 +312,10 @@ machine, not the clip: measured +999/+935/+1003 ms across 2.5/11.5/27 s. On
 M1-class hardware auto-detect, not whisper itself, is the dominant cost of the
 multilingual path.
 
-Parakeet is unaffected — no language parameter in its C-API; each gguf is
-single-language by build.
+Parakeet is unaffected: it has no detection pass to pay for. Its C-API does
+take a `target_lang`, but only prompt-conditioned models honour it and the
+ggufs we ship carry no prompt metadata — see "Why parakeet multilingual offers
+only Auto-detect".
 
 **q5_0, not f16** — free on both axes. Warm latency a tie (273 vs 270 ms). No
 quality direction: over 5 real dictations (537 words) the models diverged on
@@ -1606,3 +1620,284 @@ non-English rewrites, so the gate was dropped. Accepted residual risk: the
 common-word stoplist is English-only, so a non-English common word 1–2 edits
 from a mid-length key could still fuzzy-match; if one ever shows up, add a
 per-language stoplist then, with the measurement in hand.
+
+### General-case eval: the corrector is unsafe on ordinary English (2026-08-16)
+
+The 32-clip private corpus showed zero false positives, but it is one speaker
+dictating jargon — the algorithm's best case. `hypo-eval/` scores the same
+corrector against [HyPoradise](https://arxiv.org/abs/2309.15701) (ICLR 2024):
+real ASR hypotheses with human reference transcripts, the full 18,237-utterance
+test split: LibriSpeech clean/other, LRS2, Switchboard, Common Voice, CHiME-4,
+TED3, WSJ, ATIS and CORAAL.
+None of hints.txt's terms is ever spoken there, so **every rewrite is a false
+positive by construction**.
+
+Result with the shipped 28-term hints.txt: **142 utterances damaged (0.78%),
+83 corruptions, 0 correct rewrites** — `cloud`→Claude, `seek`/`sees`/`seeks`
+→CGo, `antarctica`→Anthropic, `nods`→Node.js, `feeble`→Fable,
+`mistress`→Mistral, `eleven years`→ElevenLabs, `grief and`→Grafana. On
+LibriSpeech-clean alone — accurate recognition, literary prose, the closest
+thing in the set to well-recorded dictation — the damage rate is 1.64%, about
+one sentence in sixty. Overall WER gets worse in every regime, including the one where the
+corrector repairs words, because n-gram merges swallow neighbouring articles
+(`of familiarity`→`familiarity`).
+
+Root cause: the algorithm — ours and Handy's alike — has no notion of what an
+English word is, so `cloud`/`Claude` is just a short edit distance with a
+matching Soundex code. Guards tuned on jargon-dense speech cannot see this;
+only a corpus of ordinary English can. This supersedes the "zero false
+positives" claim in the entry above: that number is true for jargon-dense
+dictation with a jargon dictionary, and false in general.
+
+Candidate fix, measured by projection (`hypo-eval -lexicon`), not guessed:
+*only rewrite a span containing at least one token an English lexicon does not
+recognize.* It drops corruptions 83→6 at no cost in fixes on HyPoradise
+(5 survivors are unknown proper names, 1 is a stem-list coverage artifact),
+and 1112→88 in the oracle regime; on the private
+corpus it keeps 7 of 13 corrections, losing the multi-word repairs whose parts
+are all real words (`did application`→deduplication) and case-only rewrites of
+real words (`amphetamine`→Amphetamine). Shipping it requires an embedded word
+list — size, source and license still to be decided.
+
+The same harness also runs the upstream algorithm unmodified (guards off,
+longest-first scan) over the identical 18,237 utterances: **3081 utterances
+damaged (16.9%), 2440 corruptions**, WER 15.46→16.93 — `any`/`an`→ANE,
+`sound`→Sonnet, `needs`→Node.js, `been`→Bun. One sentence in six. The guards
+are not polish on a working algorithm; they are the difference between 2440
+corruptions and 83, and the lexicon rule is the next order of magnitude on the
+same axis. Conformance to upstream therefore carries no safety argument.
+
+Precision and recall come from different datasets and the harness runs both:
+HyPoradise never contains the dictionary's vocabulary (so it measures damage
+only), while a private labelled dictation corpus supplies the recall side —
+currently 8 of 20 labelled corrections achieved with zero unlabelled rewrites.
+The misses are the classes deliberately out of scope: grammar/context errors
+(`taught`→talked), phonetically distant pairs (`stiffness`→stickiness), and
+real-word collisions left alone on purpose (`spend kind`→span kind).
+
+### What an ASR actually produces when it mishears a rare word (2026-08-16)
+
+The lexicon rule above raises an obvious objection: a recognizer is a language
+model as well as an acoustic one, so it may prefer common words when unsure —
+and a rule that never rewrites common words would then block exactly the
+corrections we want. Measured on the HyPoradise test split by aligning each
+hypothesis against its human reference and inspecting every substitution whose
+reference word is rare (outside the 5000 most frequent), 3,219 cases:
+
+| what the recognizer wrote instead | share | correctable? |
+|---|---|---|
+| a common word (`stanton`→and, `denied`→to, `backend`→end) | 30% | no, and it must not be |
+| a non-word (`narnia`→narmia, `chalet`→shalee, `newbolt`→newboat) | 33% | yes |
+| a rare real word (`grahame`→graham, `devon`→daven, `pounce`→pounds) | 36% | yes, if the rule is frequency-based |
+
+So the objection is real but bounded: in 70% of mishearings the model writes
+down what it heard rather than collapsing to a frequent word. Whisper is
+acoustically driven far more than the pessimistic reading assumes.
+
+The consequence for the design is that **binary lexicon membership is the wrong
+rule** — protecting every dictionary word discards the 36% that are rare real
+words, and a full word list (235k entries in `/usr/share/dict/words`) is mostly
+words nobody says. The rule is frequency-graded instead: protect a token in
+proportion to how common it is, because frequency is the written-down form of
+"did the speaker say this, or did the recognizer mangle something else?".
+The threshold is the tunable knob, and three datasets exist to tune it against
+(general English, five other languages, the private dictation corpus).
+
+### Multilingual damage, and why the fix is not language detection (2026-08-16)
+
+An English-only word list was the first proposal; it is not sufficient, because
+a hints term can collide with a frequent word in another language. Measured on
+20,000 correct Tatoeba sentences per language with the shipped 28-term
+hints.txt (correct text in, so every rewrite is damage):
+
+| language | sentences damaged | worst collision |
+|---|---|---|
+| French | 598 / 20000 (2.99%) | `sont` → Sonnet, 361 times |
+| Spanish | 81 (0.41%) | `No dejes` → Node.js |
+| Italian | 60 (0.30%) | — |
+| German | 59 (0.29%) | `Sonne` → Sonnet, `sie so` → CGo |
+| Dutch | 51 (0.26%) | — |
+| Turkish | 29 (0.14%) | `O beni` → OpenAI |
+
+French is four times worse than English: `sont` ("are") is among the commonest
+words in the language. A union word list built from all six languages (113k
+words) blocks 683 of the 684 corruptions, and costs nothing on the private
+corpus — the same corrections survive as with an English-only list, because
+the added words are French/German/Turkish and the dictation is English.
+
+**No language detection is needed.** The question at correction time is not
+"which language is this?" but "is this token a word in any language I know?" —
+the words worth fixing (`seego`, `opentechnetic`, `dp1751md`) are words in no
+language, and the words that must not be touched are words in some language.
+That makes the list pure data: covering a further language is shipping another
+file, not changing the algorithm.
+
+### Damage scales with the size of the hints table (2026-08-16)
+
+The measurements above assume a fixed 28-term table; a growing one is worse.
+English text, dictionaries of rare real words (worst case):
+
+| terms | corruptions | with the word list |
+|---|---|---|
+| 30 | 101 | 1 |
+| 100 | 353 | 13 |
+| 300 | 1011 | 56 |
+
+Damage grows linearly with the table, and the word list cuts the slope by ~95%
+without flattening it. So text-side protection alone does not survive a large
+dynamic table. The damage is also extremely concentrated: across six languages
+seven terms caused 829 of 897 corruptions (Sonnet 539, ANE 84, Mistral 64, CGo
+44, Zee 38, OpenAI 32, Node.js 28) — all short and all sounding like ordinary
+speech, while OpenTelemetry, deduplication and dp1751.md caused none.
+
+Hence the second half of the rule, applied at parse time rather than at
+correction time: **a term that is phonetically close to a frequent word in any
+known language never gets fuzzy matching, only exact.** That bounds damage
+regardless of how large the table grows, and it disarms `Sonnet` automatically
+while leaving `OpenTelemetry` fully fuzzy.
+
+### Recall, and what Soundex actually buys (2026-08-16)
+
+Precision had a number long before recall did. The eval now reports the
+headline one directly: of the dictionary words the recognizer really got
+wrong, how many does the corrector recover? On the HyPoradise test split with
+per-utterance dictionaries, **1460 of 3388 misheard words — 43.1%**. The
+ceiling is not 100%: 30% of mishearings land on common words (see the entry
+above), which a frequency rule must never touch, so ~70% is the reachable
+maximum and 43% is roughly two-thirds of it.
+
+Soundex is the only phonetic component, and it is English by construction, so
+its contribution was measured by setting the boost to 1.0 (edit distance only)
+and re-running everything:
+
+| | with Soundex | without |
+|---|---|---|
+| misheard words recovered | **43.1%** | 26.2% |
+| private corpus corrections | 8/20 | 6/20 |
+| English damage (real hints.txt) | 83 | **6** |
+| French damage | 523 | **30** |
+| German damage | 38 | 30 |
+| Spanish damage | 27 | **2** |
+
+So the phonetic boost buys 17 points of recall and costs an order of magnitude
+in damage — and the damage it causes is concentrated in the non-English
+languages, exactly where its English letter→sound table is wrong (`sont` and
+`Sonnet` share code S530, so the ×0.3 boost pulls a distant pair under the
+threshold). Dropping it is a legitimate, language-neutral option that costs
+recall; keeping it is only affordable alongside the frequency rule.
+
+Recommended combination, on these numbers: keep the boost, add the frequency
+list. That is the only configuration with both high recall and near-zero
+damage. If the phonetic step is ever replaced — Double Metaphone, a per
+-language phonetic key, or a phoneme model — the same harness A/Bs it against
+recall and per-language damage in one run.
+
+### Soundex vs phonemes (IPA) on real mishearings (2026-08-18)
+
+A Turkish dictation exposed the limit of the English phonetic step: whisper
+wrote `Cemilay` where the speaker said *Gemini*. In Turkish orthography `c` is
+/dʒ/ — the same sound as the `G` in Gemini — but Soundex reads letters as an
+English speaker, giving C540 vs G550, and the spelling distance is 0.571
+against a 0.40 cap. Unreachable by any threshold: raising it to 0.6 catches the
+word but damages 82% of English sentences (16,921 corruptions, WER 15.5→35.0),
+and the frequency list cannot rescue that (740 corruptions still remain).
+
+Pronounced by espeak-ng in each word's own language the pair is nearly
+identical — `dʒɛmɪnaɪ` vs `dʒemiɫaj`, one consonant apart (n/l). Folding
+near-identical symbols (ɛ→e, ɪ→i, ɫ→l, j→i) gives 0.125, comfortably inside
+the 0.18 threshold. Raw IPA without folding is 0.500 and still fails, so the
+folding step is not optional: espeak spells the same vowel differently per
+language.
+
+Whether phonemes should *replace* Soundex was then measured on 3,257 real
+mishearings mined from HyPoradise by aligning hypotheses against human
+references (`hypo-eval/misheard`):
+
+| scorer | mishearings caught |
+|---|---|
+| spelling + Soundex (today) | **1206 (37.0%)** |
+| folded IPA distance | 964 (29.6%) |
+| either one | **1420 (43.6%)** |
+
+Soundex wins on English, by 7 points. Two reasons: many ASR errors are
+spelling-shaped rather than sound-shaped (`mammal`→mammals,
+`grahame`→graham), and espeak's English G2P guesses on exactly the rare words
+and names a dictionary targets. So IPA is **not** a replacement — 456 pairs are
+Soundex-only against 214 IPA-only. Taking the better of the two scores adds 6.6
+points over today.
+
+For non-English input the comparison is not close: Soundex is structurally
+wrong (its letter→sound table is English), and IPA is the only scorer that
+works at all — the `Cemilay` case is caught only by phonemes.
+
+Language selection for G2P is a real cost, unlike the frequency list: each word
+must be pronounced in its own language (`Cemilay` read as English gives
+`sɛmɪleɪ`, matching nothing). It can be avoided the same way — pronounce the
+span in every supported language and keep the best match. Spot-checked over
+six languages, the wrong-language readings score badly and drop out on their
+own: `Cemilay`→Gemini 0.12 (tr), while `cloud`→Claude 0.40, `harness`→Sonnet
+0.60 and `seek`→Sonnet 0.60 are all rejected. `sont`→Sonnet lands at 0.20,
+just outside — that pair genuinely sounds alike and is the frequency list's job,
+not the matcher's.
+
+Licensing note: espeak-ng is GPLv3, so it cannot be linked into this MIT
+binary. Permissive alternatives are Epitran (MIT, rule tables portable without
+its Python runtime) and CharsiuG2P (MIT, neural, needs an inference runtime).
+Turkish orthography is phonemic, so a hand-written table is ~15 rules; English
+already has a phonetic step. PanPhon (MIT) is the reference implementation of
+feature-weighted IPA distance, i.e. a principled version of the folding above.
+
+### Why parakeet multilingual offers only Auto-detect (2026-08-19)
+
+`parakeetLanguages` returns a single "Auto-detect" entry for the multilingual
+model, which reads like an oversight — the engine's C-API does have language
+selection (`parakeet_capi_transcribe_pcm_lang`, added in its v3), and the Go
+binding never calls it. Wiring it through would change nothing.
+
+The reason is in the model file, not the code. Language selection in
+parakeet.cpp is *prompt conditioning*: the locale picks a prompt vector that is
+projected onto the encoder output. That requires prompt metadata in the gguf,
+and the shipped models carry none — reading the gguf key-values directly, both
+`tdt-0.6b-v3-q4_k` and `tdt-0.6b-v2-f16` have no `parakeet.prompt.*` keys at
+all. So `Model::resolve_prompt_index` takes its `if (!cfg.prompt.present)
+return -1;` path and the header's "Ignored by non-prompt models" applies: a
+`target_lang` would be accepted and discarded, giving the user a menu that does
+nothing.
+
+There are two kinds of multilingual parakeet, and only one is steerable:
+
+| kind | how the language is chosen | ours |
+|---|---|---|
+| prompt-conditioned (nemotron) | caller passes `target_lang` | no |
+| plain multilingual (tdt-0.6b-v3) | decided inside the decoder, always | **yes** |
+
+So the one-entry menu is correct behaviour with a misleading comment above it
+("single-language by build" — true of the English models, false of v3). Adding
+language selection is not a binding change; it needs a prompt-conditioned model
+on the models release first, and only then is the binding work worth doing.
+
+Practical consequence: whisper is the only local engine that can be forced to a
+language. That matters because whisper-large-v3-**turbo** auto-detect is the
+component that misfires (see the entry below), and parakeet cannot be used as
+the escape hatch for a language it does not cover anyway.
+
+### whisper-large-v3-turbo mis-detects language; the full model does not (2026-08-19)
+
+A 16 s English dictation (Turkish-accented) transcribed as fluent, unrelated
+Turkish. Hints were already disabled, so the cause had to be elsewhere. Same
+audio across every available engine:
+
+| provider / model | auto-detect | forced `-lang en` |
+|---|---|---|
+| local whisper-turbo-q5 | Turkish (`lang_detect tr p=0.82`) | correct |
+| Groq whisper-large-v3-turbo (not quantized) | Turkish | correct |
+| Groq whisper-large-v3 (full) | **correct** | correct |
+| parakeet v3 multilingual | correct | n/a |
+| parakeet 110m English | correct | n/a |
+
+Groq's turbo runs at full precision on their hardware and still failed, which
+clears quantization and this build: the fault is the turbo distillation itself
+(4 decoder layers against 32), and language detection is evidently one of the
+things it lost. Latency does not defend turbo either — measured end to end on
+Groq, whisper-large-v3 is 0.64–0.71 s against turbo's 0.54 s, roughly 100–150 ms
+for correct language detection.

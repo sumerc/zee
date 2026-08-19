@@ -27,3 +27,7 @@ transcribe_log.txt
 
 # OS
 .DS_Store
+
+# internal experiments, not part of the shipped repo
+hypo-eval/
+review-improve-whisper-auto-latency.md
