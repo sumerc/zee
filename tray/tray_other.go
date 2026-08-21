@@ -16,5 +16,6 @@ func enableBackend()                                 {}
 func updateStatusItem(string)                        {}
 func updateModelItem(int)                            {}
 func updateAutoPasteItem(bool)                       {}
+func updateAutoCorrectItem(bool)                     {}
 func updateLoginItem(bool)                           {}
 func updateHotkeyDisplay()                           {}

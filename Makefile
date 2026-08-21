@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark bench-local bench-save clean bump-version release icns app parakeet-lib whisper-lib download-models manifest model-release
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark bench-local bench-save clean bump-version release icns app parakeet-lib whisper-lib s1-lib download-models manifest model-release
 
 # --match 'v*' keeps model-release tags (models-vN) out of the app version.
 VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo "dev")
@@ -31,7 +31,7 @@ ifeq ($(HOST),darwin/arm64)
 CGO_ENV := MACOSX_DEPLOYMENT_TARGET=$(MACOS_MIN) CGO_CFLAGS=-mmacosx-version-min=$(MACOS_MIN) CGO_LDFLAGS=-mmacosx-version-min=$(MACOS_MIN)
 endif
 
-build: whisper-lib download-models
+build: whisper-lib s1-lib download-models
 	$(CGO_ENV) go build -ldflags="-X main.version=$(VERSION)" -o zee
 
 # The dev model folder `localmodels download` writes to (cmd/localmodels keeps
@@ -116,6 +116,26 @@ whisper-lib: parakeet-lib
 	    -DCMAKE_C_FLAGS="-mcpu=apple-m1" -DCMAKE_CXX_FLAGS="-mcpu=apple-m1"; \
 	fi && \
 	cmake --build $(WHISPER_DIR)/build-release -j
+
+# Build libllama.a (for the S1-mini auto-correct pass) against the ggml
+# parakeet installs — same one-ggml-per-process rule as whisper-lib. Only the
+# `llama` target: the bundled CLI/tools are neither needed nor buildable from a
+# blobless clone. llama.cpp is pinned to a ggml-0.13.0-era commit to match the
+# prefix; after a parakeet ggml bump, re-pin and delete build-release.
+LLAMA_DIR := third_party/llama.cpp
+s1-lib: parakeet-lib
+	@if [ "$(HOST)" != "darwin/arm64" ]; then exit 0; fi; \
+	if [ ! -d $(LLAMA_DIR)/build-release ]; then \
+	  echo "==> configuring llama.cpp (one-time)"; \
+	  cmake -S $(LLAMA_DIR) -B $(LLAMA_DIR)/build-release \
+	    -DLLAMA_USE_SYSTEM_GGML=ON -DCMAKE_PREFIX_PATH=$(GGML_PREFIX) \
+	    -DBUILD_SHARED_LIBS=OFF -DLLAMA_CURL=OFF \
+	    -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+	    -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_TOOLS=OFF \
+	    -DCMAKE_OSX_DEPLOYMENT_TARGET=$(MACOS_MIN) \
+	    -DCMAKE_C_FLAGS="-mcpu=apple-m1" -DCMAKE_CXX_FLAGS="-mcpu=apple-m1"; \
+	fi && \
+	cmake --build $(LLAMA_DIR)/build-release --target llama -j
 
 build-linux-amd64:
 	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-amd64

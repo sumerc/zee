@@ -51,6 +51,9 @@ var (
 	autoPasteOn bool
 	autoPasteCb func(bool)
 
+	autoCorrectOn bool
+	autoCorrectCb func(bool)
+
 	loginOn        bool
 	loginAvailable = true
 	loginCb        func(bool) error
@@ -82,6 +85,7 @@ var languages []transcriber.Language // set via SetLanguages
 func OnCopyLast(fn func())        { copyLastFn = fn }
 func OnRecord(start, stop func()) { recordFn = start; stopFn = stop }
 func OnAutoPaste(fn func(bool))   { autoPasteCb = fn }
+func OnAutoCorrect(fn func(bool)) { autoCorrectCb = fn }
 func OnLogin(fn func(bool) error) { loginCb = fn }
 
 // SetAutoPaste / SetLogin set the checkbox state; before Init they seed the
@@ -91,6 +95,13 @@ func SetAutoPaste(on bool) {
 	autoPasteOn = on
 	trayMu.Unlock()
 	updateAutoPasteItem(on)
+}
+
+func SetAutoCorrect(on bool) {
+	trayMu.Lock()
+	autoCorrectOn = on
+	trayMu.Unlock()
+	updateAutoCorrectItem(on)
 }
 
 func SetLogin(on bool) {

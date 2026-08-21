@@ -242,6 +242,7 @@ type LatencyBreakdown struct {
 	MicStopMs   float64 // capture device stop + callback clear
 	ConvertMs   float64 // local path: PCM→f32 + PCM→WAV before inference
 	InferenceMs float64 // engine/provider time (repeated from the transcription line)
+	AutoCorrectMs float64 // S1-mini auto-correct after inference, before paste
 	ClipSaveMs  float64 // pbpaste fork, concurrent with inference — informational
 	ClipWaitMs  float64 // block on the pbpaste fork after inference returned
 	PasteCopyMs float64 // pbcopy fork inside PasteText
@@ -260,7 +261,7 @@ func ReleaseToText(ms float64, b LatencyBreakdown) {
 		return
 	}
 	serial := b.TailWaitMs + b.MicStopMs + b.ConvertMs + b.InferenceMs +
-		b.ClipWaitMs + b.PasteCopyMs + b.PasteKeyMs
+		b.AutoCorrectMs + b.ClipWaitMs + b.PasteCopyMs + b.PasteKeyMs
 	ev := diagLog.Info().Float64("release_to_text_ms", ms)
 	for _, f := range []struct {
 		key string
@@ -270,6 +271,7 @@ func ReleaseToText(ms float64, b LatencyBreakdown) {
 		{"mic_stop_ms", b.MicStopMs},
 		{"convert_ms", b.ConvertMs},
 		{"inference_ms", b.InferenceMs},
+		{"autocorrect_ms", b.AutoCorrectMs},
 		{"clip_save_ms", b.ClipSaveMs},
 		{"clip_wait_ms", b.ClipWaitMs},
 		{"paste_copy_ms", b.PasteCopyMs},

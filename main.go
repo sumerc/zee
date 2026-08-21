@@ -241,6 +241,7 @@ func run() {
 	benchmarkFile := flag.String("benchmark", "", "Run benchmark with WAV file instead of live recording")
 	benchmarkRuns := flag.Int("runs", 3, "Number of benchmark iterations")
 	autoPasteFlag := flag.Bool("autopaste", true, "Auto-paste to focused window after transcription")
+	autoCorrectFlag := flag.Bool("autocorrect", true, "Auto-correct transcripts with the local S1-mini model: drop filler words, fix punctuation, write out numbers/dates (English only; needs its model file)")
 	setupFlag := flag.Bool("setup", false, "Run the interactive setup wizard (provider, key, device, permissions, hotkey) and exit")
 	deviceFlag := flag.String("device", "", "Use named microphone device")
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
@@ -324,6 +325,11 @@ func run() {
 	} else {
 		autoPaste = *autoPasteFlag
 	}
+	if !flagSet["autocorrect"] {
+		autoCorrect = cfg.AutoCorrect
+	} else {
+		autoCorrect = *autoCorrectFlag
+	}
 	// Validate format
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
@@ -392,11 +398,23 @@ func run() {
 		log.SessionStart(activeTranscriber.Name(), activeFormat, activeFormat)
 	}
 
+	// Before any mode that transcribes (test, transcribe, live) so every path
+	// gets the auto-correct pass. The file-driven modes wait for the load so
+	// their output is deterministic; the live tray path starts dictating
+	// immediately and a dictation that beats the ~1s load just skips the pass.
+	var autoCorrectReady <-chan struct{}
+	if autoCorrect {
+		autoCorrectReady = loadAutoCorrect()
+	}
+
 	if *testFlag {
 		args := flag.Args()
 		if len(args) == 0 {
 			fmt.Fprintln(os.Stderr, "Usage: zee -test <wav-file>")
 			os.Exit(1)
+		}
+		if autoCorrectReady != nil {
+			<-autoCorrectReady
 		}
 		runTestMode(args[0])
 		return
@@ -410,6 +428,9 @@ func run() {
 	if *transcribeFlag != "" {
 		// First file is the flag value; any remaining positionals are extra
 		// files transcribed in the same process (the model loads once).
+		if autoCorrectReady != nil {
+			<-autoCorrectReady
+		}
 		runTranscribeFiles(append([]string{*transcribeFlag}, flag.Args()...))
 		return
 	}
@@ -486,6 +507,7 @@ func run() {
 		})
 	}
 	tray.SetAutoPaste(autoPaste)
+	tray.SetAutoCorrect(autoCorrect)
 
 	var trayModels []tray.Model
 	modelIndex := map[string]transcriber.ModelInfo{}
@@ -668,6 +690,15 @@ func run() {
 			go ensureAutoPasteAccessibility()
 		}
 	})
+	tray.OnAutoCorrect(func(on bool) {
+		configMu.Lock()
+		autoCorrect = on
+		configMu.Unlock()
+		config.Update(func(s *config.Settings) { s.AutoCorrect = on })
+		if on {
+			loadAutoCorrect() // no-op when already loaded; first enable pulls the model up
+		}
+	})
 	tray.OnLogin(func(on bool) error {
 		var err error
 		if on {
@@ -843,11 +874,19 @@ func run() {
 		configMu.Lock()
 		apChanged := autoPaste != s.AutoPaste
 		autoPaste = s.AutoPaste
+		acChanged := autoCorrect != s.AutoCorrect
+		autoCorrect = s.AutoCorrect
 		configMu.Unlock()
 		if apChanged {
 			tray.SetAutoPaste(s.AutoPaste)
 			if s.AutoPaste {
 				go ensureAutoPasteAccessibility()
+			}
+		}
+		if acChanged {
+			tray.SetAutoCorrect(s.AutoCorrect)
+			if s.AutoCorrect {
+				loadAutoCorrect()
 			}
 		}
 
@@ -1253,6 +1292,16 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updatesDone <-chan struct{}, skipPaste bool, recDur time.Duration, cfg recordingConfig) {
 	result, closeErr := sess.Close()
 	<-updatesDone
+	// Auto-correct (S1-mini) runs first so the deterministic vocabulary pass
+	// below has the final word on domain terms. Batch path only: the streamed
+	// path has already pasted partials, so a rewritten final would not match
+	// what is on screen.
+	var acMs float64
+	if closeErr == nil && !cfg.stream && result.HasText && !result.NoSpeech {
+		t := time.Now()
+		result.Text = maybeAutoCorrect(cfg.tr, result.Text)
+		acMs = float64(time.Since(t).Microseconds()) / 1000
+	}
 	// Correct before any consumer sees the text (paste, clipboard, history).
 	// Stream mode already pasted incrementally; its final text is still
 	// corrected for the clipboard and logs.
@@ -1262,6 +1311,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 
 	var clipPrev string
 	var lat log.LatencyBreakdown
+	lat.AutoCorrectMs = acMs
 	if cfg.autoPaste {
 		t := time.Now()
 		cs := <-clipCh
@@ -1578,7 +1628,7 @@ func transcribeFile(audioFile string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return applyCorrection(result.Text), nil
+	return applyCorrection(maybeAutoCorrect(activeTranscriber, result.Text)), nil
 }
 
 func runBenchmark(wavFile string, runs int) {

@@ -20,6 +20,7 @@ var (
 
 	mSettings     *systray.MenuItem
 	mAutoPaste    *systray.MenuItem
+	mAutoCorrect  *systray.MenuItem
 	mLogin        *systray.MenuItem
 	mHotkey       *systray.MenuItem
 	mEditHints    *systray.MenuItem
@@ -79,6 +80,17 @@ func updateAutoPasteItem(on bool) {
 		mAutoPaste.Check()
 	} else {
 		mAutoPaste.Uncheck()
+	}
+}
+
+func updateAutoCorrectItem(on bool) {
+	if mAutoCorrect == nil {
+		return
+	}
+	if on {
+		mAutoCorrect.Check()
+	} else {
+		mAutoCorrect.Uncheck()
 	}
 }
 
@@ -247,6 +259,18 @@ func onReady() {
 		}
 		if autoPasteCb != nil {
 			autoPasteCb(mAutoPaste.Checked())
+		}
+	})
+
+	mAutoCorrect = mSettings.AddSubMenuItemCheckbox("Auto-correct", "Clean up transcripts: drop filler words, fix punctuation (English only)", autoCorrectOn)
+	mAutoCorrect.Click(func() {
+		if mAutoCorrect.Checked() {
+			mAutoCorrect.Uncheck()
+		} else {
+			mAutoCorrect.Check()
+		}
+		if autoCorrectCb != nil {
+			autoCorrectCb(mAutoCorrect.Checked())
 		}
 	})
 

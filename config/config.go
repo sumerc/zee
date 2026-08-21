@@ -23,7 +23,10 @@ type Settings struct {
 	Model     string       `json:"model"`
 	Hotkey    hotkey.Combo `json:"hotkey"`
 	AutoPaste bool         `json:"auto_paste"`
-	AutoStart bool         `json:"auto_start"`
+	// AutoCorrect cleans transcripts with the local S1-mini model after
+	// transcription (fillers dropped, punctuation fixed). English-only.
+	AutoCorrect bool `json:"auto_correct"`
+	AutoStart   bool `json:"auto_start"`
 	// TailWaitMs keeps the mic open this many ms after the hotkey is released so
 	// a fast keyup doesn't clip the last word. 0 disables the wait.
 	TailWaitMs int `json:"tail_wait_ms"`
@@ -45,7 +48,8 @@ var (
 	dir      string
 	defaults = Settings{
 		Language:   "en",
-		AutoPaste:  true,
+		AutoPaste:   true,
+		AutoCorrect: true,
 		TailWaitMs: defaultTailWaitMs,
 	}
 )
