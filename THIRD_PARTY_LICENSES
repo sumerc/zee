@@ -2,8 +2,8 @@ Third-Party Licenses and Attribution
 =====================================
 
 Zee statically links the components below and bundles/downloads the local
-speech-to-text models below. Their licenses and the required attributions are
-reproduced here.
+speech-to-text and transcript-normalization models below. Their licenses and
+the required attributions are reproduced here.
 
 
 --------------------------------------------------------------------------------
@@ -86,3 +86,65 @@ other modifications were made to the model weights.
 
 "Parakeet", "NeMo", and "NVIDIA" are trademarks of NVIDIA Corporation. Zee is
 not affiliated with, sponsored by, or endorsed by NVIDIA.
+
+
+--------------------------------------------------------------------------------
+4. llama.cpp  — LLM inference engine (statically linked, S1-mini auto-correct)
+   https://github.com/ggml-org/llama.cpp
+   License: MIT
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2023-2026 The ggml authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+--------------------------------------------------------------------------------
+5. S1-mini  — transcript normalization model (GGUF, downloaded at runtime)
+   https://huggingface.co/superwhisper/s1-mini
+   License: Apache License 2.0, plus an additional naming term
+--------------------------------------------------------------------------------
+
+Zee's auto-correct pass runs "S1-mini" by "Superwhisper", a Qwen3-0.6B
+fine-tune that rewrites raw ASR output as clean written text (fillers removed,
+punctuation and capitalization applied, spoken numbers and dates written out).
+
+  Source:  https://huggingface.co/superwhisper/s1-mini
+  Base:    Qwen/Qwen3-0.6B — https://huggingface.co/Qwen/Qwen3-0.6B
+  License: Apache-2.0 — http://www.apache.org/licenses/LICENSE-2.0
+           plus the ADDITIONAL TERM reproduced below.
+
+Changes made: the released weights were quantized to q4_k_m for use with
+llama.cpp. The weights themselves were not otherwise modified.
+
+ADDITIONAL TERM (reproduced verbatim from the model's LICENSE):
+
+   In addition to the terms of the Apache License, Version 2.0 above: any
+   use, distribution, or integration of this model, whether unmodified or
+   as part of a derivative work or product, must continue to identify it
+   by its original name, "S1-mini" by "Superwhisper", using that exact
+   capitalization, regardless of any other name under which the model or
+   a product incorporating it is marketed or distributed.
+
+Accordingly, Zee identifies this component as "S1-mini" by "Superwhisper"
+wherever it is named: the -autocorrect flag help, the diagnostics log, and
+this file. The user-facing tray item is named for the feature ("Auto-correct"),
+not for the model.
