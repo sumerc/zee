@@ -1015,6 +1015,13 @@ accurate" role or replaces the 110m as the English default.
 
 ## Qwen3-ASR-1.7B as a local engine: measured, not adopted (2026-08-06)
 
+> **Superseded 2026-08-22 by "Qwen3-ASR on ggml + Metal" below.** The runtime
+> objection recorded here — "a third engine outside the one-ggml build — MLX or
+> ONNX, not a backend swap" — no longer holds: qwen3-asr.cpp runs both sizes on
+> ggml/Metal and was built and measured. The context-biasing win below is the
+> part that did *not* reproduce there. Latency here is MLX and stands as an MLX
+> number only.
+
 The first speech-LLM actually run on this machine rather than desk-researched
 (the Voxtral entry below is still untested). Alibaba, Apache-2.0, 30 languages
 **including Turkish** — the only 2025-26 release that clears zee's Turkish bar
@@ -1182,3 +1189,115 @@ A user's install failed with `download failed: .../releases/download/https://api
 Fix: resolve the tag from the `https://github.com/<repo>/releases/latest` redirect (`curl -w '%{redirect_url}'`, take the basename). Rejected alternative: a shape-tolerant JSON grep (`grep -o '"tag_name" *: *"[^"]*"'`) — still a hand-rolled JSON parser, and it keeps the api.github.com dependency with its 60 req/hour unauthenticated rate limit, which the old error message already had to apologize for. The redirect removes both failure modes. The Go-side check (`update/check.go`) was never affected — `encoding/json` is whitespace-immune.
 
 Audit of every other download: model `manifest.txt` (TSV) and `checksums.txt` are line-oriented by design; ggufs/DMG/update-zip are SHA256-gated. The awk was the only shape-dependent parse in the product.
+
+## Qwen3-ASR on ggml + Metal: measured, still not adopted (2026-08-22)
+
+Closes the two gaps the earlier Qwen entries left open: that the ggml/Metal
+runtime had never been run, and that only 0.6B had ever been checked against the
+loanword failure. Both are now measured. **The speed objection is withdrawn; the
+reason for parking survives and is better evidenced.**
+
+Runtime: `predict-woo/qwen3-asr.cpp` @ 6dcc586, ggml v0.17.0, Metal. Weights
+converted from `Qwen/Qwen3-ASR-{0.6B,1.7B}` with the repo's own
+`scripts/convert_hf_to_gguf.py`. Its README lists only 0.6B, but the converter
+and the C++ read every dimension from config — **1.7B works too**, so one
+runtime covers both sizes. Metal is confirmed live rather than merely linked:
+`-t 1` and `-t 8` give 1.32 s and 1.31 s on the same clip, i.e. no thread
+scaling, so the matmuls are on the GPU.
+
+### Speed: real gain over the CPU build, still short of whisper
+
+Linear fit over 7 corpus clips (1.9–182.7 s), best of 2, M5 Pro. The qwen rows
+are whole-process wall time so their fixed term absorbs the GGUF mmap; whisper's
+row is inference-only from `benchmark.txt` and its fixed term does not.
+**Marginal throughput is the comparable column.**
+
+| config           | marginal | fixed  | size    |
+|------------------|----------|--------|---------|
+| whisper-turbo-q5 | 47.5xRT  | 0.11 s | 574 MB  |
+| qwen 0.6B q8_0   | 38.7xRT  | 0.29 s | 1.35 GB |
+| qwen 1.7B q8_0   | 21.8xRT  | 0.86 s | 3.2 GB  |
+| qwen 1.7B f16    | 19.3xRT  | 2.20 s | 4.7 GB  |
+
+The `qwen-asr-int` branch measured 11.8xRT on antirez/qwen-asr (CPU, bf16); the
+same model on Metal reaches 38.7xRT. That is the 2–3x that branch's note
+predicted, so **its speed rows are superseded — they measured a CPU build, not
+the model.** What the correction does not buy is an advantage: Qwen is not
+faster than whisper at any size, and 1.7B runs at less than half its throughput.
+
+### Accuracy: 1.7B halves the loanword errors and does not remove them
+
+The 23 s Turkish-with-English-vocabulary clip (`2026-07-29T00-26-07`):
+
+| spoken              | whisper-turbo-q5 | 0.6B q8_0        | 1.7B q8_0 and f16   |
+|---------------------|------------------|------------------|---------------------|
+| "transcribe"        | transcribe       | transkriberiyor  | transkriyer görüyor |
+| "sample"            | sample           | sempol           | sample              |
+| "check edebilirsin" | check edebilirsin| çekebilirsin     | çekebilirsin        |
+| "Whisper"           | Whisper          | Risper           | Whisper             |
+
+`çekebilirsin` is the dangerous one — a real Turkish word, so the error is
+silent — and it survives every size and every precision.
+
+**q8_0 is free, so quantization is not what hurts Qwen.** 1.7B f16 returns the
+same words on this clip, differing only in punctuation, at twice the latency.
+If Qwen is ever adopted, q8_0 is the right build; f16 buys nothing.
+
+### New failure mode: language misidentification
+
+Not seen in either earlier test, because neither ran this clip on this runtime.
+On a real 9.8 s Turkish clip (`2026-07-07T12-35-03`) every configuration
+returned a *different wrong language*, and f16 rules out quantization:
+
+```
+whisper-turbo-q5  Enine bir Travostik'in Agent Bootstrap altında bir ram pask var...
+0.6B q8_0         Kiedy mamy b trawu z kim Asians dość zapachny...       (Polish)
+1.7B q8_0         En dan weer trouwens geen eisen voor sabbatinderen...  (Dutch)
+1.7B f16          Někdy je trubkový žebřík dost zábavný...               (Czech)
+```
+
+Separately, on a 50.2 s Turkish clip every qwen config **translated to English**
+rather than transcribing Turkish; whisper transcribed it. That is the
+code-switching drift the 2026-08-06 model-field refresh recorded against turbo,
+showing up here against Qwen instead.
+
+### Context biasing: implemented, and it fixes the wrong half
+
+qwen3-asr.cpp ignores `-l/--language` outright (`(void)language;`) and leaves the
+system block empty, so neither language forcing nor biasing existed upstream.
+Adding it took two changes, and the second is a latent upstream bug:
+
+- `build_input_tokens` now inserts caller-supplied tokens into the system block,
+  which matches `chat_template.json` exactly (`<|im_start|>system\n{text}<|im_end|>`).
+- `audio_start_pos` was hardcoded to `9`. Anything in the system block shifts the
+  prefix, the audio is injected at the wrong offset, and the output is silently
+  **empty**. It is now located by searching for `audio_start_token_id`.
+
+The runtime decodes but cannot encode, so IDs are produced outside it. Measured
+on 1.7B q8_0:
+
+- **Fixes language misidentification.** The Dutch output above comes back as
+  Turkish: "Örneğin bir trafiği agent bu sabattında bir rampası var."
+- **Does not fix loanwords.** With `transcribe` and `check edebilirsin` injected
+  verbatim, the output is still "transkriyer veriyor" and "çekebilirsin". The
+  model was handed the exact answer and still resolved through Turkish phonology,
+  which is stronger evidence for the LLM-decoder mechanism than the earlier
+  "hints made it worse" result.
+- **Does not reproduce the 2026-08-06 MLX finding.** "Agent Bootstrap" was not
+  recovered even with it in the context. Either the MLX runtime formats context
+  differently or that result does not generalise; the format used here is
+  verified against the official chat template.
+
+### Verdict
+
+1.7B is the better Qwen and still loses to whisper-turbo-q5 on the only workload
+that matters, at 5.6x the disk and half the throughput — plus a wrong-language
+failure whisper does not have. Revisit only if a release changes the decoder's
+language prior, not for a faster runtime or a smaller quantization: both are now
+measured and neither moves accuracy.
+
+To reproduce: build `qwen3-asr.cpp` with its bundled ggml, convert the HF
+weights with its own `scripts/convert_hf_to_gguf.py` (`--type q8_0` or `f16`),
+and run the CLI over the `real/` clips of `zee-wer-corpus`. Every measurement
+above names its corpus clip id, and the whisper column comes from the M5 Pro
+block of `benchmark.txt`.
