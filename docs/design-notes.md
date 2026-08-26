@@ -1901,3 +1901,129 @@ clears quantization and this build: the fault is the turbo distillation itself
 things it lost. Latency does not defend turbo either — measured end to end on
 Groq, whisper-large-v3 is 0.64–0.71 s against turbo's 0.54 s, roughly 100–150 ms
 for correct language detection.
+
+### LLM post-pass for ASR mishearings: prompt matters more than effort (measured 2026-08-26)
+
+Tested whether a cloud LLM can repair ASR phonetic errors as a post-pass,
+complementing the deterministic `correct/` corrector (which only knows
+`hints.txt` terms). Input: a real 164 s Turkish dictation with English
+concurrency jargon, transcribed by local whisper-turbo-q5 (sample
+`2026-08-26T13-02-33`). Known mishearings: "Thunder Inkerd" (thundering herd),
+"IOBA'nın" (IO-bound), "Max Concurant" ×3, "Reinstorm" (brainstorm). Model:
+`openai/gpt-oss-120b` on Groq, temperature 0, ~2–4 s and ~1.6k tokens per call
+for the full transcript.
+
+Prompt variants, same text (single run each — see the nondeterminism caveat
+below; per-variant differences smaller than one edit are within run-to-run
+noise):
+
+| variant | result |
+|---|---|
+| "fix phonetically misheard words" (topic only) | fixed IO-bound + Concurrent, but **hallucinated**: "Thunder Inkerd" → "thread interference", "Reinstorm" → "Reinstantiate"; also over-edited Turkish-spelled loanwords (komentle → commentle) |
+| + *sound-match rule* (below) | fixed thundering herd, IO-bound, Concurrent ×3; zero hallucinations; left Reinstorm/Forensik untouched |
+| two-step "list candidates first" + `reasoning_effort: high` | reasoning runaway: 3k–12k reasoning tokens, `finish_reason: length`, **empty output** — twice. Rejected |
+| + Turkish mishearings generalization (**winner, v4**) | all of the above **plus** both injected Turkish errors ("deper" → "değer", "sema foru" → "semaforu"), no over-editing of fillers/spoken grammar |
+| + "ASR drops initial consonants" hint | regressed: "sema foru" → "semaphore" (lost the Turkish suffix), still no brainstorm. Rejected |
+
+The two load-bearing instructions, without which the model substitutes
+topic-plausible terms instead of sound-alike terms:
+
+1. "Recover the real term by **pronouncing the garbled spelling aloud** and
+   matching the SOUND in context."
+2. "If no confident sound-alike exists, **leave it unchanged**; never
+   substitute a word that merely fits the topic but does not match the sound."
+
+Winning system prompt of this round (v4), verbatim — superseded by the
+language-agnostic final template at the end of this entry:
+
+> You are a post-processor for ASR (speech-to-text) output. The text is raw ASR
+> output: Turkish speech with English software-engineering terms mixed in
+> (concurrency, rate limiting, HTTP). The ASR transcribes unknown terms by
+> SOUND, producing nonsense spellings — garbled English terms, but also
+> misheard TURKISH words (a real word replaced by a similar-sounding non-word,
+> or one word split into two). English stems often carry Turkish suffixes or
+> appear with Turkish light verbs ('X edelim' = 'let's X'); judge the stem
+> alone. For each suspect span, pronounce it aloud and recover the real word
+> the speaker said by matching the SOUND in context. If no confident
+> sound-alike exists, leave it unchanged; never substitute a word that merely
+> fits the topic but does not match the sound. Spoken-style grammar, fillers
+> and repetitions are NOT errors — keep them. Do not rephrase, translate, or
+> fix grammar. Return only the corrected text.
+
+No variant caught everything: "Reinstorm" (brainstorm) survives every safe
+prompt — restoring the lost initial consonant is exactly the low-confidence
+guess rule 2 forbids, and relaxing the rule is what reintroduces
+hallucinations. That residue is `hints.txt` alias territory: the LLM pass and
+the deterministic corrector are complementary (LLM for generic terms never
+listed, hints for personal vocabulary).
+
+Language-agnostic follow-up (same day): the shipped prompt must not hardcode
+the speaker's language, so both context anchors were ablated on the same text.
+Single runs suggested the domain hint is load-bearing for safety (dropping it
+produced "Forensik" → "foreground", "Reinstorm" → "Re-think", and translated
+"komentle" → "yorumla") while the language mention only bought native-word
+recall ("sema foru" → "semaforu"). Direction confirmed by the 5-run tallies
+below (empty-slot runs hallucinate more), but the single-run magnitudes are
+noise.
+
+**Temperature 0 on Groq gpt-oss-120b is not deterministic.** Two byte-identical
+requests produced different edit sets, so every prompt was re-measured as 5
+runs with edit-frequency tallies. This invalidates single-run prompt evals
+outright, and the "zero hallucinations" claims above should be read as
+"none observed in that particular run". What N=5 per slot state actually
+shows, on the final template (language slot filled from detection vs empty):
+
+- Stable core (5/5 runs, both slot states): "Concurant" → "Concurrent" ×3,
+  "deper" → "değer", "IOBA'nın" → "IO-bound'ın", "Thunder Inkerd" →
+  "thundering herd".
+- Noisy tail: "sema foru" → "semaforu" 1–4/5 (better with slot empty, worse
+  filled — opposite of the single-run read); occasional hallucinations in
+  2/5-or-fewer runs ("TLS" → "TCP", "Forensik" → "fonksiyonel"/"for each",
+  "Reinstorm" → "Reinstall", "komentle" → "komutla").
+- **Destructive mode, low probability**: 2/5 slot-filled runs silently deleted
+  a whole phrase ("aslında yine düşünüyorum..."), and 1/5 slot-empty runs
+  returned the **empty string**. Before hardening, ~half the runs also wrapped
+  corrections in markdown `**bold**`; an explicit "plain text only, no
+  markdown" output rule fixed that reliably (0/10 after).
+
+Consequence: raw LLM output cannot be pasted blindly. A deployment needs a
+deterministic guard between the LLM and the clipboard — accept word-level
+substitutions only, reject any diff that deletes spans or empties the text
+(the `correct/` package's diff machinery is the natural place). With that
+guard, the stable core above is real signal and the destructive tail is
+filtered; without it, roughly 1 in 5 dictations loses text.
+
+Final template (language slot filled at runtime from `lang_detect`, e.g.
+"The speaker's language is Turkish. ", or omitted when detection is unsure);
+the domain parenthetical is the safety anchor and would need to come from
+config/hints in a real deployment:
+
+> You are a post-processor for ASR (speech-to-text) output. The text is raw
+> ASR output in whatever language(s) the speaker used — possibly
+> code-switching between their language and foreign technical terms (software
+> engineering: concurrency, rate limiting, HTTP). {The speaker's language is
+> <LANG>. }The ASR transcribes unknown words by SOUND, producing nonsense
+> spellings: garbled foreign terms, but also misheard native words (a real
+> word replaced by a similar-sounding non-word, or one word split into two).
+> Foreign stems often carry the speaker's language's suffixes or appear in
+> light-verb constructions; judge the stem alone. For each suspect span,
+> pronounce it aloud and recover the real word the speaker said by matching
+> the SOUND in context. If no confident sound-alike exists, leave it
+> unchanged; never substitute a word that merely fits the topic but does not
+> match the sound. Spoken-style grammar, fillers and repetitions are NOT
+> errors — keep them. The speaker's own spelling of loanwords is not an error
+> — never translate, localize, or re-spell a word that is already a real word.
+> Do not rephrase or fix grammar. Output rules: return only the corrected
+> text, as plain text — no markdown, no emphasis or bold, no quotes, no
+> commentary; every word you did not correct must be copied exactly as
+> written.
+
+Concise rewrite: measured, rejected. A 122-word compression of the 208-word
+template (same rules, one sentence each) was A/B'd at 5 runs per slot state.
+The stable core survived, but spurious edits went from ~6 per 5 runs to ~21:
+new failure classes appeared that the long form never showed — renaming a
+correctly-heard product term ("Flex" → "limit", 4 edits across runs), grammar
+edits ("koruyor" → "koruyan" 3/5), and systematic loanword respelling
+("komentle" → "comment'le" 8/10 with the slot empty). The redundant,
+spelled-out rule sentences are load-bearing; prompt length is not worth
+optimizing here.
