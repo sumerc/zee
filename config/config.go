@@ -17,13 +17,14 @@ import (
 // keycode; an empty Hotkey (no Mods) means "use the built-in default"
 // (hotkey.Combo.OrDefault resolves that).
 type Settings struct {
-	Language  string       `json:"language"`
-	Device    string       `json:"device"`
-	Provider  string       `json:"provider"`
-	Model     string       `json:"model"`
-	Hotkey    hotkey.Combo `json:"hotkey"`
-	AutoPaste bool         `json:"auto_paste"`
-	AutoStart bool         `json:"auto_start"`
+	Language   string       `json:"language"`
+	Device     string       `json:"device"`
+	Provider   string       `json:"provider"`
+	Model      string       `json:"model"`
+	Hotkey     hotkey.Combo `json:"hotkey"`
+	AutoPaste  bool         `json:"auto_paste"`
+	ListenMode bool         `json:"listen_mode"` // transcribe to transcript.txt instead of pasting
+	AutoStart  bool         `json:"auto_start"`
 	// TailWaitMs keeps the mic open this many ms after the hotkey is released so
 	// a fast keyup doesn't clip the last word. 0 disables the wait.
 	TailWaitMs int `json:"tail_wait_ms"`

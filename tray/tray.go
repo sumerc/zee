@@ -51,6 +51,9 @@ var (
 	autoPasteOn bool
 	autoPasteCb func(bool)
 
+	listenOn bool
+	listenCb func(bool)
+
 	loginOn        bool
 	loginAvailable = true
 	loginCb        func(bool) error
@@ -83,6 +86,20 @@ func OnCopyLast(fn func())        { copyLastFn = fn }
 func OnRecord(start, stop func()) { recordFn = start; stopFn = stop }
 func OnAutoPaste(fn func(bool))   { autoPasteCb = fn }
 func OnLogin(fn func(bool) error) { loginCb = fn }
+
+// OnListen registers the Listen Mode handler. Listen mode is meeting capture:
+// the mic stays open and each fixed-length chunk is transcribed to a file,
+// independent of the push-to-talk cycle.
+func OnListen(fn func(bool)) { listenCb = fn }
+
+// SetListen re-renders the Listen Mode checkbox. Needed because the app can
+// turn the mode off by itself (capture failure), not only by user click.
+func SetListen(on bool) {
+	trayMu.Lock()
+	listenOn = on
+	trayMu.Unlock()
+	updateListenItem(on)
+}
 
 // SetAutoPaste / SetLogin set the checkbox state; before Init they seed the
 // menu build, after Init (config-file reload) they re-render the item.

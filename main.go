@@ -106,6 +106,7 @@ type recordingConfig struct {
 	lang            string
 	hints           string
 	autoPaste       bool
+	listen          bool          // transcribe to transcript.txt instead of the clipboard
 	tailWait        time.Duration // mic kept open after release so a fast keyup doesn't clip the last word
 	pressToRecordMs float64       // press→mic-live, filled at record start; logged with the transcription metrics
 	releasedAt      time.Time     // recording end, filled once it happens; start of the felt-latency metric
@@ -245,6 +246,7 @@ func run() {
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
+	noHintsFlag := flag.Bool("no-hints", false, "Disable vocabulary hints entirely (ignore hints.txt)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe audio file(s) and exit; extra files may follow as positional args (one transcript printed per line)")
 	providerFlag := flag.String("provider", "", "Transcription provider (e.g. parakeet, groq); overrides saved config")
 	modelFlag := flag.String("model", "", "Model ID for the selected provider; overrides saved config")
@@ -314,6 +316,7 @@ func run() {
 	}
 	if !flagSet["autopaste"] {
 		autoPaste = cfg.AutoPaste
+		listenMode = cfg.ListenMode
 	} else {
 		autoPaste = *autoPasteFlag
 	}
@@ -321,7 +324,9 @@ func run() {
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
 		activeFormat = *formatFlag
-		if *hintsFlag != "" {
+		if *noHintsFlag {
+			config.SetHints("") // pins hints empty; hints.txt is never read
+		} else if *hintsFlag != "" {
 			config.SetHints(*hintsFlag)
 		}
 	default:
@@ -365,9 +370,12 @@ func run() {
 		}
 	}
 	streamEnabled = modelSupportsStream(activeTranscriber)
-	if *langFlag != "" {
-		activeTranscriber.SetLanguage(*langFlag)
-	}
+	// Applied even when empty, for the same reason the flag merge above keeps an
+	// empty value: "" is Auto-detect, a real choice. Skipping it would leave the
+	// provider's own default in place — "en" for whisper — so an explicit Auto
+	// (saved setting, or -lang "") would silently transcribe as English on any
+	// path the tray does not reach, -transcribe included.
+	activeTranscriber.SetLanguage(*langFlag)
 
 	log.SetTranscribeEnabled(*debugTranscribeFlag)
 	if err := log.Init(); err != nil {
@@ -470,6 +478,10 @@ func run() {
 		})
 	}
 	tray.SetAutoPaste(autoPaste)
+	// Seeded before Init, like auto-paste: the menu is built from these, so
+	// without it a persisted listen_mode=true renders as an unchecked box —
+	// the mode silently on while the UI says off.
+	tray.SetListen(listenMode)
 
 	var trayModels []tray.Model
 	modelIndex := map[string]transcriber.ModelInfo{}
@@ -642,6 +654,8 @@ func run() {
 		exec.Command("open", "-t", config.CredentialsPath()).Run()
 	})
 	tray.SetHotkeyLabel(cfg.Hotkey.OrDefault().Display())
+
+	tray.OnListen(setListenMode)
 
 	trayQuit := tray.Init()
 	tray.OnAutoPaste(func(on bool) {
@@ -828,6 +842,7 @@ func run() {
 		configMu.Lock()
 		apChanged := autoPaste != s.AutoPaste
 		autoPaste = s.AutoPaste
+		listenMode = s.ListenMode
 		configMu.Unlock()
 		if apChanged {
 			tray.SetAutoPaste(s.AutoPaste)
@@ -962,6 +977,16 @@ func tryStartSession(sessions chan<- recSession) *atomic.Bool {
 	if !isRecording.CompareAndSwap(false, true) {
 		denyBusy("Already recording or transcribing.")
 		return nil
+	}
+	// After a long idle, macOS has paged the local model out and the first
+	// inference pays seconds of page-in. Re-touch it now, in parallel with the
+	// recording, so the cost is gone by release. The provider itself decides
+	// whether a warm is due (idle threshold) — a no-op for cloud providers.
+	configMu.Lock()
+	tr := activeTranscriber
+	configMu.Unlock()
+	if w, ok := tr.(interface{ Warm() }); ok {
+		go w.Warm()
 	}
 	sc := &atomic.Bool{}
 	audio.PlayStart() // reflexive: sound the press now, not after the record loop spins up (playOne is non-blocking)
@@ -1141,20 +1166,35 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		lang:      activeTranscriber.GetLanguage(),
 		hints:     config.GetHints(),
 		autoPaste: autoPaste,
+		listen:    listenMode,
 		tailWait:  time.Duration(config.Get().TailWaitMs) * time.Millisecond,
 	}
 	configMu.Unlock()
+	// Listen mode writes a meeting to a file; pasting each chunk into whatever
+	// window has focus would be actively harmful, and streaming partials have
+	// nowhere to go.
+	if cfg.listen {
+		cfg.autoPaste, cfg.stream = false, false
+	}
 	if cfg.autoPaste && !permissions.HasAccessibility() {
 		cfg.autoPaste = false
 		tray.SetError("Auto-paste is waiting for Accessibility permission")
 	}
 
-	tSess, err := cfg.tr.NewSession(context.Background(), transcriber.SessionConfig{
-		Stream:   cfg.stream,
-		Format:   cfg.format,
-		Language: cfg.lang,
-		Hints:    cfg.hints,
-	})
+	var tSess transcriber.Session
+	var err error
+	if cfg.listen {
+		// Same capture, VAD, overlay and feedback as a normal recording — only
+		// the destination differs. See listen.go.
+		tSess, err = newListenSink(cfg.tr, cfg.lang, cfg.hints)
+	} else {
+		tSess, err = cfg.tr.NewSession(context.Background(), transcriber.SessionConfig{
+			Stream:   cfg.stream,
+			Format:   cfg.format,
+			Language: cfg.lang,
+			Hints:    cfg.hints,
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1188,7 +1228,14 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		}
 	}()
 
-	rec, err := newRecordingSession(capture, sess.Stop, tSess, sess.SilenceClose, cfg.tailWait)
+	// A meeting has long quiet stretches, and toggle mode arms the silence
+	// auto-close — which would end the session after the first 30 s pause.
+	// Hand listen mode a handle that is never armed instead.
+	silenceClose := sess.SilenceClose
+	if cfg.listen {
+		silenceClose = &atomic.Bool{}
+	}
+	rec, err := newRecordingSession(capture, sess.Stop, tSess, silenceClose, cfg.tailWait)
 	if err != nil {
 		tSess.Close()
 		return nil, err
