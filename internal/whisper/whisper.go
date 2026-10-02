@@ -60,15 +60,30 @@ static char *zee_wsp_transcribe(struct whisper_context *ctx, const float *pcm,
     p.language         = lang;    // "auto" => detect (costs one extra encoder pass)
     p.audio_ctx        = audio_ctx;  // 0 = full window; see audioCtxFor
 
+    // No rolling context: each 30 s window decodes without the previous
+    // window's text. no_context=true (the default) only clears context BETWEEN
+    // whisper_full calls; inside one call whisper.cpp still feeds every window
+    // the text decoded so far (whisper.cpp:7111). Once a window decodes into a
+    // repeated sentence, that repetition becomes the next window's prompt and
+    // the loop replaces the rest of a long dictation. The entropy guard
+    // (entropy_thold) misses it because the timestamp tokens around each
+    // repeat lift the entropy just over the threshold. See docs/design-notes.md.
+    p.n_max_text_ctx   = 0;
+
     // Vocabulary hints ride in as the initial prompt — the same string the
     // cloud providers send as `prompt`. carry_initial_prompt keeps it pinned to
     // the front of EVERY window's prompt (whisper.cpp:6946); without it the
     // hint lands in the rolling context and is diluted away after the first
     // 30 s, which for a two-minute dictation means most of the audio decodes
     // unbiased.
+    //
+    // The pinned hint shares the n_max_text_ctx budget with the rolling
+    // context, so the budget is sized to exactly the hint plus the
+    // previous-text marker token: the hint fits, nothing decoded does.
     if (prompt != NULL && prompt[0] != '\0') {
         p.initial_prompt       = prompt;
         p.carry_initial_prompt = true;
+        p.n_max_text_ctx       = whisper_token_count(ctx, prompt) + 1;
     }
 
     if (whisper_full(ctx, p, pcm, n) != 0) {

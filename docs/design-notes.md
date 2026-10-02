@@ -718,6 +718,13 @@ a steady 190–350, i.e. continuous speech), cross-chunk prompt (`no_context` is
 already `true` by default), and quantization — q8_0 only makes the bad decode
 less likely, it does not remove the trap.
 
+> **Partly superseded 2026-10-01** — the cross-chunk prompt was ruled out on a
+> misreading: `no_context` only clears context *between* `whisper_full` calls.
+> Inside one call every window is still conditioned on the text decoded so far.
+> The tail-loss conclusion above still stands; the rolling context turned out to
+> cause a different long-audio failure. See "Why whisper decodes each window
+> without the previous window's text" below.
+
 No regression test ships with this: the failure is content-dependent, and a
 synthetic long clip (a short sample repeated to 131 s) reproduces nothing —
 whisper collapses repeated content in *both* modes. A fixture would have to be
@@ -764,6 +771,88 @@ follows the same rule. Write `hints.txt` the way the output should look.
 Ordinary prompt-conditioning side effects come with it (a repeated word at the
 end of one clip, a dropped comma). Biasing is a trade, not a free win — which is
 why it stays opt-in per user rather than being seeded with defaults.
+
+
+## Why whisper decodes each window without the previous window's text (2026-10-01)
+
+`whisper_full` runs `n_max_text_ctx = 0` (hints-only budget when hints are
+set). whisper.cpp's default conditions every 30 s window on the text decoded so
+far (`whisper.cpp:7111`, capped at `n_text_ctx/2` = 224 tokens). `no_context =
+true` does not turn that off: it only clears the context at the start of each
+`whisper_full` call (`:6921`), so inside one long dictation the rolling context
+is live.
+
+That rolling context let one bad window take over the rest of a dictation. A
+5:50 English dictation (`whisper-turbo-q5`, auto-detect, no hints) decoded
+cleanly up to 3:12, then returned one short sentence 81 times and nothing else
+until the final two words. About 2.5 minutes of speech were
+lost, identically on every run: the live dictation, `zee -transcribe`, and four
+`Ctx.Transcribe` runs.
+
+Trace from a `-DWHISPER_DEBUG` build of libwhisper: every window from 207 s to
+349 s decoded the same repeated sentence, with `entropy = 2.46849` and
+`avg_logprobs` between −0.25 and −0.13. The entropy guard (`entropy_thold` 2.40,
+last 32 tokens) did not fire, so no temperature fallback ran. In a decoder token
+dump, the sentence's 8 text tokens alone score 2.07. The timestamp tokens around
+each repeat change value every time, which lifts the window just over the
+threshold. Each window then starts from a prompt that is mostly the repeated
+sentence, and whisper continues the pattern with high confidence.
+
+Same clip, same model, only `n_max_text_ctx` varied (M4, 16 GB, macOS 27,
+`Ctx.Transcribe` wall time, model already loaded):
+
+```
++-----------------------------+------------------------------+---------+
+| n_max_text_ctx              | Result                       | Time    |
++-----------------------------+------------------------------+---------+
+| default (224 effective)     | loop from 3:12, tail lost    | 29.2 s  |
+| 64                          | complete                     | 20.8 s  |
+| 32                          | complete                     | 16.0 s  |
+| 16                          | complete                     | 16.5 s  |
+| 0 (this change)             | complete                     | 16.5 s  |
+| 13 pause-split calls        | complete                     |   —     |
++-----------------------------+------------------------------+---------+
+```
+
+The time saved is the loop no longer decoding up to 151 tokens per window.
+
+**What it costs.**
+
+- *Style drifts between windows.* The rolling context carries casing and
+  punctuation forward. Without it, some later windows come back lowercase and
+  unpunctuated. On the same dictation: 5.6 sentence marks per 100 words at 0,
+  against 10.5 at 16 tokens (the default is not comparable, its tail is the
+  loop).
+- *Occasional word-level drift.* On a 78 s Turkish TTS clip (`say -v Yelda`),
+  WER went from 6.2% to 7.5% vs the source text. That is one word:
+  "konşimento" → "con shimento". On a 116 s English TTS clip (`say -v
+  Samantha`), WER was 3.3% both ways, with no word changes.
+- *Short dictations are unaffected.* The rolling context only exists from the
+  second window, so clips under 30 s decode exactly as before.
+
+**Hints still reach every window.** The pinned hint and the rolling context
+share the `n_max_text_ctx` budget (`:7127`), so the budget is set to the hint's
+token count + 1 (the previous-text marker). The hint fits whole; no decoded
+token does. Checked on the same dictation with a four-term hints file: a
+company name spoken in the last window (5:40) comes out right with hints and
+misspelt without them.
+
+**Rejected alternatives.**
+
+- *A small rolling context (16–64 tokens).* It avoided the loop on this clip
+  and kept more punctuation, but it leaves the mechanism in place: a window
+  that does loop still hands its last repeats to the next one.
+- *Raising `entropy_thold`.* A longer repeated sentence has higher entropy, so
+  any threshold can be beaten by a long enough repeat. Raising it also retries
+  normal windows (healthy windows over 32 tokens scored 3.1–3.2 in the trace
+  above).
+- *Splitting long audio at pauses before `whisper_full`.* It works (13 calls,
+  clean), but each call pays its own auto-detect encoder pass. With no rolling
+  context, splitting buys nothing that `n_max_text_ctx = 0` does not already
+  give.
+
+No regression fixture ships: the only failing recording is a private dictation,
+and synthetic long clips do not loop (see the timestamps entry above).
 
 
 ## Why the login item is written but never bootstrapped (2026-07-28)
