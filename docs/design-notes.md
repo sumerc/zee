@@ -1908,3 +1908,65 @@ weights with its own `scripts/convert_hf_to_gguf.py` (`--type q8_0` or `f16`),
 and run the CLI over the `real/` clips of `zee-wer-corpus`. Every measurement
 above names its corpus clip id, and the whisper column comes from the M5 Pro
 block of `benchmark.txt`.
+
+## gemini-3.5-transcribe as a cloud engine: measured on 12 saved samples (2026-08-27)
+
+Google's dedicated STT model (`gemini-3.5-transcribe`, Gemini API `interactions`
+endpoint, `google-genai` ≥ 2.20) run over 12 saved real dictations — Turkish,
+English, and heavily code-switched, including the clips other engines had
+failed on. Batch shape only: Files API upload, then one inference call.
+
+What it fixed, by failure class:
+
+- **Translation-instead-of-transcription, fully recovered.** Four samples
+  where whisper-turbo-q5 output the wrong *language* entirely (English speech
+  rendered as fluent Turkish or Arabic — the turbo mis-detect class recorded
+  above) and one where parakeet-v3 produced word salad on Turkish: Gemini
+  transcribed all five correctly in the spoken language. This failure class
+  simply did not occur.
+- **Cross-language jargon transcribed right at the source**: terms whisper
+  garbles phonetically ("thundering herd", "I/O bound", "brainstorm",
+  "OpenTelemetry", "tail sampling", "run task", "Gemini") came out correct
+  from audio, including every case the LLM post-pass above could not safely
+  recover. Personal vocabulary (product names not in common usage) still
+  misses — that stays `hints.txt` territory; the API's `custom_vocabulary`
+  (up to 1,000 terms) is the obvious hook, untested.
+
+Costs of the win:
+
+- **Omission tail risk**: in one 164 s clip it silently dropped a complete
+  English sentence embedded in Turkish speech; explicit
+  `generation_config.mode.type=verbatim` reproduced the omission. Once in 12
+  samples, but an unnoticeable failure — worse in kind than a garbled word.
+- **Verbatim style**: keeps every filler and stutter that whisper drops, so
+  long English dictations read worse as *dictation* despite higher fidelity.
+  It also collapses genuinely repeated phrases even in verbatim mode. The
+  documented `mode: smart` (filler removal) is untested.
+- **Latency is length-independent but never small**: 2.7–5.4 s inference for
+  8 s and 164 s clips alike, plus ~2 s Files-API upload of the full WAV. For
+  short clips that is ~10× worse than local whisper (~0.4 s); for 3-minute
+  clips it wins. The upload-then-infer shape does not fit the streaming
+  encoder pipeline as-is.
+- Pricing (2026-08: ~$0.005/min blended, free tier exists) is negligible for
+  push-to-talk volumes; the whole 12-sample eval cost cents.
+
+Net: best word-level accuracy measured on code-switched dictation, and it
+eliminates the turbo mis-detect/translate class outright — but the silent
+omission and the fixed ~5–7 s floor keep it from displacing the local engine
+for short utterances. Candidate role: long-clip / multilingual provider,
+pending `smart` mode and `custom_vocabulary` tests.
+
+**Live variant (`gemini-3.5-transcribe-live`, Live API/WebSocket, measured
+2026-08-27 on the same 11 clips — Turkish-accented Turkish/English dictation):**
+averages ~23% word-level disagreement against its own batch sibling, but the
+distribution is bimodal: 6/11 clips ≤17% (mostly filler/segment-join noise,
+near-zero real damage), 3/11 clips 27–60% — mid-clip jargon collapse and
+dropped trailing words, on one clip worse than whisper-large-v3-turbo (57% vs
+17%). It never mis-detects language (whisper's failure class), but its own
+failure class is silent omission, and which clip suffers is unpredictable.
+Streaming was paced at 8× realtime with abrupt clip ends, which may inflate
+end-truncation but not the mid-clip losses. Verdict: live buys ~1 s felt
+latency at release regardless of clip length (interims arrive during speech);
+quality order is batch > local whisper-turbo-q5 ≈ live-good-day > live-bad-day.
+Not a correctness engine; only a latency play, and it would still need the
+omission guard.
