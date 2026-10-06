@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #include <string.h>
+#include <unistd.h>
 
 // NSPasteboard + CGEvent, called from clipboard_darwin.go. (Objective-C can't
 // live in a cgo preamble — it is compiled as C — so it goes here, mirroring
@@ -40,8 +41,31 @@ char *clipRead(void) {
 // clipPaste synthesizes Cmd+V into whichever app has focus. Deliberately the
 // same event mechanism as the keybd_event call it replaces — NULL source,
 // annotated session tap, flags set explicitly so a physically-held modifier
-// cannot leak in — minus the sleep between down and up. Requires Accessibility;
-// without it macOS drops the events silently.
+// cannot leak in. Requires Accessibility; without it macOS drops the events
+// silently.
+//
+// The pause between down and up is load-bearing. Posted back to back, both
+// events sit in a busy target's queue together; by the time it processes them
+// V is already released, no Cmd+V key-equivalent fires, and the paste is lost
+// silently — paste_key_ms stays ~1 ms because CGEventPost itself succeeds.
+//
+// Measured 2026-10-02 on an M5 Pro (15 cores), pasting tokens into a cmux pane
+// running `cat` while 30 `yes` processes pinned every core (load avg 35→55),
+// variants interleaved so each saw the same load:
+//
+//   gap     source / tap                          landed
+//   0 ms    NULL / annotated session (as shipped)  3/15, 3/8, 6/8
+//   5 ms    same                                   8/8
+//   10 ms   same                                   8/8
+//   30 ms   same                                   8/8
+//   30 ms   HID system state / kCGHIDEventTap      8/8
+//   30 ms   combined session / annotated session   8/8
+//   0 ms    idle machine                           10/10
+//
+// Misses were drops, not delays: the pasteboard still held the token and it
+// never arrived later. Tap and source made no difference; only the gap did.
+// keybd_event used 100 ms; 5 ms held every time, 10 ms is margin for hosts
+// slower than Ghostty (Electron, browsers).
 void clipPaste(void) {
 	const CGKeyCode kVK_V = 0x09;
 	CGEventRef down = CGEventCreateKeyboardEvent(NULL, kVK_V, true);
@@ -49,6 +73,7 @@ void clipPaste(void) {
 	CGEventSetFlags(down, kCGEventFlagMaskCommand);
 	CGEventSetFlags(up, kCGEventFlagMaskCommand);
 	CGEventPost(kCGAnnotatedSessionEventTap, down);
+	usleep(10000);
 	CGEventPost(kCGAnnotatedSessionEventTap, up);
 	CFRelease(down);
 	CFRelease(up);

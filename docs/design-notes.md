@@ -1761,6 +1761,8 @@ Two distinct causes, both now removed on macOS (`clipboard/clipboard_darwin.m`):
   comment "ignore if speed is most in my test system"). Replaced with a direct
   CGEvent pair, deliberately using the same mechanism it had proven — NULL
   source, `kCGAnnotatedSessionEventTap`, explicit flags — minus the sleep.
+  **Superseded 2026-10-02: with no sleep at all the paste is dropped under CPU
+  load; now 10 ms — measurements in the `clipPaste` comment.**
 
 **The feedback beep was blocking the release path (M5 Pro).** With the clipboard
 fixed, a stubborn ~50 ms remainder was left in `unaccounted_ms`. One-off probes
