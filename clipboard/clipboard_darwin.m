@@ -64,8 +64,11 @@ char *clipRead(void) {
 //
 // Misses were drops, not delays: the pasteboard still held the token and it
 // never arrived later. Tap and source made no difference; only the gap did.
-// keybd_event used 100 ms; 5 ms held every time, 10 ms is margin for hosts
-// slower than Ghostty (Electron, browsers).
+// keybd_event used 100 ms; 5 ms held every time in that test. Shipped at
+// 10 ms first, but pastes still dropped in daily use under heavier load
+// (2026-10-08, paste_key_ms confirming the gap was in effect), so it is 30 ms,
+// the largest gap measured above — small next to inference, and under a third
+// of the old keybd_event sleep.
 void clipPaste(void) {
 	const CGKeyCode kVK_V = 0x09;
 	CGEventRef down = CGEventCreateKeyboardEvent(NULL, kVK_V, true);
@@ -73,7 +76,7 @@ void clipPaste(void) {
 	CGEventSetFlags(down, kCGEventFlagMaskCommand);
 	CGEventSetFlags(up, kCGEventFlagMaskCommand);
 	CGEventPost(kCGAnnotatedSessionEventTap, down);
-	usleep(10000);
+	usleep(30000);
 	CGEventPost(kCGAnnotatedSessionEventTap, up);
 	CFRelease(down);
 	CFRelease(up);
