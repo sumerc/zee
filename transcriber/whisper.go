@@ -23,26 +23,23 @@ import (
 // whisperEngine adapts a loaded ggml model to localEngine.
 type whisperEngine struct{ ctx *whisper.Ctx }
 
-// hints become initial_prompt, whose language can override lang. With an
-// explicit language the decoder is already pinned, so the prompt only biases
-// vocabulary; on auto-detect ("") the prompt's language wins over the audio's,
-// so hints are dropped there. See design-notes, "Known: bare-list hints flip
+// Hints are never passed to whisper, in any language. Whisper takes them as
+// initial_prompt, and that prompt conditions the output language and outranks
+// the language parameter: with -lang en, one bare hint word was enough to turn
+// English speech into Turkish. See design-notes, "Known: bare-list hints flip
 // the transcription language".
 //
-// TODO(hints): hints break whisper's auto language detection — the English
-// word list in initial_prompt pulls detection toward English on non-English
-// speech. Never feed hints to whisper on auto; revisit only with a hint
-// mechanism that does not go through the prompt.
-func (e whisperEngine) Transcribe(pcm []float32, lang, hints string) (string, error) {
-	if lang == "" {
-		hints = ""
-	}
-	return e.ctx.Transcribe(pcm, lang, hints)
+// TODO(hints): bring vocabulary biasing back to whisper through a mechanism
+// that is not the decoder prompt (separate PR).
+func (e whisperEngine) Transcribe(pcm []float32, lang, _ string) (string, error) {
+	return e.ctx.Transcribe(pcm, lang, "")
 }
 
-// LastDetection satisfies the optional interface localSession probes to log
+// LastDetection satisfies languageDetector, which localSession probes to log
 // what auto-detect chose. Whisper is the only engine that detects a language.
 func (e whisperEngine) LastDetection() (string, float64) { return e.ctx.LastDetection() }
+
+var _ languageDetector = whisperEngine{}
 
 func (e whisperEngine) Close() { e.ctx.Close() }
 
@@ -62,7 +59,7 @@ func whisperProvider() ProviderInfo {
 	return localProviderInfo(
 		localmodel.EngineWhisper, "Local (Whisper)",
 		localmodel.IDWhisperQ5, "en", // multilingual, but English by default — see above
-		whisper.Available(), true, // hints: fed in as whisper's initial prompt
+		whisper.Available(), false, // hints: never sent, see whisperEngine.Transcribe
 		openWhisper, whisperLanguages,
 	)
 }

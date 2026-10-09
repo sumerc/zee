@@ -710,7 +710,7 @@ discard — zero added cost, no decode change). Forced-language calls log nothin
 The field is split, so this is not an appeal to consensus — VoiceInk, the
 closest comparable (macOS, whisper.cpp, same model), ships `en`.
 
-## Known: bare-list hints flip the transcription language (measured 2026-08-07, no fix shipped)
+## Known: bare-list hints flip the transcription language (measured 2026-08-07; hints dropped for whisper 2026-10-06)
 
 Hints reach the whisper-family engines as free-text prompt — local
 `initial_prompt` (pinned to every window via `carry_initial_prompt`), Groq and
@@ -765,12 +765,18 @@ Follow-up measurements sharpened *why*, and killed the obvious repairs:
   transcription language or empty.
 
 The real constraint is on `hints.txt` itself — **hints must be written in the
-dictation language** — and no wrapper removes it. Current state: hints pass
+dictation language** — and no wrapper removes it. ~~Current state: hints pass
 through unmodified (the pre-existing behaviour), the hazard is documented at
 the pass-through site, and `-no-hints` disables the mechanism entirely. If it
 bites again: keep hints.txt to English-shaped technical terms, or run with
-`-no-hints`. Per-language hint files (`hints.en.txt`, …) would be the correct
-fix if this ever matters enough.
+`-no-hints`.~~ **Superseded 2026-10-06:** it kept biting in daily use (English
+dictation still came back Turkish with the default hints, `-lang en` or not),
+so hints are no longer sent to any whisper decoder — local whisper and Groq —
+in any language. The tray greys out "Edit Hints…" for local whisper. Deepgram,
+ElevenLabs and Mistral keep receiving them (keyword fields, measured immune
+above); OpenAI gpt-4o-transcribe keeps its `prompt` until its flip behaviour is
+measured. Vocabulary biasing for whisper is a `TODO(hints)` for a separate
+change. Per-language hint files (`hints.en.txt`, …) remain one candidate.
 
 Two adjacent facts caught in the same investigation: `config.GetHints`
 **auto-creates** `hints.txt` with the default template on first touch of a
@@ -782,8 +788,8 @@ transcription on a default config failed outright.
 
 **How comparable apps handle the same hazard** (read from source 2026-08-07,
 same checkouts as the STT-landscape survey). Both competitors keep user
-vocabulary **out of the decoder prompt entirely** — zee is the outlier in
-feeding raw user keywords to `initial_prompt`:
+vocabulary **out of the decoder prompt entirely** — zee was the outlier in
+feeding raw user keywords to `initial_prompt`, until 2026-10-06 (see above):
 
 - **VoiceInk**: the whisper prompt is a hardcoded *carrier sentence in the
   selected language* — a 25-language table in `WhisperPrompt.swift` ("Hello,
@@ -832,7 +838,7 @@ The field at a glance:
 
 | app | vocab reaches the model? | mechanism | language-flip risk |
 |---|---|---|---|
-| zee | yes | raw list → `initial_prompt` | live, documented here |
+| zee | not for whisper since 2026-10-06; keyword fields for Deepgram/ElevenLabs/Mistral | was raw list → `initial_prompt` | removed for whisper |
 | superwhisper | yes | vocab → prompt | live, documented in their docs |
 | Wispr Flow | claimed | "word boosting" + replacements after | unknown (closed stack) |
 | VoiceInk | no | language-locked carrier prompt; regex replace after | designed out |
@@ -1176,6 +1182,12 @@ a real multi-minute recording. The manual reproducer lives in
 this bug; do not set it.
 
 ## Why hints reach Whisper but not Parakeet
+
+> **Superseded 2026-10-06:** hints no longer reach Whisper either (local or
+> Groq) — the prompt flips the output language; see "Known: bare-list hints flip
+> the transcription language". The `SupportsHints` per-engine gate below still
+> stands and now reports false for both local engines. The `carry_initial_prompt`
+> reasoning still holds for whenever a prompt is passed.
 
 `hints.txt` used to stop at the cloud providers; the tray greyed the entry out
 for anything local. That conflated two different questions — "is this on-device?"
