@@ -1,5 +1,5 @@
 diff --git a/src/whisper.cpp b/src/whisper.cpp
-index 5ffc70af..9cc528f5 100644
+index 5ffc70af..3f6799f6 100644
 --- a/src/whisper.cpp
 +++ b/src/whisper.cpp
 @@ -920,6 +920,13 @@ struct whisper_state {
@@ -67,7 +67,30 @@ index 5ffc70af..9cc528f5 100644
      return 0;
  }
  
-@@ -6829,6 +6859,18 @@ int whisper_full_with_state(
+@@ -3929,6 +3959,12 @@ int whisper_set_mel(
+ }
+ 
+ int whisper_encode_with_state(struct whisper_context * ctx, struct whisper_state * state, int offset, int n_threads) {
++    // A public encode call always computes: callers such as examples/bench time
++    // repeated encodes of the same window. Only whisper_full's internal decode
++    // pass reuses the output this call leaves behind.
++    state->enc_mel_offset = -1;
++    state->enc_n_ctx      = -1;
++
+     if (!whisper_encode_internal(*ctx, *state, offset, n_threads, nullptr, nullptr)) {
+         WHISPER_LOG_ERROR("%s: failed to eval\n", __func__);
+         return -1;
+@@ -3938,6 +3974,9 @@ int whisper_encode_with_state(struct whisper_context * ctx, struct whisper_state
+ }
+ 
+ int whisper_encode(struct whisper_context * ctx, int offset, int n_threads) {
++    ctx->state->enc_mel_offset = -1; // always compute; see whisper_encode_with_state
++    ctx->state->enc_n_ctx      = -1;
++
+     if (!whisper_encode_internal(*ctx, *ctx->state, offset, n_threads, nullptr, nullptr)) {
+         WHISPER_LOG_ERROR("%s: failed to eval\n", __func__);
+         return -1;
+@@ -6829,6 +6868,18 @@ int whisper_full_with_state(
          }
      }
  
@@ -86,7 +109,7 @@ index 5ffc70af..9cc528f5 100644
      // auto-detect language if not specified
      if (params.language == nullptr || strlen(params.language) == 0 || strcmp(params.language, "auto") == 0 || params.detect_language) {
          std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
-@@ -6964,13 +7006,6 @@ int whisper_full_with_state(
+@@ -6964,13 +7015,6 @@ int whisper_full_with_state(
          }
      }
  

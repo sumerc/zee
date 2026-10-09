@@ -17,8 +17,9 @@ GGML_PREFIX   := $(CURDIR)/$(PARAKEET_DIR)/build-release/ggml-prefix
 WHISPER_DIR   := third_party/whisper.cpp
 WHISPER_LIB   := $(WHISPER_DIR)/build-release/src/libwhisper.a
 # In-tree patches applied to the pinned whisper.cpp checkout before it builds.
-# whisper-lib applies any that are missing and forces a reconfigure when it does,
-# so a `git submodule update` that resets the checkout cannot silently drop them.
+# whisper-lib treats them as one set: applied if any is missing, so a
+# `git submodule update` that resets the checkout cannot silently drop them.
+# Applying touches the sources, so the cmake build below recompiles them.
 WHISPER_PATCHES := patches/whisper.cpp
 # The upstream commit those patches were written and benchmarked against.
 # `git apply` only matches context lines, so a patch can still apply cleanly onto
@@ -87,24 +88,32 @@ whisper-lib: parakeet-lib
 	  echo "==> initializing whisper.cpp submodule (first checkout)"; \
 	  git submodule update --init --recursive $(WHISPER_DIR); \
 	fi; \
-	head=$$(git -C $(WHISPER_DIR) rev-parse HEAD 2>/dev/null); \
+	if [ ! -e $(WHISPER_DIR)/.git ]; then \
+	  echo "ERROR: $(WHISPER_DIR) is not a checkout (submodule init failed?)"; exit 1; \
+	fi; \
+	head=$$(git -C $(WHISPER_DIR) rev-parse HEAD); \
 	if [ "$$head" != "$(WHISPER_BASE)" ]; then \
 	  echo "ERROR: whisper.cpp is at $$head"; \
 	  echo "       but $(WHISPER_PATCHES)/*.patch were validated against $(WHISPER_BASE)."; \
 	  echo ""; \
 	  echo "  git apply checks context lines, not meaning: these patches may still apply"; \
-	  echo "  cleanly onto a moved encode path and silently stop working. Re-validate:"; \
-	  echo "    ZEE_AC_DEBUG=1 go test ./internal/whisper -run FaultMatrix -v   # H must pass"; \
-	  echo "    make bench-local                                                # auto ~= forced"; \
-	  echo "  then regenerate the patch and set WHISPER_BASE to $$head."; \
+	  echo "  cleanly onto a moved encode path and silently stop working. Re-validate"; \
+	  echo "  against the new commit (the WHISPER_BASE override lets the build through):"; \
+	  echo "    make whisper-lib WHISPER_BASE=$$head"; \
+	  echo "    ZEE_AC_DEBUG=1 ZEE_MODELS_DIR=$(MODELS_DEV_DIR) $(CGO_ENV) go test -count=1 ./internal/whisper -run FaultMatrix -v   # H must PASS, not SKIP"; \
+	  echo "    make bench-local WHISPER_BASE=$$head                                    # auto ~= forced"; \
+	  echo "  then regenerate the patch and set WHISPER_BASE to $$head here."; \
 	  exit 1; \
 	fi; \
-	for p in $(CURDIR)/$(WHISPER_PATCHES)/*.patch; do \
-	  if git -C $(WHISPER_DIR) apply --reverse --check $$p 2>/dev/null; then continue; fi; \
-	  echo "==> applying $$(basename $$p)"; \
-	  git -C $(WHISPER_DIR) apply $$p || exit 1; \
-	  rm -rf $(WHISPER_DIR)/build-release; \
-	done; \
+	pats=$$(ls $(CURDIR)/$(WHISPER_PATCHES)/*.patch 2>/dev/null); \
+	if [ -n "$$pats" ]; then \
+	  rpats=$$(ls -r $(CURDIR)/$(WHISPER_PATCHES)/*.patch); \
+	  if git -C $(WHISPER_DIR) apply --reverse --check $$rpats 2>/dev/null; then :; \
+	  else \
+	    echo "==> applying $(WHISPER_PATCHES)/*.patch"; \
+	    git -C $(WHISPER_DIR) apply $$pats || exit 1; \
+	  fi; \
+	fi; \
 	if [ ! -d $(WHISPER_DIR)/build-release ]; then \
 	  echo "==> configuring whisper.cpp (one-time)"; \
 	  cmake -S $(WHISPER_DIR) -B $(WHISPER_DIR)/build-release \
