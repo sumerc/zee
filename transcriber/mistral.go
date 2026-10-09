@@ -39,7 +39,7 @@ func NewMistral(apiKey string) *Mistral {
 
 func (m *Mistral) SupportedLanguages() []Language { return modelLanguages(MistralModels, m.GetModel()) }
 func (m *Mistral) Name() string                   { return "mistral" }
-func (m *Mistral) Models() []ModelInfo             { return MistralModels }
+func (m *Mistral) Models() []ModelInfo            { return MistralModels }
 
 func (m *Mistral) NewSession(_ context.Context, cfg SessionConfig) (Session, error) {
 	go m.client.Warm()
@@ -68,10 +68,12 @@ func (m *Mistral) Transcribe(audioData []byte, format, lang, hints string) (*Res
 	if hints != "" {
 		// Mistral 400s the WHOLE request if any context_bias item contains
 		// whitespace, and multi-word hints ("App Router") are legal in
-		// hints.txt — the shipped default even contains one. Split such terms
-		// into single words rather than failing the transcription.
-		for _, word := range strings.Split(hints, ",") {
-			for _, w := range strings.Fields(word) {
+		// hints.txt — the shipped default even contains one. Mistral's
+		// documented phrase form joins words with underscores
+		// ("affordable_health_care"), which keeps the phrase as one bias term
+		// instead of biasing "app" and "router" everywhere.
+		for _, term := range strings.Split(hints, ",") {
+			if w := strings.Join(strings.Fields(term), "_"); w != "" {
 				writer.WriteField("context_bias[]", w)
 			}
 		}

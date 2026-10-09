@@ -24,7 +24,8 @@ measured and what was rejected — see [design-notes.md](design-notes.md).
 | `-provider` | (saved config) | Transcription provider (`parakeet`, `whisper`, `groq`, …) |
 | `-model` | (saved config) | Model ID for the selected provider |
 | `-autopaste` | `true` | Auto-paste into the focused window |
-| `-hints` | – | Vocabulary hints, comma-separated (overrides `hints.txt`) |
+| `-hints` | – | Vocabulary hints, comma-separated (overrides `hints.txt`; `-hints ""` = none) |
+| `-no-hints` | `false` | Ignore `hints.txt` and send no hints; cannot be combined with a non-empty `-hints` |
 | `-transcribe` | – | Transcribe audio file(s) and exit; extra files may follow as positional args, one transcript per line |
 | `-setup` | `false` | Same as `zee setup` |
 | `-debug-transcribe` | `false` | Log transcription text (diagnostics are always logged) |

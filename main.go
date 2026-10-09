@@ -322,10 +322,15 @@ func run() {
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
 		activeFormat = *formatFlag
-		if *noHintsFlag {
-			config.SetHints("") // pins hints empty; hints.txt is never read
-		} else if *hintsFlag != "" {
-			config.SetHints(*hintsFlag)
+		// An explicit -hints wins over hints.txt even when empty: -hints ""
+		// means "no hints", the same way -lang "" means Auto-detect.
+		// -no-hints is the readable spelling of that; combining it with a
+		// non-empty -hints is contradictory and refused rather than guessed.
+		if *noHintsFlag && *hintsFlag != "" {
+			fatal("-no-hints and -hints %q contradict each other; pass one", *hintsFlag)
+		}
+		if *noHintsFlag || flagSet["hints"] {
+			config.SetHints(*hintsFlag) // pins hints; hints.txt is never read
 		}
 	default:
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
