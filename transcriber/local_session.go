@@ -20,8 +20,15 @@ import (
 // Measured on real dictation, a correct call and a wrong one are NOT separated
 // by the winner's probability — see docs/design-notes.md — so the runner-up
 // matters too and is worth having on the record when it becomes available.
+// languageDetector is the optional engine method logDetectedLanguage probes.
+// Named, and asserted on whisperEngine, so a rename or signature change fails
+// the build instead of silently dropping the lang_detect line.
+type languageDetector interface {
+	LastDetection() (lang string, p float64)
+}
+
 func logDetectedLanguage(e localEngine) {
-	d, ok := e.(interface{ LastDetection() (string, float64) })
+	d, ok := e.(languageDetector)
 	if !ok {
 		return
 	}

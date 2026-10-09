@@ -46,10 +46,11 @@ static void zee_wsp_silent(enum ggml_log_level l, const char *t, void *u) {
 // Worth capturing because a wrong detection does not merely mislabel the
 // transcript — whisper hard-forces the start-of-transcript token, so the audio
 // decodes AS that language and comes back fluent and wrong. The probability is
-// what separates a confident call from a coin toss.
+// context, not a verdict: measured, wrong calls reached p=0.91 (design-notes).
 //
-// Written on whisper's own thread inside whisper_full and read after it
-// returns, both under the Ctx mutex, so only one call is ever in flight.
+// whisper_log_set is process-wide, so these are too. callMu (Go side) holds
+// every whisper_full call across all Ctx instances, and the result is copied
+// into the Ctx before callMu is released, so two models never share a slot.
 static char  zee_wsp_det_lang[16];
 static float zee_wsp_det_prob;
 
@@ -115,7 +116,8 @@ static char *zee_wsp_transcribe(struct whisper_context *ctx, const float *pcm,
     p.n_max_text_ctx   = 0;
 
     // Vocabulary hints ride in as the initial prompt — the same string the
-    // cloud providers send as `prompt`. carry_initial_prompt keeps it pinned to
+    // cloud providers send as `prompt`. (zee's provider currently never passes
+    // any: the prompt flips the output language, see transcriber/whisper.go.) carry_initial_prompt keeps it pinned to
     // the front of EVERY window's prompt (whisper.cpp:6946); without it the
     // hint lands in the rolling context and is diluted away after the first
     // 30 s, which for a two-minute dictation means most of the audio decodes
@@ -209,9 +211,9 @@ const sampleRate = 16000
 // exp_n_audio_ctx before the detect encode, so one call encodes at one size and
 // case H (cold, auto, sized) passes. Sizing on a REUSED state still garbles
 // (D/F/G/I/J/L unchanged), so the lever needs a fresh whisper_state per
-// utterance — measured ~10 ms, i.e. affordable. Returning 0 stays a deliberate
-// choice: sizing is worth a further ~1.7x but does not preserve the transcript
-// word-for-word. See design-notes "audio_ctx sizing".
+// utterance, which is cheap to create. Returning 0 stays a deliberate choice:
+// sizing is a further speedup but does not preserve the transcript
+// word-for-word. Measurements in design-notes, "audio_ctx sizing".
 func audioCtxFor(int) int { return 0 }
 
 // Available reports whether local Whisper transcription is compiled in.
@@ -223,7 +225,17 @@ func Available() bool { return true }
 type Ctx struct {
 	mu  sync.Mutex
 	ptr *C.struct_whisper_context
+
+	detLang string // auto-detect result of the last transcribe; "" if forced
+	detProb float64
 }
+
+// callMu serializes whisper_full across every Ctx in the process. The
+// auto-detect capture (zee_wsp_det_*) is process-global because whisper's log
+// callback is, so two models transcribing at once — the warm-up in New during a
+// model switch, say — would otherwise read each other's detection. One GPU
+// runs one inference at a time anyway, so this costs nothing in practice.
+var callMu sync.Mutex
 
 var hushOnce sync.Once
 
@@ -231,7 +243,8 @@ var hushOnce sync.Once
 // also warms up: one throwaway transcribe so the backend's first-use init
 // (Metal pipeline compilation, buffer/kernel setup) happens now rather than
 // stalling the first real dictation. The warm-up runs in auto-detect mode
-// because that is the default path.
+// because that path is a superset of a forced-language one: it also exercises
+// the detection decode step.
 func New(path string) (*Ctx, error) {
 	c, err := newNoWarm(path)
 	if err != nil {
@@ -258,10 +271,12 @@ func newNoWarm(path string) (*Ctx, error) {
 }
 
 // Transcribe runs the model over mono 16 kHz float32 PCM and returns the
-// transcript. lang is an ISO-639-1 code; "" means auto-detect, which is the
-// only mode that survives code-switching — a wrong forced language garbles the
-// output rather than merely mislabelling it. Detection is close to free: it
-// shares its encoder pass with the first decode window (patches/whisper.cpp).
+// transcript. lang is an ISO-639-1 code; "" means auto-detect. Detection reads
+// only the first 30 s and commits that language to the whole clip, and a wrong
+// language does not mislabel the output — the audio comes back translated into
+// it. That is why zee's provider defaults to "en" (see transcriber/whisper.go).
+// Detection is close to free: it shares its encoder pass with the first decode
+// window (patches/whisper.cpp).
 //
 // hints is optional vocabulary biasing (the same comma-separated string the
 // cloud providers take as `prompt`); "" disables it.
@@ -290,10 +305,14 @@ func (c *Ctx) transcribeAt(pcm []float32, lang, hints string, audioCtx int) (str
 	cHints := C.CString(hints)
 	defer C.free(unsafe.Pointer(cHints))
 
+	callMu.Lock()
 	C.zee_wsp_det_clear()
 	out := C.zee_wsp_transcribe(c.ptr,
 		(*C.float)(unsafe.Pointer(&pcm[0])), C.int(len(pcm)),
 		cLang, cHints, C.int(audioCtx))
+	c.detLang = C.GoString(C.zee_wsp_det_lang_get())
+	c.detProb = float64(C.zee_wsp_det_prob_get())
+	callMu.Unlock()
 	if out == nil {
 		return "", fmt.Errorf("whisper: transcribe failed")
 	}
@@ -307,12 +326,13 @@ func (c *Ctx) transcribeAt(pcm []float32, lang, hints string, audioCtx int) (str
 //
 // Diagnostic only — nothing acts on it. It exists because a mis-detection is
 // invisible in the transcript: the output is fluent, confident and in the wrong
-// language, and without the probability there is no way to tell a solid call
-// (p≈0.95) from a coin toss (p≈0.65 with the runner-up at 0.30).
+// language, so the log is the only place it shows. The probability alone does
+// not separate right from wrong calls (a wrong one measured p=0.91; see
+// design-notes "Why English is the default").
 func (c *Ctx) LastDetection() (lang string, p float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return C.GoString(C.zee_wsp_det_lang_get()), float64(C.zee_wsp_det_prob_get())
+	return c.detLang, c.detProb
 }
 
 // Close frees the model. Safe to call more than once.
