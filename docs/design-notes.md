@@ -288,7 +288,10 @@ commit and fails loudly if a parakeet bump moves it.
 (`has tensor = true`, `MTLGPUFamilyMetal4`) with zero integration work — the
 main reason M5 whisper is ~3× M1. GPU tensor path, *not* the ANE.
 
-**Auto-detect is the default, and not as a preference.** whisper's language
+**~~Auto-detect is the default, and not as a preference.~~ Superseded
+2026-08-07** by "Why English is the default language for every model": `en` is
+the default, and a wrong language *translates* rather than garbles. Kept for
+the record:** whisper's language
 setting hard-forces the start-of-transcript token, so a wrong setting *garbles*
 rather than mislabels: Turkish audio pinned to English came back as "There is a
 travel system in a bootstrap…". Groq's `language=en` is a soft hint and survives
@@ -300,7 +303,9 @@ detection is on: on Turkish audio with embedded English, `-l tr` output was
 *identical* to `-l auto`, English terms intact under both. Whisper transcribes
 foreign words regardless of the token; only the wrong dominant language breaks
 it. Auto is the default because that language isn't known before the user
-speaks — the mixed-language case zee exists for. Cost: one extra encoder pass —
+speaks — the mixed-language case zee exists for. Cost, before the 2026-08-06
+encoder-reuse patch (see "Auto-detect costs one encoder pass, not two"; auto now
+costs about the same as forced): one extra encoder pass —
 ~260 ms on M5, but **~1.0 s on M1 Pro**, where it doubles short-utterance
 latency (0.95 s → 1.95 s). It is a full encoder pass, so it scales with the
 machine, not the clip: measured +999/+935/+1003 ms across 2.5/11.5/27 s. On
@@ -622,8 +627,9 @@ whisper's 102 languages is ~65% for large-v2, near-100% only for the top few
 languages; specifying the language is reported as 5–10% more accurate
 ([#1456](https://github.com/openai/whisper/discussions/1456)). On real saved
 samples (Turkish-accented English, speech −32 to −36 dBFS, SNR 4–13 dB — quiet,
-which is the realistic dictation case, not a contrived one), 4 of 6 clips
-detected wrong. The probability vector, dumped via
+which is the realistic dictation case, not a contrived one), 5 of 6 clips
+detected wrong (4 as first recorded; 14-39-00 was later ground-truthed as
+English). The probability vector, dumped via
 `whisper_lang_auto_detect`:
 
 | clip | detected | p(top) | p(en) | correct? |
@@ -888,6 +894,11 @@ against a `load()` queued behind it (fixing it changed nothing).
 **Impact is nil**: production exits via Go, so the destructor never runs and the
 leak dies with the process. Not worth carrying a patch for. If it ever needs
 fixing, it belongs upstream in parakeet.cpp's context teardown.
+
+## Whisper speed levers tried and not adopted
+
+(These entries belonged to "Why Whisper for multilingual (models-v2)" before
+newer sections were inserted between them.)
 
 **Conditional on `audio_ctx = 0` (noted 2026-08-06).** The whole argument below
 rests on the encoder window being fixed at 1500 frames. If `audioCtxFor` ever
@@ -1430,6 +1441,11 @@ gap on code-switching is the disqualifier, not the speed.
 Not implemented — recorded 2026-08-03 as the next thing to try on the
 multilingual latency path.
 
+> **Premise gone since 2026-08-06:** the encoder-reuse patch makes detection
+> share the first decode window's encoder pass, so auto costs about the same as
+> forced and this plan has little left to save. Kept for the language-ID
+> measurements below.
+
 Auto-detect costs a full turbo encoder pass (~265 ms on M5 Pro, ~1.0 s on M1
 Pro) per clip. But language ID is a much easier problem than transcription and
 does not need the big model. Measured on saved clips: `ggml-small` detects
@@ -1939,8 +1955,8 @@ What it fixed, by failure class:
 - **Cross-language jargon transcribed right at the source**: terms whisper
   garbles phonetically ("thundering herd", "I/O bound", "brainstorm",
   "OpenTelemetry", "tail sampling", "run task", "Gemini") came out correct
-  from audio, including every case the LLM post-pass above could not safely
-  recover. Personal vocabulary (product names not in common usage) still
+  from audio, including cases a text-only correction pass cannot safely
+  recover (the misheard word is not near any dictionary term). Personal vocabulary (product names not in common usage) still
   misses — that stays `hints.txt` territory; the API's `custom_vocabulary`
   (up to 1,000 terms) is the obvious hook, untested.
 
