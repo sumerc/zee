@@ -969,16 +969,6 @@ func tryStartSession(sessions chan<- recSession) *atomic.Bool {
 		denyBusy("Already recording or transcribing.")
 		return nil
 	}
-	// After a long idle, macOS has paged the local model out and the first
-	// inference pays seconds of page-in. Re-touch it now, in parallel with the
-	// recording, so the cost is gone by release. The provider itself decides
-	// whether a warm is due (idle threshold) — a no-op for cloud providers.
-	configMu.Lock()
-	tr := activeTranscriber
-	configMu.Unlock()
-	if w, ok := tr.(interface{ Warm() }); ok {
-		go w.Warm()
-	}
 	sc := &atomic.Bool{}
 	audio.PlayStart() // reflexive: sound the press now, not after the record loop spins up (playOne is non-blocking)
 	sessions <- recSession{Stop: resetStop(), SilenceClose: sc, PressedAt: time.Now()}

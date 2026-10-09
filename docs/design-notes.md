@@ -1970,3 +1970,29 @@ latency at release regardless of clip length (interims arrive during speech);
 quality order is batch > local whisper-turbo-q5 ≈ live-good-day > live-bad-day.
 Not a correctness engine; only a latency play, and it would still need the
 omission guard.
+
+## Keydown model warm-up: built, measured, removed (2026-10-06)
+
+A warm-up ran one second of silence through the local model on hotkey press
+when the model had been idle ≥ 10 min, so a paged-out model would page back in
+during speech instead of after release. Removed before merge; a redesign would
+have to answer all of these (field log, whisper-turbo-q5, M5 Pro):
+
+- **Residency is lost at 3 min, not 10.** ggml-metal stops its residency
+  keep-alive 180 s after the last compute (`keep_alive_s`,
+  `GGML_METAL_RESIDENCY_KEEP_ALIVE_S`). Gaps of 210–600 s, where no warm fired,
+  added ~120 ms (median 439 vs 321 ms on 3–12 s clips); gaps under 180 s added
+  ~0. A real page-out only showed after about an hour idle (930–2412 ms).
+- **It slowed short dictations.** 77% of warms finished in under 800 ms, i.e.
+  the weights were resident and the warm only added a queue: a 1.8 s clip
+  released during a warm logged 1017 ms instead of ~315 ms. The warm cannot be
+  cancelled (no abort callback).
+- **The idle clock was wrong twice over.** It was stamped at session start, not
+  when inference ended, and Go's monotonic clock stops during sleep on darwin,
+  so an overnight closed lid counted as a few minutes.
+- **It could freeze the tray.** A provider switch while a warm ran blocked the
+  AppKit main thread in `Close` until the warm finished.
+
+Better signals than a timer: extend the Metal keep-alive past typical gaps, and
+detect a real page-out from the process footprint (RSS far below model size)
+before deciding to warm.
