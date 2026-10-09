@@ -245,6 +245,7 @@ func run() {
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
 	hintsFlag := flag.String("hints", "", "Vocabulary hints for transcription (comma-separated)")
+	noHintsFlag := flag.Bool("no-hints", false, "Disable vocabulary hints entirely (ignore hints.txt)")
 	transcribeFlag := flag.String("transcribe", "", "Transcribe audio file(s) and exit; extra files may follow as positional args (one transcript printed per line)")
 	providerFlag := flag.String("provider", "", "Transcription provider (e.g. parakeet, groq); overrides saved config")
 	modelFlag := flag.String("model", "", "Model ID for the selected provider; overrides saved config")
@@ -321,8 +322,15 @@ func run() {
 	switch *formatFlag {
 	case "mp3@16", "mp3@64", "flac":
 		activeFormat = *formatFlag
-		if *hintsFlag != "" {
-			config.SetHints(*hintsFlag)
+		// An explicit -hints wins over hints.txt even when empty: -hints ""
+		// means "no hints", the same way -lang "" means Auto-detect.
+		// -no-hints is the readable spelling of that; combining it with a
+		// non-empty -hints is contradictory and refused rather than guessed.
+		if *noHintsFlag && *hintsFlag != "" {
+			fatal("-no-hints and -hints %q contradict each other; pass one", *hintsFlag)
+		}
+		if *noHintsFlag || flagSet["hints"] {
+			config.SetHints(*hintsFlag) // pins hints; hints.txt is never read
 		}
 	default:
 		fatal("Unknown format %q (use mp3@16, mp3@64, or flac)", *formatFlag)
@@ -365,9 +373,12 @@ func run() {
 		}
 	}
 	streamEnabled = modelSupportsStream(activeTranscriber)
-	if *langFlag != "" {
-		activeTranscriber.SetLanguage(*langFlag)
-	}
+	// Applied even when empty, for the same reason the flag merge above keeps an
+	// empty value: "" is Auto-detect, a real choice. Skipping it would leave the
+	// provider's own default in place — "en" for whisper — so an explicit Auto
+	// (saved setting, or -lang "") would silently transcribe as English on any
+	// path the tray does not reach, -transcribe included.
+	activeTranscriber.SetLanguage(*langFlag)
 
 	log.SetTranscribeEnabled(*debugTranscribeFlag)
 	if err := log.Init(); err != nil {

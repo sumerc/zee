@@ -8,7 +8,36 @@ import (
 
 	"zee/audio"
 	"zee/encoder"
+	"zee/log"
 )
+
+// logDetectedLanguage records what auto-detect chose, for engines that detect
+// at all (whisper; parakeet's models are fixed-language and report nothing).
+//
+// It is a bare diagnostic, deliberately: a mis-detection produces a fluent
+// transcript in the wrong language, which looks like a transcription bug rather
+// than a detection one, and the log is the only place the difference shows.
+// Measured on real dictation, a correct call and a wrong one are NOT separated
+// by the winner's probability — see docs/design-notes.md — so the runner-up
+// matters too and is worth having on the record when it becomes available.
+// languageDetector is the optional engine method logDetectedLanguage probes.
+// Named, and asserted on whisperEngine, so a rename or signature change fails
+// the build instead of silently dropping the lang_detect line.
+type languageDetector interface {
+	LastDetection() (lang string, p float64)
+}
+
+func logDetectedLanguage(e localEngine) {
+	d, ok := e.(languageDetector)
+	if !ok {
+		return
+	}
+	lang, p := d.LastDetection()
+	if lang == "" {
+		return // language was forced; nothing was detected
+	}
+	log.Info(fmt.Sprintf("lang_detect lang=%s p=%.4f", lang, p))
+}
 
 // localSession buffers raw S16LE PCM during recording, then runs one batch
 // inference on Close. Same Session interface as the cloud batch path, so the
@@ -53,6 +82,7 @@ func (s *localSession) Close() (SessionResult, error) {
 		return SessionResult{AudioData: audioData, AudioFormat: "wav"}, err
 	}
 	inferenceMs := float64(time.Since(start).Microseconds()) / 1000
+	logDetectedLanguage(s.engine)
 
 	text = strings.TrimSpace(text)
 	noSpeech := text == ""

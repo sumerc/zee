@@ -139,10 +139,11 @@ type variant struct {
 }
 
 // variantsFor decides which language modes to time. Parakeet has exactly one.
-// Whisper is measured twice on purpose: "auto" is what actually ships (and pays
-// a second encoder pass to detect the language), while "en" is the only number
-// comparable with parakeet's single pass. Reporting just one of them would
-// either hide the shipped cost or make the engines look falsely far apart.
+// Whisper is measured twice on purpose: "en" is the shipped default and the
+// only number comparable with parakeet's single pass, and "auto" is the
+// selectable alternative. With patches/whisper.cpp applied, detection shares
+// the first window's encoder pass, so auto should cost about the same as en —
+// a gap here means the patch stopped working.
 func variantsFor(m localmodel.Model) []variant {
 	if m.Engine == localmodel.EngineWhisper {
 		return []variant{{"auto", ""}, {"en", "en"}}
