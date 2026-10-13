@@ -1,0 +1,41 @@
+diff --git a/include/whisper.h b/include/whisper.h
+index b5dcdb2..f54c62e 100644
+--- a/include/whisper.h
++++ b/include/whisper.h
+@@ -395,6 +395,12 @@ extern "C" {
+     WHISPER_API int whisper_n_audio_ctx     (struct whisper_context * ctx);
+     WHISPER_API int whisper_is_multilingual (struct whisper_context * ctx);
+ 
++    // Address ranges of the backend buffers holding the model weights, so a
++    // caller can prefetch them (e.g. fault compressed pages back in before an
++    // inference). Fills at most n entries and returns how many it filled. A
++    // range may be GPU-private and not CPU-addressable: check before touching.
++    WHISPER_API int whisper_model_weight_ranges(struct whisper_context * ctx, void ** bases, size_t * sizes, int n);
++
+     WHISPER_API int whisper_model_n_vocab      (struct whisper_context * ctx);
+     WHISPER_API int whisper_model_n_audio_ctx  (struct whisper_context * ctx);
+     WHISPER_API int whisper_model_n_audio_state(struct whisper_context * ctx);
+diff --git a/src/whisper.cpp b/src/whisper.cpp
+index 3f6799f..f18f08b 100644
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -4154,6 +4154,19 @@ int whisper_lang_auto_detect(
+     return whisper_lang_auto_detect_with_state(ctx, ctx->state, offset_ms, n_threads, lang_probs);
+ }
+ 
++int whisper_model_weight_ranges(struct whisper_context * ctx, void ** bases, size_t * sizes, int n) {
++    int i = 0;
++    for (auto * buf : ctx->model.buffers) {
++        if (i == n) {
++            break;
++        }
++        bases[i] = ggml_backend_buffer_get_base(buf);
++        sizes[i] = ggml_backend_buffer_get_size(buf);
++        i++;
++    }
++    return i;
++}
++
+ int whisper_model_n_vocab(struct whisper_context * ctx) {
+     return ctx->model.hparams.n_vocab;
+ }

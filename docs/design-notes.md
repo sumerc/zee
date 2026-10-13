@@ -2024,3 +2024,38 @@ have to answer all of these (field log, whisper-turbo-q5, M5 Pro):
 Better signals than a timer: extend the Metal keep-alive past typical gaps, and
 detect a real page-out from the process footprint (RSS far below model size)
 before deciding to warm.
+
+## Keypress page-touch: prefetch the weights instead of running a warm-up inference (2026-10-13)
+
+Replaces the inference warm-up recorded above. Field data, whisper-turbo-q5,
+M5 Pro (24 GB), clean window 2026-10-08..13 with no warm-up running, extra
+latency against a warm baseline of `270 ms + 12 ms × audio_s`, idle measured
+awake (sleep removed via `pmset -g log`):
+
+| awake idle | n | median extra |
+|---|---|---|
+| < 3 min | 163 | −13 ms |
+| 3–10 min | 35 | +154 ms |
+| 10–30 min | 16 | +359 ms (several +1.4–2.4 s from ~15 min) |
+| > 30 min | 6 | +2.0 s (all) |
+
+Sleep is not the driver: the one long-sleep clip (56 h asleep, mostly dark
+wakes) was fast. The heavy cold follows awake use of other apps, i.e. memory
+pressure compressing zee's idle weights (the machine held ~7 GB in the
+compressor when checked). Process RSS cannot see it: the weights sit in
+shared-storage Metal buffers (`ggml_metal_host_malloc`, wrapped no-copy).
+
+Mechanism: at keypress, a goroutine calls `Ctx.Touch`, which runs `mincore()`
+over each weight range (exposed by `patches/whisper.cpp/0002`) and reads one
+byte from every page not reported in core. No inference and no inference lock,
+so it never queues a transcription behind it — the flaw that sank the
+inference warm-up. Warm cost: ~9 ms to scan 34,998 pages (M5 Pro), off the
+critical path. `mincore` failing on a range (GPU-private buffer) skips it.
+Each touch logs `model_touch pages= cold= ms=`, the first direct per-dictation
+measure of how cold the model was.
+
+Open, to settle from the field log: whether `mincore` reports compressed pages
+as not in core (if `cold` stays 0 on slow first dictations, it does not and
+the touch must read every page); and the ~150 ms 3–10 min step, which looks
+like GPU residency (ggml's 180 s keep-alive) that a CPU read cannot restore —
+`GGML_METAL_RESIDENCY_KEEP_ALIVE_S` or a GPU-side touch is the lever there.
