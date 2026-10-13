@@ -27,8 +27,9 @@ PARAKEET_PATCHES := patches/parakeet.cpp
 WHISPER_DIR   := third_party/whisper.cpp
 WHISPER_LIB   := $(WHISPER_DIR)/build-release/src/libwhisper.a
 # In-tree patches applied to the pinned whisper.cpp checkout before it builds.
-# whisper-lib treats them as one set: applied if any is missing, so a
-# `git submodule update` that resets the checkout cannot silently drop them.
+# whisper-lib treats them as one set: if the set is not fully applied (a
+# `git submodule update` reset the checkout, or a branch switch left a different
+# set behind), it restores pristine sources and applies the whole set.
 # Applying touches the sources, so the cmake build below recompiles them.
 WHISPER_PATCHES := patches/whisper.cpp
 # The upstream commit those patches were written and benchmarked against.
@@ -91,6 +92,7 @@ parakeet-lib:
 	  if git -C $(PARAKEET_DIR) apply --reverse --check $$rpats 2>/dev/null; then :; \
 	  else \
 	    echo "==> applying $(PARAKEET_PATCHES)/*.patch"; \
+	    git -C $(PARAKEET_DIR) checkout -q -- . && \
 	    git -C $(PARAKEET_DIR) apply $$pats || exit 1; \
 	    rm -rf $(PARAKEET_DIR)/build-release; \
 	  fi; \
@@ -141,6 +143,7 @@ whisper-lib: parakeet-lib
 	  if git -C $(WHISPER_DIR) apply --reverse --check $$rpats 2>/dev/null; then :; \
 	  else \
 	    echo "==> applying $(WHISPER_PATCHES)/*.patch"; \
+	    git -C $(WHISPER_DIR) checkout -q -- . && \
 	    git -C $(WHISPER_DIR) apply $$pats || exit 1; \
 	  fi; \
 	fi; \
