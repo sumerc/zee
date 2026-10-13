@@ -194,12 +194,19 @@ func IsLocal(tr Transcriber) bool {
 	return ok
 }
 
-// SupportsHints reports whether tr can bias decoding toward the vocabulary in
-// hints.txt, so the tray greys the hints entry out for the engines that cannot
-// (parakeet). Every cloud provider takes hints in some form.
+// SupportsHints reports whether tr actually uses the vocabulary in hints.txt,
+// so the tray greys the hints entry out where editing it would do nothing:
+// parakeet (no prompt surface) and every whisper decoder, local or Groq, which
+// is never sent hints because its prompt flips the output language (see
+// whisperEngine.Transcribe).
 func SupportsHints(tr Transcriber) bool {
-	p, ok := tr.(*localProvider)
-	return !ok || p.hints
+	switch p := tr.(type) {
+	case *localProvider:
+		return p.hints
+	case *Groq:
+		return false
+	}
+	return true
 }
 
 func (p *localProvider) Name() string { return p.name }

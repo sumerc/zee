@@ -411,6 +411,10 @@ func notifyIfSlow(d time.Duration, msg string) (settled func()) {
 // transcribePCM pushes pcm through the provider's normal session path and
 // returns the transcript — the same round-trip a real dictation makes.
 func transcribePCM(tr transcriber.Transcriber, pcm []byte, lang string) (string, error) {
+	// Set it on the provider too: local providers treat an empty
+	// SessionConfig.Language as "use my default", and whisper's default is
+	// "en", so "" (Auto-detect) would silently become English here.
+	tr.SetLanguage(lang)
 	sess, err := tr.NewSession(context.Background(), transcriber.SessionConfig{
 		Format:   "flac",
 		Language: lang,

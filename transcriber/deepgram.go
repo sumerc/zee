@@ -90,19 +90,26 @@ func (d *Deepgram) Transcribe(audioData []byte, format, lang, hints string) (*Re
 		contentType = "audio/mpeg"
 	}
 
-	apiURL := d.apiURL
+	u, err := url.Parse(d.apiURL)
+	if err != nil {
+		return nil, err
+	}
+	q := u.Query()
+	if lang != "" {
+		q.Set("language", lang)
+	} else {
+		// Mirrors the streaming session: "" can still arrive from stale configs
+		// or headless flags, and omitting the param silently means English-only,
+		// so send nova-3's multilingual mode as the least-wrong interpretation.
+		q.Set("language", "multi")
+	}
 	if hints != "" {
-		u, err := url.Parse(apiURL)
-		if err != nil {
-			return nil, err
-		}
-		q := u.Query()
 		for _, term := range strings.Split(hints, ",") {
 			q.Add("keyterm", strings.TrimSpace(term))
 		}
-		u.RawQuery = q.Encode()
-		apiURL = u.String()
 	}
+	u.RawQuery = q.Encode()
+	apiURL := u.String()
 
 	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(audioData))
 	if err != nil {

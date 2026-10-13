@@ -88,9 +88,13 @@ func (g *Groq) Transcribe(audioData []byte, format, lang, hints string) (*Result
 	if lang != "" {
 		writer.WriteField("language", lang)
 	}
-	if hints != "" {
-		writer.WriteField("prompt", hints)
-	}
+	// hints are deliberately not sent. Every Groq model here is whisper, which
+	// takes them as its decoder prompt, and that prompt flips the output
+	// language even with a language set (same measurement as local whisper,
+	// see transcriber/whisper.go).
+	//
+	// TODO(hints): bring vocabulary biasing back through a mechanism that is
+	// not the prompt (separate PR).
 	writer.Close()
 
 	req, err := http.NewRequest("POST", g.apiURL, &body)
