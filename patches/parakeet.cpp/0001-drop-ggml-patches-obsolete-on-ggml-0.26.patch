@@ -1,0 +1,612 @@
+diff --git a/third_party/ggml b/third_party/ggml
+--- a/third_party/ggml
++++ b/third_party/ggml
+@@ -1 +1 @@
+-Subproject commit e705c5fed490514458bdd2eaddc43bd098fcce9b
++Subproject commit e705c5fed490514458bdd2eaddc43bd098fcce9b-dirty
+diff --git a/third_party/ggml-patches/0001-ggml-cpu-fold-broadcast-iterations-in-llamafile_sgem.patch b/third_party/ggml-patches/0001-ggml-cpu-fold-broadcast-iterations-in-llamafile_sgem.patch
+deleted file mode 100644
+index d45d46c..0000000
+--- a/third_party/ggml-patches/0001-ggml-cpu-fold-broadcast-iterations-in-llamafile_sgem.patch
++++ /dev/null
+@@ -1,201 +0,0 @@
+-From df85e58e4cb2e266ca23d0f62cd7c0e341f6d326 Mon Sep 17 00:00:00 2001
+-From: Ettore Di Giacinto <mudler@localai.io>
+-Date: Tue, 26 May 2026 14:48:29 +0000
+-Subject: [PATCH 1/2] ggml-cpu: fold broadcast iterations in llamafile_sgemm
+- dispatch
+-MIME-Version: 1.0
+-Content-Type: text/plain; charset=UTF-8
+-Content-Transfer-Encoding: 8bit
+-
+-ggml_compute_forward_mul_mat issues one llamafile_sgemm call per
+-(i12, i13) pair in the broadcast loop. When src0 is broadcasted on
+-those dims and src1/dst pack them contiguously (true for RF-DETR
+-windowed attention: 16 windows × 101 tokens, etc.), the per-call
+-overhead — ggml_barrier, chunk_set, kernel prelude, and poor thread
+-utilization on tiny N — dominates the actual FMA work.
+-
+-Collapse such broadcast iterations into a single sgemm of merged
+-N = ne11 * ne12 * ne13. Two specialisations:
+-  fold_2_3: ne02==1 && ne03==1 -> single merged call
+-  fold_2  : ne02==1 && ne03>1  -> per-i13 call with merged ne11*ne12
+-
+-Same logic mirrored in the wdata (quantized src1) path, minus fold_3
+-since the wdata layout interleaves i13 with i12.
+-
+-Falls back to the per-(i12,i13) loop whenever the strides don't line
+-up (permuted views, non-contiguous dst, broadcasted heads, etc.).
+-
+-In-tree patch on the vendored ggml submodule for the rfdetr.cpp host
+-repo. Profile shows MUL_MAT per-iteration time drops from ~367ms to
+-~338ms on the RF-DETR ViT-B forward pass at T=8.
+----
+- src/ggml-cpu/ggml-cpu.c | 130 ++++++++++++++++++++++++++++++++++++++--
+- 1 file changed, 124 insertions(+), 6 deletions(-)
+-
+-diff --git a/src/ggml-cpu/ggml-cpu.c b/src/ggml-cpu/ggml-cpu.c
+-index cd5c61a8..51c2a18c 100644
+---- a/src/ggml-cpu/ggml-cpu.c
+-+++ b/src/ggml-cpu/ggml-cpu.c
+-@@ -1290,17 +1290,87 @@ void ggml_compute_forward_mul_mat(
+- 
+-     const bool src1_cont = ggml_is_contiguous(src1);
+- 
+-+    /* rfdetr.cpp patch: merge per-broadcast llamafile_sgemm calls when src0
+-+     * is unbroadcasted along a dim and src1/dst pack that dim contiguously.
+-+     *
+-+     * Why: ggml's mul_mat broadcasts over ne12/ne13 by issuing one sgemm per
+-+     * (i12,i13) pair. For e.g. windowed attention (ne12=16 windows, ne11=101
+-+     * tokens) that's 16 sgemm calls of N=101 instead of one call of N=1616.
+-+     * Per-call overhead (ggml_barrier, chunk setup, kernel prelude) and poor
+-+     * thread utilization on small N strictly dominate the actual FMA work.
+-+     * Folding the 16 windows into a single N=1616 call gives 4-5x speedup on
+-+     * those shapes (see git log for measurements). */
+-     if (src1_cont) {
+-+        const size_t ts_src0 = ggml_type_size(src0->type);
+-+        const size_t ts_src1 = ggml_type_size(src1->type);
+-+        const size_t ts_dst  = ggml_type_size(dst->type);
+-+
+-+        /* dst must be row-contiguous along the dims we want to fold. */
+-+        const bool dst_pack_2 = (nb1 == ts_dst * ne0)  && (nb2 == nb1 * ne1);
+-+        const bool dst_pack_3 = dst_pack_2             && (nb3 == nb2 * ne2);
+-+
+-+        /* src1 must pack the dim we're folding. For src1_cont, nb12 =
+-+         * nb11*ne11 and nb13 = nb12*ne12, so:
+-+         *   - dim 2 always packs (stride = ne11 rows)
+-+         *   - dim 3 packs across BOTH 12 and 13 only if ne12==1 OR we fold
+-+         *     both 12 and 13 together. */
+-+        const bool src1_pack_2 = (nb12 == nb11 * ne11);
+-+
+-+        /* src0 must NOT change as we step through the dim, i.e. ne0X == 1
+-+         * (purely broadcasted), so all (i12, i13) read the same weight page. */
+-+        const bool src0_share_2 = (ne02 == 1);
+-+        const bool src0_share_3 = (ne03 == 1);
+-+
+-+        /* fold_2_3: collapse both ne12 and ne13 into a flat N. Requires src0
+-+         * to be broadcast on BOTH dims; src1 to be fully packed (it is, when
+-+         * src1_cont). */
+-+        const bool fold_2_3 = src0_share_2 && src0_share_3 && src1_pack_2 &&
+-+                              dst_pack_3 && (ne12 * ne13 > 1);
+-+
+-+        /* fold_2: per-i13 sgemm collapsing ne12 into N. Used when ne03 > 1
+-+         * but ne02 == 1. */
+-+        const bool fold_2_only = !fold_2_3 && src0_share_2 && src1_pack_2 &&
+-+                                 dst_pack_2 && ne12 > 1;
+-+
+-+        if (fold_2_3) {
+-+            /* Single sgemm: collapse both broadcast dims into a flat N. */
+-+            if (!llamafile_sgemm(params,
+-+                                 ne01, ne11 * ne12 * ne13, ne00/ggml_blck_size(src0->type),
+-+                                 (const char *)src0->data,
+-+                                 nb01/ts_src0,
+-+                                 (const char *)src1->data,
+-+                                 nb11/ts_src1,
+-+                                 (char *)dst->data,
+-+                                 nb1/ts_dst,
+-+                                 src0->type, src1->type, dst->type))
+-+                goto UseGgmlGemm1;
+-+            return;
+-+        }
+-+        if (fold_2_only) {
+-+            for (int64_t i13 = 0; i13 < ne13; i13++)
+-+                if (!llamafile_sgemm(params,
+-+                                     ne01, ne11 * ne12, ne00/ggml_blck_size(src0->type),
+-+                                     (const char *)src0->data + i13/r3*nb03,
+-+                                     nb01/ts_src0,
+-+                                     (const char *)src1->data + i13*nb13,
+-+                                     nb11/ts_src1,
+-+                                     (char *)dst->data + i13*nb3,
+-+                                     nb1/ts_dst,
+-+                                     src0->type, src1->type, dst->type))
+-+                    goto UseGgmlGemm1;
+-+            return;
+-+        }
+-+
+-         for (int64_t i13 = 0; i13 < ne13; i13++)
+-             for (int64_t i12 = 0; i12 < ne12; i12++)
+-                 if (!llamafile_sgemm(params,
+-                                      ne01, ne11, ne00/ggml_blck_size(src0->type),
+-                                      (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03,
+--                                     nb01/ggml_type_size(src0->type),
+-+                                     nb01/ts_src0,
+-                                      (const char *)src1->data + i12*nb12 + i13*nb13,
+--                                     nb11/ggml_type_size(src1->type),
+-+                                     nb11/ts_src1,
+-                                      (char *)dst->data + i12*nb2 + i13*nb3,
+--                                     nb1/ggml_type_size(dst->type),
+-+                                     nb1/ts_dst,
+-                                      src0->type,
+-                                      src1->type,
+-                                      dst->type))
+-@@ -1358,17 +1428,65 @@ UseGgmlGemm1:;
+-     if (src1->type != vec_dot_type) {
+-         const void* wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+-         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+-+        const size_t ts_src0 = ggml_type_size(src0->type);
+-+        const size_t ts_vdt  = ggml_type_size(vec_dot_type);
+-+        const size_t ts_dst  = ggml_type_size(dst->type);
+-+
+-+        /* Same broadcast-fold as the F32 path above. wdata layout from
+-+         * the from_float loop iterates (i13, i12, i11) outer→inner, so the
+-+         * memory order is i13-outermost: offset(i12, i13) =
+-+         *   (i12*ne11 + i13*ne12*ne11)*row_size
+-+         * Stride between consecutive i12 (i13 fixed): ne11*row_size  -> packs dim 2
+-+         * Stride between consecutive i13 (i12 fixed): ne12*ne11*row_size -> NOT packed
+-+         *   (those rows are interleaved with other heads). fold_3 is therefore
+-+         *   only safe in the no-wdata path above. */
+-+        const bool dst_pack_2  = (nb1 == ts_dst * ne0)  && (nb2 == nb1 * ne1);
+-+        const bool dst_pack_3  = dst_pack_2             && (nb3 == nb2 * ne2);
+-+        const bool src0_share_2 = (ne02 == 1);
+-+        const bool src0_share_3 = (ne03 == 1);
+-+
+-+        const bool fold_2_3 = src0_share_2 && src0_share_3 && dst_pack_3 &&
+-+                              (ne12 * ne13 > 1);
+-+        const bool fold_2   = src0_share_2 && dst_pack_2 && ne12 > 1;
+-+
+-+        if (fold_2_3) {
+-+            if (!llamafile_sgemm(params,
+-+                                 ne01, ne11 * ne12 * ne13, ne00/ggml_blck_size(src0->type),
+-+                                 (const char *)src0->data,
+-+                                 nb01/ts_src0,
+-+                                 (const char *)wdata,
+-+                                 row_size/ts_vdt,
+-+                                 (char *)dst->data,
+-+                                 nb1/ts_dst,
+-+                                 src0->type, vec_dot_type, dst->type))
+-+                goto UseGgmlGemm2;
+-+            return;
+-+        }
+-+        if (fold_2) {
+-+            for (int64_t i13 = 0; i13 < ne13; i13++)
+-+                if (!llamafile_sgemm(params,
+-+                                     ne01, ne11 * ne12, ne00/ggml_blck_size(src0->type),
+-+                                     (const char *)src0->data + i13/r3*nb03,
+-+                                     nb01/ts_src0,
+-+                                     (const char *)wdata + i13*ne12*ne11*row_size,
+-+                                     row_size/ts_vdt,
+-+                                     (char *)dst->data + i13*nb3,
+-+                                     nb1/ts_dst,
+-+                                     src0->type, vec_dot_type, dst->type))
+-+                    goto UseGgmlGemm2;
+-+            return;
+-+        }
+- 
+-         for (int64_t i13 = 0; i13 < ne13; i13++)
+-             for (int64_t i12 = 0; i12 < ne12; i12++)
+-                 if (!llamafile_sgemm(params,
+-                                      ne01, ne11, ne00/ggml_blck_size(src0->type),
+-                                      (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03,
+--                                     nb01/ggml_type_size(src0->type),
+-+                                     nb01/ts_src0,
+-                                      (const char *)wdata + (i12*ne11 + i13*ne12*ne11)*row_size,
+--                                     row_size/ggml_type_size(vec_dot_type),
+-+                                     row_size/ts_vdt,
+-                                      (char *)dst->data + i12*nb2 + i13*nb3,
+--                                     nb1/ggml_type_size(dst->type),
+-+                                     nb1/ts_dst,
+-                                      src0->type,
+-                                      vec_dot_type,
+-                                      dst->type))
+--- 
+-2.43.0
+-
+diff --git a/third_party/ggml-patches/0002-metal-conv-2d-dw.patch b/third_party/ggml-patches/0002-metal-conv-2d-dw.patch
+deleted file mode 100644
+index 236ad09..0000000
+--- a/third_party/ggml-patches/0002-metal-conv-2d-dw.patch
++++ /dev/null
+@@ -1,282 +0,0 @@
+-diff --git a/src/ggml-metal/ggml-metal-device.cpp b/src/ggml-metal/ggml-metal-device.cpp
+-index ba006d9b..fe8b6a5c 100644
+---- a/src/ggml-metal/ggml-metal-device.cpp
+-+++ b/src/ggml-metal/ggml-metal-device.cpp
+-@@ -1818,6 +1818,29 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d(ggml_met
+-     return res;
+- }
+- 
+-+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d_dw(ggml_metal_library_t lib, const ggml_tensor * op) {
+-+    assert(op->op == GGML_OP_CONV_2D_DW);
+-+
+-+    GGML_ASSERT(ggml_is_contiguous(op->src[0]));
+-+    GGML_ASSERT(ggml_is_contiguous(op->src[1]));
+-+    GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
+-+    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
+-+    GGML_ASSERT(op->type         == GGML_TYPE_F32);
+-+
+-+    char base[256];
+-+    char name[256];
+-+
+-+    snprintf(base, 256, "kernel_conv_2d_dw_f32_f32");
+-+    snprintf(name, 256, "%s", base);
+-+
+-+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+-+    if (!res.pipeline) {
+-+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+-+    }
+-+
+-+    return res;
+-+}
+-+
+- ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_3d(ggml_metal_library_t lib, const ggml_tensor * op) {
+-     assert(op->op == GGML_OP_CONV_3D);
+- 
+-diff --git a/src/ggml-metal/ggml-metal-device.h b/src/ggml-metal/ggml-metal-device.h
+-index 1f212a92..c1130431 100644
+---- a/src/ggml-metal/ggml-metal-device.h
+-+++ b/src/ggml-metal/ggml-metal-device.h
+-@@ -150,6 +150,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_im2col
+- struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_transpose_1d (ggml_metal_library_t lib, const struct ggml_tensor * op);
+- struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_transpose_2d (ggml_metal_library_t lib, const struct ggml_tensor * op);
+- struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d           (ggml_metal_library_t lib, const struct ggml_tensor * op);
+-+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d_dw        (ggml_metal_library_t lib, const struct ggml_tensor * op);
+- struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_3d           (ggml_metal_library_t lib, const struct ggml_tensor * op);
+- struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_upscale           (ggml_metal_library_t lib, const struct ggml_tensor * op);
+- struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_pad               (ggml_metal_library_t lib, const struct ggml_tensor * op);
+-diff --git a/src/ggml-metal/ggml-metal-device.m b/src/ggml-metal/ggml-metal-device.m
+-index 780dfe81..1c9960a8 100644
+---- a/src/ggml-metal/ggml-metal-device.m
+-+++ b/src/ggml-metal/ggml-metal-device.m
+-@@ -1122,6 +1122,14 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+-                    op->src[1]->type == GGML_TYPE_F32 &&
+-                    op->type == GGML_TYPE_F32 &&
+-                    (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32);
+-+        case GGML_OP_CONV_2D_DW:
+-+            // Depthwise conv2d, WHCN/F32 only (what the Conformer subsampling
+-+            // uses). CWHN and F16 fall through to the CPU backend.
+-+            return ggml_is_contiguous(op->src[0]) &&
+-+                   ggml_is_contiguous(op->src[1]) &&
+-+                   op->src[0]->type == GGML_TYPE_F32 &&
+-+                   op->src[1]->type == GGML_TYPE_F32 &&
+-+                   op->type         == GGML_TYPE_F32;
+-         case GGML_OP_UPSCALE:
+-             return op->src[0]->type == GGML_TYPE_F32;
+-         case GGML_OP_POOL_1D:
+-diff --git a/src/ggml-metal/ggml-metal-impl.h b/src/ggml-metal/ggml-metal-impl.h
+-index ff74cafb..d7b4b60a 100644
+---- a/src/ggml-metal/ggml-metal-impl.h
+-+++ b/src/ggml-metal/ggml-metal-impl.h
+-@@ -646,6 +646,34 @@ typedef struct {
+-     int32_t  d1;
+- } ggml_metal_kargs_conv_2d;
+- 
+-+typedef struct {
+-+    uint64_t nbk0;  // kernel nb[0]  (KW stride)
+-+    uint64_t nbk1;  // kernel nb[1]  (KH stride)
+-+    uint64_t nbkc;  // kernel nb[3]  (channel stride; kernel is [KW,KH,1,C])
+-+    uint64_t nb10;  // src nb[0]
+-+    uint64_t nb11;  // src nb[1]
+-+    uint64_t nb12;  // src nb[2]     (channel)
+-+    uint64_t nb13;  // src nb[3]     (batch)
+-+    uint64_t nb0;   // dst nb[0]
+-+    uint64_t nb1;   // dst nb[1]
+-+    uint64_t nb2;   // dst nb[2]     (channel)
+-+    uint64_t nb3;   // dst nb[3]     (batch)
+-+    int32_t  IW;
+-+    int32_t  IH;
+-+    int32_t  KW;
+-+    int32_t  KH;
+-+    int32_t  C;
+-+    int32_t  OW;
+-+    int32_t  OH;
+-+    int32_t  N;
+-+    int32_t  s0;
+-+    int32_t  s1;
+-+    int32_t  p0;
+-+    int32_t  p1;
+-+    int32_t  d0;
+-+    int32_t  d1;
+-+} ggml_metal_kargs_conv_2d_dw;
+-+
+- typedef struct {
+-     uint64_t  ofs0;
+-     uint64_t  ofs1;
+-diff --git a/src/ggml-metal/ggml-metal-ops.cpp b/src/ggml-metal/ggml-metal-ops.cpp
+-index 206af227..6035ba2a 100644
+---- a/src/ggml-metal/ggml-metal-ops.cpp
+-+++ b/src/ggml-metal/ggml-metal-ops.cpp
+-@@ -386,6 +386,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
+-             {
+-                 n_fuse = ggml_metal_op_conv_2d(ctx, idx);
+-             } break;
+-+        case GGML_OP_CONV_2D_DW:
+-+            {
+-+                n_fuse = ggml_metal_op_conv_2d_dw(ctx, idx);
+-+            } break;
+-         case GGML_OP_CONV_TRANSPOSE_1D:
+-             {
+-                 n_fuse = ggml_metal_op_conv_transpose_1d(ctx, idx);
+-@@ -3727,6 +3731,83 @@ int ggml_metal_op_conv_2d(ggml_metal_op_t ctx, int idx) {
+-     return 1;
+- }
+- 
+-+int ggml_metal_op_conv_2d_dw(ggml_metal_op_t ctx, int idx) {
+-+    ggml_tensor * op = ctx->node(idx);
+-+
+-+    ggml_metal_library_t lib = ctx->lib;
+-+    ggml_metal_encoder_t enc = ctx->enc;
+-+
+-+    GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);  // kernel: KW,KH,1,C
+-+    GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
+-+    GGML_TENSOR_LOCALS( int32_t, ne1, op->src[1], ne);  // src:    IW,IH,C,N
+-+    GGML_TENSOR_LOCALS(uint64_t, nb1, op->src[1], nb);
+-+    GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);  // dst:    OW,OH,C,N
+-+    GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
+-+
+-+    GGML_ASSERT(ggml_is_contiguous(op->src[0]));
+-+    GGML_ASSERT(ggml_is_contiguous(op->src[1]));
+-+    GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
+-+    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
+-+    GGML_ASSERT(op->type == GGML_TYPE_F32);
+-+
+-+    const int32_t s0 = ((const int32_t *) op->op_params)[0];
+-+    const int32_t s1 = ((const int32_t *) op->op_params)[1];
+-+    const int32_t p0 = ((const int32_t *) op->op_params)[2];
+-+    const int32_t p1 = ((const int32_t *) op->op_params)[3];
+-+    const int32_t d0 = ((const int32_t *) op->op_params)[4];
+-+    const int32_t d1 = ((const int32_t *) op->op_params)[5];
+-+
+-+    ggml_metal_kargs_conv_2d_dw args = {
+-+        /*.nbk0 =*/ nb00,
+-+        /*.nbk1 =*/ nb01,
+-+        /*.nbkc =*/ nb03,
+-+        /*.nb10 =*/ nb10,
+-+        /*.nb11 =*/ nb11,
+-+        /*.nb12 =*/ nb12,
+-+        /*.nb13 =*/ nb13,
+-+        /*.nb0  =*/ nb0,
+-+        /*.nb1  =*/ nb1,
+-+        /*.nb2  =*/ nb2,
+-+        /*.nb3  =*/ nb3,
+-+        /*.IW   =*/ ne10,
+-+        /*.IH   =*/ ne11,
+-+        /*.KW   =*/ ne00,
+-+        /*.KH   =*/ ne01,
+-+        /*.C    =*/ ne12,
+-+        /*.OW   =*/ ne0,
+-+        /*.OH   =*/ ne1,
+-+        /*.N    =*/ ne3,
+-+        /*.s0   =*/ s0,
+-+        /*.s1   =*/ s1,
+-+        /*.p0   =*/ p0,
+-+        /*.p1   =*/ p1,
+-+        /*.d0   =*/ d0,
+-+        /*.d1   =*/ d1,
+-+    };
+-+
+-+    auto pipeline = ggml_metal_library_get_pipeline_conv_2d_dw(lib, op);
+-+
+-+    int nth = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline);
+-+    nth = std::min(nth, 256);
+-+    nth = std::max(nth, 1);
+-+
+-+    const uint64_t n_out = ggml_nelements(op);
+-+
+-+    uint64_t tg = (n_out + nth - 1)/nth;
+-+    tg = std::max<uint64_t>(tg, 1);
+-+    tg = std::min<uint64_t>(tg, (uint64_t) std::numeric_limits<int>::max());
+-+
+-+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+-+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+-+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+-+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+-+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+-+
+-+    ggml_metal_encoder_dispatch_threadgroups(enc, tg, 1, 1, nth, 1, 1);
+-+
+-+    return 1;
+-+}
+-+
+- int ggml_metal_op_conv_3d(ggml_metal_op_t ctx, int idx) {
+-     ggml_tensor * op = ctx->node(idx);
+- 
+-diff --git a/src/ggml-metal/ggml-metal-ops.h b/src/ggml-metal/ggml-metal-ops.h
+-index 36c61071..4b6195a1 100644
+---- a/src/ggml-metal/ggml-metal-ops.h
+-+++ b/src/ggml-metal/ggml-metal-ops.h
+-@@ -75,6 +75,7 @@ int ggml_metal_op_norm              (ggml_metal_op_t ctx, int idx);
+- int ggml_metal_op_rope              (ggml_metal_op_t ctx, int idx);
+- int ggml_metal_op_im2col            (ggml_metal_op_t ctx, int idx);
+- int ggml_metal_op_conv_2d           (ggml_metal_op_t ctx, int idx);
+-+int ggml_metal_op_conv_2d_dw        (ggml_metal_op_t ctx, int idx);
+- int ggml_metal_op_conv_3d           (ggml_metal_op_t ctx, int idx);
+- int ggml_metal_op_conv_transpose_1d (ggml_metal_op_t ctx, int idx);
+- int ggml_metal_op_conv_transpose_2d (ggml_metal_op_t ctx, int idx);
+-diff --git a/src/ggml-metal/ggml-metal.metal b/src/ggml-metal/ggml-metal.metal
+-index e772664b..7c4fae05 100644
+---- a/src/ggml-metal/ggml-metal.metal
+-+++ b/src/ggml-metal/ggml-metal.metal
+-@@ -4864,6 +4864,62 @@ kernel void kernel_conv_2d<half>(
+-         uint3   tpitg[[thread_position_in_threadgroup]],
+-         uint3     ntg[[threads_per_threadgroup]]);
+- 
+-+kernel void kernel_conv_2d_dw_f32_f32(
+-+        constant ggml_metal_kargs_conv_2d_dw & args,
+-+        device const char * weights,
+-+        device const char * src,
+-+        device       char * dst,
+-+        uint3   tgpig[[threadgroup_position_in_grid]],
+-+        uint3    tgpg[[threadgroups_per_grid]],
+-+        uint3   tpitg[[thread_position_in_threadgroup]],
+-+        uint3     ntg[[threads_per_threadgroup]]) {
+-+
+-+    const uint threads_per_tg = ntg.x * ntg.y * ntg.z;
+-+    const uint tg_index = (tgpig.z * tgpg.y + tgpig.y) * tgpg.x + tgpig.x;
+-+    const uint local_thread = tpitg.z * (ntg.x * ntg.y) + tpitg.y * ntg.x + tpitg.x;
+-+    const uint thread_index = tg_index * threads_per_tg + local_thread;
+-+    const uint64_t total_threads = (uint64_t) threads_per_tg * tgpg.x * tgpg.y * tgpg.z;
+-+    const uint64_t total_outputs = (uint64_t) args.N * args.C * args.OH * args.OW;
+-+
+-+    for (uint64_t index = thread_index; index < total_outputs; index += total_threads) {
+-+        uint64_t tmp = index;
+-+
+-+        const int32_t ow = tmp % args.OW; tmp /= args.OW;
+-+        const int32_t oh = tmp % args.OH; tmp /= args.OH;
+-+        const int32_t  c = tmp % args.C;  tmp /= args.C;
+-+        const int32_t  n = tmp;
+-+
+-+        const int32_t base_x = ow*args.s0 - args.p0;
+-+        const int32_t base_y = oh*args.s1 - args.p1;
+-+
+-+        const uint64_t src_base = (uint64_t) n * args.nb13 + (uint64_t) c * args.nb12;
+-+        const uint64_t w_base   = (uint64_t) c * args.nbkc;
+-+
+-+        float acc = 0.0f;
+-+        for (int32_t ky = 0; ky < args.KH; ++ky) {
+-+            const int32_t iy = base_y + ky*args.d1;
+-+            if (iy < 0 || iy >= args.IH) continue;
+-+            const uint64_t src_row = src_base + (uint64_t) iy * args.nb11;
+-+            const uint64_t w_row   = w_base   + (uint64_t) ky * args.nbk1;
+-+            for (int32_t kx = 0; kx < args.KW; ++kx) {
+-+                const int32_t ix = base_x + kx*args.d0;
+-+                if (ix < 0 || ix >= args.IW) continue;
+-+                const float xv = *(device const float *)(src     + src_row + (uint64_t) ix * args.nb10);
+-+                const float wv = *(device const float *)(weights + w_row   + (uint64_t) kx * args.nbk0);
+-+                acc += xv * wv;
+-+            }
+-+        }
+-+
+-+        const uint64_t dst_offs =
+-+            (uint64_t) n  * args.nb3 +
+-+            (uint64_t) c  * args.nb2 +
+-+            (uint64_t) oh * args.nb1 +
+-+            (uint64_t) ow * args.nb0;
+-+
+-+        *(device float *)(dst + dst_offs) = acc;
+-+    }
+-+}
+-+
+- typedef void (conv_transpose_1d_t)(
+-         constant ggml_metal_kargs_conv_transpose_1d & args,
+-         device const float * src0,
+diff --git a/third_party/ggml-patches/0003-metal-pad-leading.patch b/third_party/ggml-patches/0003-metal-pad-leading.patch
+deleted file mode 100644
+index 629058d..0000000
+--- a/third_party/ggml-patches/0003-metal-pad-leading.patch
++++ /dev/null
+@@ -1,105 +0,0 @@
+-diff --git a/src/ggml-metal/ggml-metal-device.m b/src/ggml-metal/ggml-metal-device.m
+-index 1c9960a8..bcc243ab 100644
+---- a/src/ggml-metal/ggml-metal-device.m
+-+++ b/src/ggml-metal/ggml-metal-device.m
+-@@ -1137,13 +1137,10 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+-         case GGML_OP_POOL_2D:
+-             return op->src[0]->type == GGML_TYPE_F32;
+-         case GGML_OP_PAD:
+--            // TODO: add circular padding support for metal, see https://github.com/ggml-org/llama.cpp/pull/16985
+--            if (ggml_get_op_params_i32(op, 8) != 0) {
+--                return false;
+--            }
+--
+--            return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 2) == 0) &&
+--                   (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 6) == 0);
+-+            // Leading and trailing pads on any dim are supported. Circular
+-+            // padding (op_params[8]) is not yet implemented on Metal.
+-+            // See https://github.com/ggml-org/llama.cpp/pull/16985
+-+            return ggml_get_op_params_i32(op, 8) == 0;
+-         case GGML_OP_PAD_REFLECT_1D:
+-         case GGML_OP_TIMESTEP_EMBEDDING:
+-         case GGML_OP_LEAKY_RELU:
+-diff --git a/src/ggml-metal/ggml-metal-impl.h b/src/ggml-metal/ggml-metal-impl.h
+-index d7b4b60a..73d1e220 100644
+---- a/src/ggml-metal/ggml-metal-impl.h
+-+++ b/src/ggml-metal/ggml-metal-impl.h
+-@@ -1035,6 +1035,10 @@ typedef struct {
+-     uint64_t nb1;
+-     uint64_t nb2;
+-     uint64_t nb3;
+-+    int32_t  lp0;
+-+    int32_t  lp1;
+-+    int32_t  lp2;
+-+    int32_t  lp3;
+- } ggml_metal_kargs_pad;
+- 
+- typedef struct {
+-diff --git a/src/ggml-metal/ggml-metal-ops.cpp b/src/ggml-metal/ggml-metal-ops.cpp
+-index 6035ba2a..3039c3b8 100644
+---- a/src/ggml-metal/ggml-metal-ops.cpp
+-+++ b/src/ggml-metal/ggml-metal-ops.cpp
+-@@ -4108,6 +4108,13 @@ int ggml_metal_op_pad(ggml_metal_op_t ctx, int idx) {
+-     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
+-     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
+- 
+-+    // Leading pads per dim (op_params even indices); trailing pads are implied
+-+    // by the dst ne[] and need no explicit value here.
+-+    const int32_t lp0 = ((const int32_t *) op->op_params)[0];
+-+    const int32_t lp1 = ((const int32_t *) op->op_params)[2];
+-+    const int32_t lp2 = ((const int32_t *) op->op_params)[4];
+-+    const int32_t lp3 = ((const int32_t *) op->op_params)[6];
+-+
+-     ggml_metal_kargs_pad args = {
+-         /*.ne00 =*/ ne00,
+-         /*.ne01 =*/ ne01,
+-@@ -4124,7 +4131,11 @@ int ggml_metal_op_pad(ggml_metal_op_t ctx, int idx) {
+-         /*.nb0  =*/ nb0,
+-         /*.nb1  =*/ nb1,
+-         /*.nb2  =*/ nb2,
+--        /*.nb3  =*/ nb3
+-+        /*.nb3  =*/ nb3,
+-+        /*.lp0  =*/ lp0,
+-+        /*.lp1  =*/ lp1,
+-+        /*.lp2  =*/ lp2,
+-+        /*.lp3  =*/ lp3,
+-     };
+- 
+-     auto pipeline = ggml_metal_library_get_pipeline_pad(lib, op);
+-diff --git a/src/ggml-metal/ggml-metal.metal b/src/ggml-metal/ggml-metal.metal
+-index 7c4fae05..1acea264 100644
+---- a/src/ggml-metal/ggml-metal.metal
+-+++ b/src/ggml-metal/ggml-metal.metal
+-@@ -5398,9 +5398,17 @@ kernel void kernel_pad_impl(
+-     const int32_t k0 = tgpig.x/args.ne1;
+-     const int32_t i1 = tgpig.x - k0*args.ne1;
+- 
+--    const int32_t i03 = i3;
+--    const int32_t i02 = i2;
+--    const int32_t i01 = i1;
+-+    // Leading-pad aware: a dst position iN maps to src position (iN - lpN), and
+-+    // is zero where that falls outside [0, ne0N). (lpN comes from op_params; the
+-+    // _4/c4 vectorized variant is disabled in the pipeline getter, so lp0 is in
+-+    // scalar element units here.)
+-+    const int32_t i03 = i3 - args.lp3;
+-+    const int32_t i02 = i2 - args.lp2;
+-+    const int32_t i01 = i1 - args.lp1;
+-+
+-+    const bool row_in = i01 >= 0 && i01 < args.ne01 &&
+-+                        i02 >= 0 && i02 < args.ne02 &&
+-+                        i03 >= 0 && i03 < args.ne03;
+- 
+-     device const T * src0_ptr = (device const T *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
+-     device       T * dst_ptr  = (device       T *) (dst  +  i3*args.nb3  +  i2*args.nb2  +  i1*args.nb1);
+-@@ -5411,8 +5419,9 @@ kernel void kernel_pad_impl(
+-             break;
+-         }
+- 
+--        if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
+--            dst_ptr[i0] = src0_ptr[i0];
+-+        const int32_t i00 = i0 - args.lp0;
+-+        if (row_in && i00 >= 0 && i00 < args.ne00) {
+-+            dst_ptr[i0] = src0_ptr[i00];
+-         } else {
+-             dst_ptr[i0] = 0.0f;
+-         }

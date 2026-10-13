@@ -2059,3 +2059,36 @@ as not in core (if `cold` stays 0 on slow first dictations, it does not and
 the touch must read every page); and the ~150 ms 3–10 min step, which looks
 like GPU residency (ggml's 180 s keep-alive) that a CPU read cannot restore —
 `GGML_METAL_RESIDENCY_KEEP_ALIVE_S` or a GPU-side touch is the lever there.
+
+## ggml 0.26: zee owns the ggml pin (measured 2026-10-13)
+
+parakeet.cpp pins ggml v0.13.0 (May 2026), even at its newest release v0.6.1,
+and whisper.cpp builds against that same ggml (two static ggml copies cannot
+share one binary: duplicate symbols resolve silently to either copy). So the
+pin moved into zee: `GGML_BASE` in the Makefile, and `parakeet-lib` moves the
+nested checkout there before configuring. `TestGGMLPinUnchanged` reads the same
+variable.
+
+v0.26.0 (`d7cb5741`) brings two Metal changes aimed at this workload: a
+tensor-API flash-attention kernel for F16 KV (M5 tensor cores) and a few-row
+MMA mat-mul (batch-1 decoding). `make bench-local`-equivalent, 14 saved
+samples (5–164 s), 3 interleaved rounds per build, 3 iterations each, M5 Pro:
+
+| engine | change (geomean) | new build faster in all 3 rounds |
+|---|---|---|
+| whisper-turbo-q5 (auto + en) | −8.9% (−9.5% on clips < 30 s) | 25 of 28 |
+| parakeet-110m-en | −1.1% (noise) | 1 of 14 |
+| parakeet-v3-multi | −2.4% (noise) | 1 of 14 |
+
+Short-clip examples: 287 → 251 ms, 283 → 253 ms, 323 → 290 ms. Transcripts:
+whisper identical on every clip compared; parakeet-110m identical; parakeet-v3
+identical on 13 of 14, and the 14th (`2026-08-07T14-39-00`) was a repetition
+loop on v0.13 (`tamb tamb …`) that v0.26 transcribes correctly.
+
+parakeet.cpp's own ggml patches, against v0.26: `0002` (Metal conv_2d_dw) and
+`0003` (Metal leading pad) are upstream now; `0001` (CPU llamafile_sgemm
+broadcast fold) no longer applies and matters only to CPU builds (zee runs
+parakeet on Metal); `0004` (CUDA pad) still applies.
+`patches/parakeet.cpp/0001` deletes the first three so parakeet's configure
+step applies only `0004`. Re-check `0001`'s CPU win before shipping a CPU
+(Linux) parakeet path.
