@@ -778,7 +778,7 @@ bites again: keep hints.txt to English-shaped technical terms, or run with
 `-no-hints`.~~ **Superseded 2026-10-06:** it kept biting in daily use (English
 dictation still came back Turkish with the default hints, `-lang en` or not),
 so hints are no longer sent to any whisper decoder — local whisper and Groq —
-in any language. The tray greys out "Edit Hints…" for local whisper. Deepgram,
+in any language. The tray greys out "Edit Hints…" for local whisper and Groq. Deepgram,
 ElevenLabs and Mistral keep receiving them (keyword fields, measured immune
 above); OpenAI gpt-4o-transcribe keeps its `prompt` until its flip behaviour is
 measured. Vocabulary biasing for whisper is a `TODO(hints)` for a separate
@@ -1197,7 +1197,7 @@ this bug; do not set it.
 > **Superseded 2026-10-06:** hints no longer reach Whisper either (local or
 > Groq) — the prompt flips the output language; see "Known: bare-list hints flip
 > the transcription language". The `SupportsHints` per-engine gate below still
-> stands and now reports false for both local engines. The `carry_initial_prompt`
+> stands and now reports false for both local engines and for Groq. The `carry_initial_prompt`
 > reasoning still holds for whenever a prompt is passed.
 
 `hints.txt` used to stop at the cloud providers; the tray greyed the entry out
