@@ -2010,7 +2010,9 @@ have to answer all of these (field log, whisper-turbo-q5, M5 Pro):
   keep-alive 180 s after the last compute (`keep_alive_s`,
   `GGML_METAL_RESIDENCY_KEEP_ALIVE_S`). Gaps of 210–600 s, where no warm fired,
   added ~120 ms (median 439 vs 321 ms on 3–12 s clips); gaps under 180 s added
-  ~0. A real page-out only showed after about an hour idle (930–2412 ms).
+  ~0. The large costs (930–2412 ms) only showed after about an hour idle, but
+  the pages themselves go out much earlier: `mincore` later found the whole
+  model cold from ~270 s awake idle (see "Field result" below).
 - **It slowed short dictations.** 77% of warms finished in under 800 ms, i.e.
   the weights were resident and the warm only added a queue: a 1.8 s clip
   released during a warm logged 1017 ms instead of ~315 ms. The warm cannot be
@@ -2023,7 +2025,9 @@ have to answer all of these (field log, whisper-turbo-q5, M5 Pro):
 
 Better signals than a timer: extend the Metal keep-alive past typical gaps, and
 detect a real page-out from the process footprint (RSS far below model size)
-before deciding to warm.
+before deciding to warm. *Superseded 2026-10-13/14:* RSS cannot see the
+weights, `mincore` can; the page-touch below replaced both ideas, and the
+keep-alive extension was measured as not needed.
 
 ## Keypress page-touch: prefetch the weights instead of running a warm-up inference (2026-10-13)
 
@@ -2054,11 +2058,35 @@ critical path. `mincore` failing on a range (GPU-private buffer) skips it.
 Each touch logs `model_touch pages= cold= ms=`, the first direct per-dictation
 measure of how cold the model was.
 
-Open, to settle from the field log: whether `mincore` reports compressed pages
-as not in core (if `cold` stays 0 on slow first dictations, it does not and
-the touch must read every page); and the ~150 ms 3–10 min step, which looks
-like GPU residency (ggml's 180 s keep-alive) that a CPU read cannot restore —
-`GGML_METAL_RESIDENCY_KEEP_ALIVE_S` or a GPU-side touch is the lever there.
+### Field result (measured 2026-10-14)
+
+Same method, with the touch running (ggml 0.26 build, one day, 2026-10-13 23:15
+.. 10-14 18:38, M5 Pro, 128 whisper dictations). Extra latency against this
+build's own warm baseline, fitted on the < 3 min clips (`209 ms + 11.5 ms ×
+audio_s`):
+
+| awake idle | n | touch found cold | median extra | before |
+|---|---|---|---|---|
+| < 3 min | 105 | 0 | +7 ms | −13 ms |
+| 3–10 min | 16 | 11 | +39 ms (short clips ~+15 ms) | +154 ms |
+| 10–30 min | 3 | 3 | +18 ms | +359 ms |
+| > 30 min | 4 | 4 | +75 ms | +2.0 s |
+
+A cold touch (all 34,998 pages) took 110–272 ms, while the user was still
+speaking. The two largest residuals (+632, +331 ms) are 103 s and 132 s clips,
+where the linear baseline fits badly, not cold starts.
+
+- **`mincore` does see the evicted pages.** `cold` is the whole model, not 0,
+  so reading one byte per reported-cold page is enough.
+- **The 3–10 min step was the same eviction, not a separate GPU cost.** Every
+  touch up to 244 s awake idle found 0 cold pages; from 269 s on, nearly all
+  pages were cold at once. A whole-buffer drop shortly after ggml's 180 s
+  residency keep-alive ends fits "residency released, then the OS takes the
+  buffer" better than gradual memory pressure (inferred from timing, not
+  traced). The touch restores it, and what remains (~15–40 ms) is not worth a
+  follow-up.
+- **Raising `GGML_METAL_RESIDENCY_KEEP_ALIVE_S` is not adopted.** It would keep
+  ~570 MB of whisper weights resident at all times to save that remainder.
 
 ## ggml 0.26: zee owns the ggml pin (measured 2026-10-13)
 
