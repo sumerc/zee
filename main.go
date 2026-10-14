@@ -974,6 +974,16 @@ func tryStartSession(sessions chan<- recSession) *atomic.Bool {
 		denyBusy("Already recording or transcribing.")
 		return nil
 	}
+	// Prefetch a local model's weights while the user speaks: if macOS
+	// compressed them during an idle spell, the decompression overlaps the
+	// recording instead of following the release. Cheap on a warm model and
+	// never blocks an inference.
+	configMu.Lock()
+	tr := activeTranscriber
+	configMu.Unlock()
+	if t, ok := tr.(transcriber.Toucher); ok {
+		go t.Touch()
+	}
 	sc := &atomic.Bool{}
 	audio.PlayStart() // reflexive: sound the press now, not after the record loop spins up (playOne is non-blocking)
 	sessions <- recSession{Stop: resetStop(), SilenceClose: sc, PressedAt: time.Now()}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"zee/audio"
 	"zee/localmodel"
+	"zee/log"
 )
 
 // localEngine is the entire engine-specific surface of an on-device provider:
@@ -207,6 +209,39 @@ func SupportsHints(tr Transcriber) bool {
 		return false
 	}
 	return true
+}
+
+// Toucher is implemented by providers whose model can be prefetched at
+// keypress; main starts Touch in the background when a recording begins.
+type Toucher interface{ Touch() }
+
+var _ Toucher = (*localProvider)(nil)
+
+// pageToucher is the optional engine method localProvider.Touch probes
+// (whisper only; parakeet's buffers are not exposed).
+type pageToucher interface {
+	Touch() (pages, cold int)
+}
+
+// Touch prefetches the loaded model's weights into RAM so a model macOS
+// compressed during an idle spell decompresses while the user speaks, not
+// after release. Cheap on a warm model, holds no inference lock, and logs the
+// cold-page count — the direct measure of how cold the model was.
+func (p *localProvider) Touch() {
+	p.mu.Lock()
+	eng := p.engine
+	p.mu.Unlock()
+	t, ok := eng.(pageToucher)
+	if !ok {
+		return
+	}
+	start := time.Now()
+	pages, cold := t.Touch()
+	if pages == 0 {
+		return // closed meanwhile, or nothing CPU-addressable
+	}
+	log.Info(fmt.Sprintf("model_touch engine=%s pages=%d cold=%d ms=%.1f",
+		p.name, pages, cold, float64(time.Since(start).Microseconds())/1000))
 }
 
 func (p *localProvider) Name() string { return p.name }

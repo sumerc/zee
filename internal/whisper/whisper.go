@@ -26,6 +26,9 @@ package whisper
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include "whisper.h"
 
 // ggml and whisper both log backend/pipeline chatter to stderr by default.
@@ -80,6 +83,53 @@ static void zee_wsp_det_clear(void) {
     zee_wsp_det_lang[0] = '\0';
     zee_wsp_det_prob = 0.0f;
 }
+
+// zee_wsp_touch faults the model's weight pages back into RAM. macOS compresses
+// idle memory under pressure, and a compressed weight page costs a
+// decompression on the next inference; reading one byte per page here pays
+// that while the user is still speaking. mincore() both skips ranges that are
+// not CPU-mapped (GPU-private buffers) and limits the reads to cold pages, so a
+// warm model costs one residency-map scan. *stop is polled so Close can cut a
+// long touch short.
+static void zee_wsp_touch(struct whisper_context *ctx, volatile int *stop, long *pages, long *cold) {
+    void  *bases[16];
+    size_t sizes[16];
+    int n = whisper_model_weight_ranges(ctx, bases, sizes, 16);
+    const uintptr_t pg = (uintptr_t)getpagesize();
+    *pages = 0;
+    *cold = 0;
+    for (int r = 0; r < n; r++) {
+        if (bases[r] == NULL || sizes[r] == 0) {
+            continue;
+        }
+        uintptr_t start = (uintptr_t)bases[r] & ~(pg - 1);
+        size_t span = (uintptr_t)bases[r] + sizes[r] - start;
+        size_t np = (span + pg - 1) / pg;
+        char *vec = malloc(np);
+        if (vec == NULL) {
+            continue;
+        }
+        if (mincore((void *)start, span, vec) != 0) {
+            free(vec);   // not mapped in our address space: GPU-private, skip
+            continue;
+        }
+        *pages += (long)np;
+        for (size_t i = 0; i < np; i++) {
+            if ((i & 255) == 0 && __atomic_load_n(stop, __ATOMIC_RELAXED)) {
+                free(vec);
+                return;
+            }
+            if (vec[i] & MINCORE_INCORE) {
+                continue;
+            }
+            (*cold)++;
+            (void)*(volatile char *)(start + i * pg);
+        }
+        free(vec);
+    }
+}
+
+static void zee_wsp_stop(volatile int *stop) { __atomic_store_n(stop, 1, __ATOMIC_RELAXED); }
 
 static const char *zee_wsp_det_lang_get(void) { return zee_wsp_det_lang; }
 static float       zee_wsp_det_prob_get(void) { return zee_wsp_det_prob; }
@@ -226,6 +276,12 @@ type Ctx struct {
 	mu  sync.Mutex
 	ptr *C.struct_whisper_context
 
+	// life is held for reading by Touch and for writing by Close, so the
+	// weights outlive any touch. Touch does not take mu: it must never queue
+	// an inference behind it, which is what sank the old inference warm-up.
+	life sync.RWMutex
+	stop *C.int // set by Close so a running Touch exits within a few hundred pages; never freed (4 bytes per load)
+
 	detLang string // auto-detect result of the last transcribe; "" if forced
 	detProb float64
 }
@@ -267,7 +323,7 @@ func newNoWarm(path string) (*Ctx, error) {
 	if ptr == nil {
 		return nil, fmt.Errorf("whisper: load %q failed", path)
 	}
-	return &Ctx{ptr: ptr}, nil
+	return &Ctx{ptr: ptr, stop: (*C.int)(C.calloc(1, C.sizeof_int))}, nil
 }
 
 // Transcribe runs the model over mono 16 kHz float32 PCM and returns the
@@ -335,8 +391,27 @@ func (c *Ctx) LastDetection() (lang string, p float64) {
 	return c.detLang, c.detProb
 }
 
+// Touch faults the model's weight pages back into RAM if macOS compressed or
+// swapped them out while zee sat idle, and reports how many pages the weights
+// span and how many were cold. No inference and no inference lock: on a warm
+// model it only scans the residency map, so it is cheap enough for every
+// keypress. Close stops it early.
+func (c *Ctx) Touch() (pages, cold int) {
+	c.life.RLock()
+	defer c.life.RUnlock()
+	if c.ptr == nil {
+		return 0, 0
+	}
+	var p, k C.long
+	C.zee_wsp_touch(c.ptr, c.stop, &p, &k)
+	return int(p), int(k)
+}
+
 // Close frees the model. Safe to call more than once.
 func (c *Ctx) Close() {
+	C.zee_wsp_stop(c.stop)
+	c.life.Lock()
+	defer c.life.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.ptr != nil {

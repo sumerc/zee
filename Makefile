@@ -14,11 +14,22 @@ PARAKEET_LIB  := $(PARAKEET_DIR)/build-release/libparakeet.a
 # installed so whisper's find_package(ggml) can resolve it; nothing leaves the
 # repo, it is a plain copy into the gitignored build dir.
 GGML_PREFIX   := $(CURDIR)/$(PARAKEET_DIR)/build-release/ggml-prefix
+# ggml is shared: parakeet.cpp builds it from its nested submodule and whisper.cpp
+# links that same build (two ggml copies cannot be statically linked together).
+# zee pins it here instead of taking parakeet.cpp's own pin, so a ggml bump does
+# not wait for a parakeet.cpp release. parakeet-lib moves the nested checkout to
+# this commit before configuring. v0.26.0: ~9% faster whisper on M5 (tensor-core
+# flash attention, few-row MMA mat-mul); see design-notes "ggml 0.26".
+GGML_DIR      := third_party/parakeet.cpp/third_party/ggml
+GGML_BASE     := d7cb574130e6f01ad25b3289685489200febcd74
+# In-tree patches to parakeet.cpp, applied as one set like the whisper ones.
+PARAKEET_PATCHES := patches/parakeet.cpp
 WHISPER_DIR   := third_party/whisper.cpp
 WHISPER_LIB   := $(WHISPER_DIR)/build-release/src/libwhisper.a
 # In-tree patches applied to the pinned whisper.cpp checkout before it builds.
-# whisper-lib treats them as one set: applied if any is missing, so a
-# `git submodule update` that resets the checkout cannot silently drop them.
+# whisper-lib treats them as one set: if the set is not fully applied (a
+# `git submodule update` reset the checkout, or a branch switch left a different
+# set behind), it restores pristine sources and applies the whole set.
 # Applying touches the sources, so the cmake build below recompiles them.
 WHISPER_PATCHES := patches/whisper.cpp
 # The upstream commit those patches were written and benchmarked against.
@@ -64,6 +75,27 @@ parakeet-lib:
 	if [ ! -f $(PARAKEET_DIR)/CMakeLists.txt ]; then \
 	  echo "==> initializing parakeet.cpp submodule (first checkout)"; \
 	  git submodule update --init --recursive $(PARAKEET_DIR); \
+	fi; \
+	if [ ! -e $(GGML_DIR)/.git ]; then \
+	  echo "ERROR: $(GGML_DIR) is not a checkout (submodule init failed?)"; exit 1; \
+	fi; \
+	if [ "$$(git -C $(GGML_DIR) rev-parse HEAD)" != "$(GGML_BASE)" ]; then \
+	  echo "==> moving ggml to $(GGML_BASE) (zee's pin, not parakeet.cpp's)"; \
+	  git -C $(GGML_DIR) cat-file -e $(GGML_BASE)^{commit} 2>/dev/null || \
+	    git -C $(GGML_DIR) fetch --depth 1 origin $(GGML_BASE) || exit 1; \
+	  git -C $(GGML_DIR) checkout -f -q $(GGML_BASE) || exit 1; \
+	  rm -rf $(PARAKEET_DIR)/build-release $(WHISPER_DIR)/build-release; \
+	fi; \
+	pats=$$(ls $(CURDIR)/$(PARAKEET_PATCHES)/*.patch 2>/dev/null); \
+	if [ -n "$$pats" ]; then \
+	  rpats=$$(ls -r $(CURDIR)/$(PARAKEET_PATCHES)/*.patch); \
+	  if git -C $(PARAKEET_DIR) apply --reverse --check $$rpats 2>/dev/null; then :; \
+	  else \
+	    echo "==> applying $(PARAKEET_PATCHES)/*.patch"; \
+	    git -C $(PARAKEET_DIR) checkout -q -- . && \
+	    git -C $(PARAKEET_DIR) apply $$pats || exit 1; \
+	    rm -rf $(PARAKEET_DIR)/build-release; \
+	  fi; \
 	fi; \
 	if [ ! -d $(PARAKEET_DIR)/build-release ]; then \
 	  echo "==> configuring parakeet.cpp (one-time)"; \
@@ -111,6 +143,7 @@ whisper-lib: parakeet-lib
 	  if git -C $(WHISPER_DIR) apply --reverse --check $$rpats 2>/dev/null; then :; \
 	  else \
 	    echo "==> applying $(WHISPER_PATCHES)/*.patch"; \
+	    git -C $(WHISPER_DIR) checkout -q -- . && \
 	    git -C $(WHISPER_DIR) apply $$pats || exit 1; \
 	  fi; \
 	fi; \

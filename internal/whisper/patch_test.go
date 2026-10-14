@@ -61,8 +61,8 @@ func TestWhisperPatchesApplied(t *testing.T) {
 	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 		t.Fatalf("third_party/whisper.cpp does not carry patches/whisper.cpp/*.patch: %v\n%s\n"+
 			"Run `make whisper-lib` to reapply them. If the submodule source was edited\n"+
-			"on purpose, regenerate the patch from it:\n"+
-			"    git -C third_party/whisper.cpp diff > patches/whisper.cpp/0001-reuse-detect-encoder-output.patch",
+			"on purpose, fold the edit into the patch it belongs to (0001 is the\n"+
+			"upstream-bound encoder reuse, 0002 the local weight-range accessor).",
 			err, out)
 	}
 }

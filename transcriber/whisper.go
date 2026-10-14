@@ -41,6 +41,11 @@ func (e whisperEngine) LastDetection() (string, float64) { return e.ctx.LastDete
 
 var _ languageDetector = whisperEngine{}
 
+// Touch satisfies pageToucher: prefetch the weights back into RAM.
+func (e whisperEngine) Touch() (pages, cold int) { return e.ctx.Touch() }
+
+var _ pageToucher = whisperEngine{}
+
 func (e whisperEngine) Close() { e.ctx.Close() }
 
 func openWhisper(m localmodel.Model) (localEngine, error) {
