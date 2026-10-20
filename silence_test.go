@@ -41,14 +41,35 @@ func TestSilenceWarnClearsOnSpeech(t *testing.T) {
 	m := pttMonitor()
 	feedN(m, false, 80) // triggers warn
 
-	// Sustained speech clears warning (need 25% of 80-tick window)
-	for i := 0; i < 80; i++ {
-		ev := m.Tick(true)
-		if ev == SilenceWarnClear {
+	// Half a second of speech clears it (5 of the last 10 ticks)
+	for i := 1; i <= 5; i++ {
+		if ev := m.Tick(true); ev == SilenceWarnClear {
+			if i != 5 {
+				t.Fatalf("cleared after %d speech ticks, want 5", i)
+			}
 			return
 		}
 	}
-	t.Fatal("expected SilenceWarnClear after speech")
+	t.Fatal("expected SilenceWarnClear after 5 speech ticks")
+}
+
+func TestNoRewarnRightAfterClear(t *testing.T) {
+	m := pttMonitor()
+	feedN(m, false, 80) // warn
+	feedN(m, true, 5)   // clear
+
+	// The 8s window still holds mostly silence; it must not warn again until
+	// a full window of silence has passed since the clear.
+	for i := 1; i <= 80; i++ {
+		ev := m.Tick(false)
+		if ev == SilenceWarn {
+			if i != 80 {
+				t.Fatalf("re-warned %d ticks after clear, want 80", i)
+			}
+			return
+		}
+	}
+	t.Fatal("expected SilenceWarn after 8s of silence following a clear")
 }
 
 func TestNoWarnDuringSpeech(t *testing.T) {

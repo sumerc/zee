@@ -2120,3 +2120,18 @@ parakeet on Metal); `0004` (CUDA pad) still applies.
 `patches/parakeet.cpp/0001` deletes the first three so parakeet's configure
 step applies only `0004`. Re-check `0001`'s CPU win before shipping a CPU
 (Linux) parakeet path.
+
+## The silence warning clears on a 1 s window, not the 8 s one that raised it (2026-10-20)
+
+The warning fires when under 10% of the last 8 s (80 × 100 ms ticks) holds
+speech. It used to clear when that same 8 s window reached 25%. At the moment
+it fires the window is near-empty, so clearing needed 20 speech ticks — at
+least 2 s of unbroken speech, about 3 s with normal pauses. The rule dated from
+February, but it only became noticeable once the overlay (2026-07-25) put the
+"Silent" label in front of the user while its level bars, gated on a 250 ms
+VAD hold, visibly reacted at once.
+
+Now: clear when 5 of the last 10 ticks hold speech (0.5 s minimum). A lone VAD
+false positive is 1 of 10 and does not clear. On a clear the 8 s warn window
+restarts — otherwise the few speech ticks that cleared it leave the 8 s ratio
+under 10% and the warning re-fires (with its error beep) on the next tick.
