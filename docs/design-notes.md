@@ -2135,3 +2135,18 @@ Now: clear when 5 of the last 10 ticks hold speech (0.5 s minimum). A lone VAD
 false positive is 1 of 10 and does not clear. On a clear the 8 s warn window
 restarts — otherwise the few speech ticks that cleared it leave the 8 s ratio
 under 10% and the warning re-fires (with its error beep) on the next tick.
+
+## A stalled stream fails the session; it never blocks capture or drops chunks (2026-10-20)
+
+`streamSession.Feed` runs on the capture callback, under the recording lock.
+It used to hand chunks to the sender with a blocking channel send. On a network
+stall the websocket write blocked (the stream context has no deadline), the
+128-chunk queue filled, and Feed blocked for good: `isRecording` stayed true and
+the hotkey was dead until restart.
+
+Now each write has its own timeout, Feed never blocks, and a full queue fails the
+stream. Close aborts a failed stream at once and gives a healthy one a bounded
+time to flush. Rejected: dropping chunks on a full queue and carrying on. That
+would paste a transcript with silent holes in it. A failed stream instead takes
+the existing error path, and the full PCM (kept regardless of stream health) is
+auto-saved to `samples/` for a retry.

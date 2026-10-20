@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"zee/audio"
 )
@@ -126,5 +127,92 @@ func TestStreamSessionRetainsAudioOnConnectError(t *testing.T) {
 	}
 	if !bytes.Equal(got, pcm) {
 		t.Fatalf("retained PCM differs from fed PCM (got %d bytes, want %d)", len(got), len(pcm))
+	}
+}
+
+// stallRawStream models a network stall: every Send blocks until Close, the
+// way a websocket write does when the peer stops reading.
+type stallRawStream struct {
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func newStallRawStream() *stallRawStream { return &stallRawStream{closed: make(chan struct{})} }
+
+func (f *stallRawStream) Send([]byte) error {
+	<-f.closed
+	return errors.New("connection closed")
+}
+
+func (f *stallRawStream) CloseSend() error { return nil }
+
+func (f *stallRawStream) Recv() (streamUpdate, error) {
+	<-f.closed
+	return streamUpdate{}, errors.New("connection closed")
+}
+
+func (f *stallRawStream) Close() error {
+	f.closeOnce.Do(func() { close(f.closed) })
+	return nil
+}
+
+// within fails the test if fn does not return in d.
+func within(t *testing.T, d time.Duration, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { fn(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("%s blocked for over %s", what, d)
+	}
+}
+
+// TestStreamSessionStallNeverBlocksFeed reproduces the hotkey-dead hang: the
+// network stalls mid-dictation, the send queue fills, and Feed — called from
+// the capture callback under the recording lock — must not block on it. Close
+// must then return the error with every byte of audio kept for saving.
+func TestStreamSessionStallNeverBlocksFeed(t *testing.T) {
+	ss := newStreamSession(func() (rawStreamSession, error) { return newStallRawStream(), nil })
+	<-ss.connected
+
+	chunk := make([]byte, streamChunkBytes)
+	var fed []byte
+	within(t, 2*time.Second, "Feed", func() {
+		for range streamQueueChunks + 10 {
+			ss.Feed(chunk)
+			fed = append(fed, chunk...)
+		}
+	})
+
+	var res SessionResult
+	var err error
+	within(t, 2*time.Second, "Close", func() { res, err = ss.Close() })
+	if !errors.Is(err, errStreamStalled) {
+		t.Fatalf("Close error = %v, want %v", err, errStreamStalled)
+	}
+	got, wavErr := audio.WAVToPCM(res.AudioData)
+	if wavErr != nil {
+		t.Fatalf("AudioData after a stall is not a valid WAV: %v", wavErr)
+	}
+	if !bytes.Equal(got, fed) {
+		t.Fatalf("retained PCM differs from fed PCM (got %d bytes, want %d)", len(got), len(fed))
+	}
+}
+
+// TestStreamSessionCloseBoundsStalledSend: a stall short of a full queue
+// leaves the sender stuck in one write when recording ends. Close must give up
+// after streamDrainMax instead of waiting on the network forever.
+func TestStreamSessionCloseBoundsStalledSend(t *testing.T) {
+	defer func(d time.Duration) { streamDrainMax = d }(streamDrainMax)
+	streamDrainMax = 100 * time.Millisecond
+
+	ss := newStreamSession(func() (rawStreamSession, error) { return newStallRawStream(), nil })
+	ss.Feed(testPCM())
+
+	var err error
+	within(t, 2*time.Second, "Close", func() { _, err = ss.Close() })
+	if err == nil {
+		t.Fatal("Close on a stalled stream returned no error")
 	}
 }
