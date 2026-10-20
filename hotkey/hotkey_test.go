@@ -3,6 +3,7 @@ package hotkey
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestDefaultComboValid(t *testing.T) {
@@ -64,5 +65,50 @@ func TestComboEqual(t *testing.T) {
 	}
 	if a.Equal(Combo{Mods: []string{"ctrl"}, Key: 49}) {
 		t.Fatal("different mods should not be equal")
+	}
+}
+
+// TestWaitStopTogglePress: in toggle mode the next tap stops the recording.
+func TestWaitStopTogglePress(t *testing.T) {
+	hk := NewFake()
+	done := make(chan bool, 1)
+	go func() {
+		_, toggled := WaitStop(hk, time.Hour, nil, nil)
+		done <- toggled
+	}()
+	hk.SimKeyup() // short tap → toggle mode
+	hk.SimKeydown()
+	hk.SimKeyup()
+	select {
+	case toggled := <-done:
+		if !toggled {
+			t.Fatal("a short tap should resolve to toggle mode")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitStop did not return on the stop tap")
+	}
+}
+
+// TestWaitStopToggleEndedElsewhere: a toggle recording that ends another way
+// (silence auto-close, tray stop, error) must release WaitStop without
+// consuming a key event — the next press belongs to a new recording.
+func TestWaitStopToggleEndedElsewhere(t *testing.T) {
+	hk := NewFake()
+	ended := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		WaitStop(hk, time.Hour, ended, nil)
+		close(done)
+	}()
+	hk.SimKeyup() // short tap → toggle mode
+	close(ended)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("WaitStop still waiting for a stop tap after the recording ended")
+	}
+	hk.SimKeydown()
+	if len(hk.Keydown()) != 1 {
+		t.Fatal("the next press was consumed by the finished recording")
 	}
 }

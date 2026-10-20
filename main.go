@@ -96,7 +96,8 @@ func modelSupportsStream(tr transcriber.Transcriber) bool {
 type recSession struct {
 	Stop         <-chan struct{}
 	SilenceClose *atomic.Bool
-	PressedAt    time.Time // when the press was accepted; drives the reflex-latency metric
+	PressedAt    time.Time     // when the press was accepted; drives the reflex-latency metric
+	Ended        chan struct{} // closed by recordSessions when the recording phase ends, however it ends
 }
 
 type recordingConfig struct {
@@ -967,10 +968,10 @@ func denyBusy(warning string) {
 
 // tryStartSession enqueues a fresh recording session unless a cycle is already
 // active (recording OR still transcribing) — in which case guardBusy denies it.
-// Returns the SilenceClose handle when it started a session, nil when it denied.
+// Returns the session it started, nil when it denied.
 // The hotkey and the tray "Start Recording" button both funnel through here, so
 // neither can queue an unattended recording that fires the instant inference ends.
-func tryStartSession(sessions chan<- recSession) *atomic.Bool {
+func tryStartSession(sessions chan<- recSession) *recSession {
 	// Claiming the cycle IS the guard: a plain check-then-send is not atomic
 	// (isRecording only went true once recordSessions picked the session up), so
 	// a hotkey press and a tray click landing together could both pass and both
@@ -990,10 +991,10 @@ func tryStartSession(sessions chan<- recSession) *atomic.Bool {
 	if t, ok := tr.(transcriber.Toucher); ok {
 		go t.Touch()
 	}
-	sc := &atomic.Bool{}
 	audio.PlayStart() // reflexive: sound the press now, not after the record loop spins up (playOne is non-blocking)
-	sessions <- recSession{Stop: resetStop(), SilenceClose: sc, PressedAt: time.Now()}
-	return sc
+	sess := recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}, PressedAt: time.Now(), Ended: make(chan struct{})}
+	sessions <- sess
+	return &sess
 }
 
 // recordSessions is the core record→transcribe loop, shared by the live app and
@@ -1015,6 +1016,7 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		overlay.Show() // every path — hotkey, toggle, tray — funnels through here
 
 		done, err := handleRecording(capture, sess)
+		close(sess.Ended)
 		if err != nil {
 			log.Errorf("recording error: %v", err)
 			tray.SetError(err.Error())
@@ -1047,21 +1049,27 @@ func listenHotkey(hk hotkey.Hotkey, longPress time.Duration, sessions chan<- rec
 			}
 			continue
 		}
-		sc := tryStartSession(sessions)
-		if sc == nil {
+		sess := tryStartSession(sessions)
+		if sess == nil {
 			log.HotkeyPress(0, "denied")
 			<-hk.Keyup() // denied (a cycle began between the guard above and here)
 			continue
 		}
 		// Shared press semantics (hold vs toggle) — see hotkey.WaitStop. Toggle
 		// mode arms silence auto-close the moment it is entered.
-		downToUp, toggled := hotkey.WaitStop(hk, longPress, func() { sc.Store(true) })
+		downToUp, toggled := hotkey.WaitStop(hk, longPress, sess.Ended, func() { sess.SilenceClose.Store(true) })
 		mode := "hold"
 		if toggled {
 			mode = "toggle"
 		}
 		log.HotkeyPress(float64(downToUp.Milliseconds()), mode)
-		requestStop()
+		// A recording that already ended needs no stop — and stopCh may belong
+		// to a newer session by now.
+		select {
+		case <-sess.Ended:
+		default:
+			requestStop()
+		}
 	}
 }
 
