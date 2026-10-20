@@ -465,22 +465,23 @@ func run() {
 	// then).
 	preferredDevice := *deviceFlag
 	tray.SetBTCheck(audio.IsBluetooth)
-	if devices, err := ctx.Devices(); err == nil && len(devices) > 0 {
-		tray.SetDevices(deviceNames(devices), preferredDevice, func(name string) {
-			if guardBusy("Can't change the microphone while recording or transcribing.") {
-				return
-			}
-			captureMu.Lock()
-			preferredDevice = name
-			captureMu.Unlock()
-			config.Update(func(s *config.Settings) { s.Device = name })
-			if name == "" {
-				applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
-			} else {
-				switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, name)
-			}
-		})
-	}
+	// Registered even with no mic attached yet: the device watcher fills the
+	// menu in when one appears, and its items need this callback to work.
+	attached, _ := ctx.Devices()
+	tray.SetDevices(deviceNames(attached), preferredDevice, func(name string) {
+		if guardBusy("Can't change the microphone while recording or transcribing.") {
+			return
+		}
+		captureMu.Lock()
+		preferredDevice = name
+		captureMu.Unlock()
+		config.Update(func(s *config.Settings) { s.Device = name })
+		if name == "" {
+			applyDeviceSwitch(ctx, captureConfig, &captureDevice, &selectedDevice, nil)
+		} else {
+			switchDeviceByName(ctx, captureConfig, &captureDevice, &selectedDevice, name)
+		}
+	})
 	tray.SetAutoPaste(autoPaste)
 
 	var trayModels []tray.Model

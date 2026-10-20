@@ -145,6 +145,9 @@ type DeviceInfo struct {
 
 type Context interface {
 	Devices() ([]DeviceInfo, error)
+	// NewCapture does not fail because no input device can be opened yet (no
+	// mic attached): the device is then opened at Start, and Start reports
+	// the error if there is still none.
 	NewCapture(device *DeviceInfo, config CaptureConfig) (CaptureDevice, error)
 	Close()
 }

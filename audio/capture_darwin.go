@@ -79,9 +79,10 @@ func (m *malgoContext) NewCapture(device *DeviceInfo, config CaptureConfig) (Cap
 	err := c.initDevice()
 	deviceMu.Unlock()
 	if err != nil {
-		return nil, err
+		// No usable input right now — e.g. a Mac mini or Studio with no mic
+		// attached at login. Not fatal: Start builds the device on first use.
+		log.Warnf("capture device init failed (%v); retrying at the first recording", err)
 	}
-
 	return c, nil
 }
 
