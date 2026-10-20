@@ -41,9 +41,10 @@ func logDetectedLanguage(e localEngine) {
 
 // localSession buffers raw S16LE PCM during recording, then runs one batch
 // inference on Close. Same Session interface as the cloud batch path, so the
-// live hotkey and -transcribe share it — no encoder, no network.
+// live hotkey and -transcribe share it — no encoder, no network. engine is
+// resolved in Close, so a model still loading never delays the recording.
 type localSession struct {
-	engine  localEngine
+	engine  func() (localEngine, error)
 	lang    string
 	hints   string
 	mu      sync.Mutex
@@ -76,13 +77,22 @@ func (s *localSession) Close() (SessionResult, error) {
 	audioData := audio.PCMToWAV(raw)
 	convertMs := float64(time.Since(convStart).Microseconds()) / 1000
 
+	waitStart := time.Now()
+	eng, err := s.engine()
+	if err != nil {
+		return SessionResult{AudioData: audioData, AudioFormat: "wav"}, err
+	}
+	if wait := time.Since(waitStart); wait >= time.Millisecond {
+		log.Info(fmt.Sprintf("model_load_wait ms=%.0f", float64(wait.Microseconds())/1000))
+	}
+
 	start := time.Now()
-	text, err := s.engine.Transcribe(f32, s.lang, s.hints)
+	text, err := eng.Transcribe(f32, s.lang, s.hints)
 	if err != nil {
 		return SessionResult{AudioData: audioData, AudioFormat: "wav"}, err
 	}
 	inferenceMs := float64(time.Since(start).Microseconds()) / 1000
-	logDetectedLanguage(s.engine)
+	logDetectedLanguage(eng)
 
 	text = strings.TrimSpace(text)
 	noSpeech := text == ""

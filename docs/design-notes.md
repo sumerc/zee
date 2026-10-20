@@ -2150,3 +2150,20 @@ time to flush. Rejected: dropping chunks on a full queue and carrying on. That
 would paste a transcript with silent holes in it. A failed stream instead takes
 the existing error path, and the full PCM (kept regardless of stream health) is
 auto-saved to `samples/` for a retry.
+
+## A local session waits for the model in Close, not NewSession (2026-10-20)
+
+`localProvider.NewSession` used to wait out the model load (read + warm-up)
+before it returned. `handleRecording` calls it before `rec.Start()`, so while a
+model loaded at startup or after a switch, the start beep and overlay said
+"Recording" but no audio was captured, and the speech was lost. The comment
+saying "recording overlaps the load" was wrong.
+
+Now NewSession returns at once and the session resolves the engine in Close.
+Only a model file missing from disk still fails in NewSession, because no
+recording could be transcribed with it. Rejected: starting a `go p.load()` from
+NewSession to also overlap loads that no background warm started (after a
+failed load, or after `Close`). That goroutine can outlive the session and get
+`loadMu` after a provider switch has called `Close`. It would then load the old
+provider's model again, and nothing would ever free it. Those rare cases load
+in Close instead.

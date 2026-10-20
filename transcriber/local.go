@@ -50,8 +50,9 @@ type localProvider struct {
 // newLocalProvider builds a provider around one engine and warms its default
 // model in the background so construction never blocks startup. The load holds
 // only loadMu (not mu) while it reads the model, so metadata accessors stay
-// responsive; the first NewSession waits for it via load()'s idempotent fast
-// path. A missing or failed model surfaces at NewSession as an error.
+// responsive; the first session waits for it in Close via load()'s idempotent
+// fast path. A model that is not on disk surfaces at NewSession as an error, a
+// failed load at the session's Close.
 func newLocalProvider(name, defaultID, defaultLang string, hints bool,
 	open func(localmodel.Model) (localEngine, error),
 	langsFor func(localmodel.Model) []Language) *localProvider {
@@ -135,7 +136,7 @@ func modelInfos(models []localmodel.Model, langsFor func(localmodel.Model) []Lan
 
 // load brings the engine in line with the desired modelID, freeing the previous
 // one. It's serialized by loadMu and idempotent: if the desired model is already
-// loaded it returns at once, so NewSession can call it to *wait out* an in-flight
+// loaded it returns at once, so a session can call it to *wait out* an in-flight
 // background load without triggering a reload. The slow model read runs with mu
 // released, so GetModel/SetLanguage/etc. never block on it.
 func (p *localProvider) load() {
@@ -156,36 +157,45 @@ func (p *localProvider) load() {
 		old.Close()
 	}
 
-	var (
-		eng localEngine
-		err error
-	)
-	// A model ID belonging to another engine is not an error, it is the normal
-	// state right after a provider switch: the ID persisted in config.json is
-	// whatever the PREVIOUS provider had selected, and it arrives here via
-	// SetModel before the tray ever offers this engine's own list. Fall back to
-	// this engine's default instead of failing every recording until the user
-	// happens to open the model menu. Falling back is safe because the default
-	// is by construction the right engine's file — what must never happen is
-	// loading another engine's weights, which is a hang, not an error.
-	if m, ok := localmodel.ByID(want); !ok || m.Engine != p.name {
-		want = p.defaultID
+	m, err := p.resolve(want)
+	if m.ID != "" && m.ID != want { // fell back to the default, see resolve
+		want = m.ID
 		p.mu.Lock()
 		p.modelID = want
 		p.mu.Unlock()
 	}
-
-	if m, ok := localmodel.ByID(want); !ok || m.Engine != p.name {
-		err = fmt.Errorf("unknown %s model %q", p.name, want)
-	} else if !localmodel.Present(m) {
-		err = fmt.Errorf("model %q not downloaded", m.Label)
-	} else {
+	var eng localEngine
+	if err == nil {
 		eng, err = p.open(m) // slow; mu released
 	}
 
 	p.mu.Lock()
 	p.engine, p.loadErr, p.loadedID = eng, err, want
 	p.mu.Unlock()
+}
+
+// resolve maps a desired model ID to the file this engine loads, and fails if
+// that file is not on disk.
+//
+// A model ID belonging to another engine is not an error, it is the normal
+// state right after a provider switch: the ID persisted in config.json is
+// whatever the PREVIOUS provider had selected, and it arrives here via
+// SetModel before the tray ever offers this engine's own list. Fall back to
+// this engine's default instead of failing every recording until the user
+// happens to open the model menu. Falling back is safe because the default
+// is by construction the right engine's file — what must never happen is
+// loading another engine's weights, which is a hang, not an error.
+func (p *localProvider) resolve(want string) (localmodel.Model, error) {
+	m, ok := localmodel.ByID(want)
+	if !ok || m.Engine != p.name {
+		if m, ok = localmodel.ByID(p.defaultID); !ok || m.Engine != p.name {
+			return localmodel.Model{}, fmt.Errorf("unknown %s model %q", p.name, p.defaultID)
+		}
+	}
+	if !localmodel.Present(m) {
+		return m, fmt.Errorf("model %q not downloaded", m.Label)
+	}
+	return m, nil
 }
 
 // IsLocal reports whether tr is an on-device provider. Local decode has no
@@ -264,9 +274,9 @@ func (p *localProvider) GetModel() string { p.mu.Lock(); defer p.mu.Unlock(); re
 
 // SetModel records the desired model and warms it in the background, so a tray
 // switch returns immediately instead of blocking the UI on the model load. The
-// next NewSession waits for the load (the record→inference guard keeps switches
-// out of an active cycle, and recording overlaps the load, hiding its latency);
-// a load failure surfaces there.
+// next session waits for the load only in Close, so recording overlaps it and
+// hides its latency (the record→inference guard keeps switches out of an
+// active cycle); a load failure surfaces there.
 func (p *localProvider) SetModel(id string) {
 	p.mu.Lock()
 	same := id == p.modelID
@@ -307,19 +317,32 @@ func (p *localProvider) Transcribe(audioData []byte, format, lang, hints string)
 	return res, nil
 }
 
+// NewSession returns at once, even while the model is still loading: capture
+// must start on the keypress, not after the load. The session waits for the
+// engine in Close. Only a model file that is missing fails here, since no
+// recording could ever be transcribed with it.
 func (p *localProvider) NewSession(_ context.Context, cfg SessionConfig) (Session, error) {
 	if cfg.Stream {
 		return nil, fmt.Errorf("%s does not support streaming", p.name)
 	}
-	p.mu.Lock()
-	ready := p.engine != nil && p.loadedID == p.modelID
-	p.mu.Unlock()
-	if !ready {
-		p.load() // waits out an in-flight background load, or loads now
+	if _, err := p.resolve(p.GetModel()); err != nil {
+		return nil, err
 	}
+	// An explicit per-session language (the -transcribe path) wins over the
+	// provider's current setting; the live hotkey path leaves it empty.
+	lang := cfg.Language
+	if lang == "" {
+		lang = p.GetLanguage()
+	}
+	return &localSession{engine: p.readyEngine, lang: lang, hints: cfg.Hints, updates: make(chan string)}, nil
+}
+
+// readyEngine returns the engine for the desired model, waiting out an
+// in-flight load (or loading now, after a Close or a failed load).
+func (p *localProvider) readyEngine() (localEngine, error) {
+	p.load()
 	p.mu.Lock()
 	eng, err := p.engine, p.loadErr
-	lang := p.lang
 	p.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -330,17 +353,12 @@ func (p *localProvider) NewSession(_ context.Context, cfg SessionConfig) (Sessio
 	if eng == nil {
 		return nil, fmt.Errorf("%s: model %q is reloading, try again", p.name, p.GetModel())
 	}
-	// An explicit per-session language (the -transcribe path) wins over the
-	// provider's current setting; the live hotkey path leaves it empty.
-	if cfg.Language != "" {
-		lang = cfg.Language
-	}
-	return &localSession{engine: eng, lang: lang, hints: cfg.Hints, updates: make(chan string)}, nil
+	return eng, nil
 }
 
 // Close frees the loaded model. It waits out any in-flight background load
 // (loadMu) so it can't free an engine a loader is about to publish. The provider
-// is reusable afterwards (the next NewSession reloads lazily).
+// is reusable afterwards (the next session reloads lazily, in its Close).
 func (p *localProvider) Close() {
 	p.loadMu.Lock()
 	defer p.loadMu.Unlock()
