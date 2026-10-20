@@ -694,6 +694,12 @@ func run() {
 			if slices.Equal(last, names) {
 				continue
 			}
+			// A switch closes the live capture device, so it waits for the
+			// cycle to end, like a tray switch. last is left stale on purpose:
+			// the first tick after the cycle sees the change and applies it.
+			if isRecording.Load() {
+				continue
+			}
 			last = names
 			// Snapshot the device state under captureMu, then release before the
 			// switch calls (which re-lock it). preferredDevice is also written by
