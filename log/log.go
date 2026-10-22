@@ -294,12 +294,25 @@ type Recording struct {
 	Model     string
 	Lang      string // "" means auto-detect
 	DurationS float64
+	Post      PostTranscript // zero when post-transcribe did not run
+}
+
+// PostTranscript is the post-transcribe outcome for one recording: the text
+// that was pasted instead of Recording.Text, or the error that made zee paste
+// the raw text.
+type PostTranscript struct {
+	Profile string
+	Model   string
+	Text    string
+	Error   string
 }
 
 // Transcription appends the text to transcribe_log.txt and, when there is
 // audio, saves the clip next to it as recordings/<timestamp>/{audio.<ext>,
-// transcript.txt, info.json}. The log line carries the folder's path relative
-// to the log directory, so every line leads to its audio. That layout is what
+// transcript.txt, info.json}, plus post_transcript.txt when post-transcribe
+// rewrote it. The log line carries the folder's path relative to the log
+// directory, so every line leads to its audio; a rewritten text follows the raw
+// one as a last tab-separated field. That layout is what
 // `make bench-local WAV=<dir>/recordings` walks, so the folder doubles as an
 // eval corpus: add a corrected reference.txt beside a transcript.txt.
 func Transcription(r Recording) {
@@ -317,8 +330,11 @@ func Transcription(r Recording) {
 	}
 	logMu.Lock()
 	defer logMu.Unlock()
-	line := fmt.Sprintf("%s\t[%d]\t%s\t%s\n", now.Format("2006-01-02 15:04:05"), pid, rel, r.Text)
-	transcribeFile.WriteString(line)
+	line := fmt.Sprintf("%s\t[%d]\t%s\t%s", now.Format("2006-01-02 15:04:05"), pid, rel, r.Text)
+	if r.Post.Text != "" {
+		line += "\t" + r.Post.Text
+	}
+	transcribeFile.WriteString(line + "\n")
 }
 
 func saveRecording(now time.Time, r Recording) (string, error) {
@@ -328,19 +344,30 @@ func saveRecording(now time.Time, r Recording) (string, error) {
 	if err := os.MkdirAll(abs, 0755); err != nil {
 		return "", err
 	}
-	info, _ := json.MarshalIndent(map[string]any{
+	meta := map[string]any{
 		"provider":   r.Provider,
 		"model":      r.Model,
 		"lang":       r.Lang,
 		"format":     r.AudioExt,
 		"duration_s": r.DurationS,
 		"timestamp":  now.Format(time.RFC3339),
-	}, "", "  ")
-	for name, data := range map[string][]byte{
+	}
+	files := map[string][]byte{
 		"audio." + r.AudioExt: r.Audio,
 		"transcript.txt":      []byte(r.Text + "\n"),
-		"info.json":           info,
-	} {
+	}
+	if p := r.Post; p.Profile != "" {
+		post := map[string]any{"profile": p.Profile, "model": p.Model}
+		if p.Error != "" {
+			post["error"] = p.Error
+		}
+		meta["post_transcribe"] = post
+		if p.Text != "" {
+			files["post_transcript.txt"] = []byte(p.Text + "\n")
+		}
+	}
+	files["info.json"], _ = json.MarshalIndent(meta, "", "  ")
+	for name, data := range files {
 		if err := os.WriteFile(filepath.Join(abs, name), data, 0644); err != nil {
 			return "", err
 		}

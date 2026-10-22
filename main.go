@@ -1311,16 +1311,20 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	// text is what the user gets; result.Text stays the raw transcript, which
 	// the logs and saved recordings keep as the ASR output.
 	text := result.Text
+	var post log.PostTranscript
 	if closeErr == nil && result.HasText && !result.NoSpeech && cfg.post.Active != "" {
+		post = log.PostTranscript{Profile: cfg.post.Active, Model: posttranscribe.Model(cfg.post)}
 		t := time.Now()
 		out, err := posttranscribe.Rewrite(cfg.post, cfg.hints, text)
 		lat.PostTranscribeMs = float64(time.Since(t).Microseconds()) / 1000
 		if err != nil {
 			log.Warnf("post_transcribe: %v", err)
 			tray.SetError("Post-transcribe failed, used the raw transcript: " + err.Error())
+			post.Error = err.Error()
 		} else {
 			log.Info(fmt.Sprintf("post_transcribe: profile=%s ms=%.0f", cfg.post.Active, lat.PostTranscribeMs))
 			text = out
+			post.Text = out
 		}
 	}
 
@@ -1408,6 +1412,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 			Model:     cfg.tr.GetModel(),
 			Lang:      cfg.lang,
 			DurationS: recDur.Seconds(),
+			Post:      post,
 		})
 		var totalMs float64
 		if result.Batch != nil {

@@ -86,13 +86,16 @@ toward `hints.txt`, keeps the language, and never answers the dictated text.
 
 If the call fails or times out, the raw transcript is pasted and the tray shows
 the error. In streaming mode the text is pasted once at the end instead of
-while you speak. Logs and saved recordings keep the raw transcript; the
-rewrite's time is `post_transcribe_ms` in the `felt_latency` line.
+while you speak. With `-debug-transcribe`, each recording folder keeps the raw
+`transcript.txt` beside the rewritten `post_transcript.txt`, and `info.json`
+records the profile, the model and any error. The rewrite's time is
+`post_transcribe_ms` in the `felt_latency` line.
 
 Logs live in `~/Library/Logs/zee/`: `diagnostics_log.txt` (timing, errors;
 rotated at 10 MB), `crash_log.txt` (panics), and `transcribe_log.txt` (only with
 `-debug-transcribe`; each line points to its `recordings/<timestamp>/` folder of
-`audio.<ext>`, `transcript.txt` and `info.json`, which is never pruned).
+`audio.<ext>`, `transcript.txt`, `info.json` and, when post-transcribe rewrote
+it, `post_transcript.txt`; the folder is never pruned).
 
 ## Other ways to install
 

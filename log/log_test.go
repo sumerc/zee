@@ -134,6 +134,61 @@ func TestTranscription(t *testing.T) {
 	if f := strings.Split(lines[1], "\t"); len(f) != 4 || f[2] != "-" {
 		t.Errorf("line without audio should carry \"-\" as its path: %q", lines[1])
 	}
+	if _, err := os.Stat(filepath.Join(rec, "post_transcript.txt")); err == nil {
+		t.Error("post_transcript.txt written although post-transcribe did not run")
+	}
+}
+
+func TestTranscriptionPostTranscribe(t *testing.T) {
+	tmp := setupLogDir(t)
+	SetTranscribeEnabled(true)
+	t.Cleanup(func() { SetTranscribeEnabled(false) })
+
+	if err := Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	post := PostTranscript{Profile: "friendly", Model: "m", Text: "Hello there!"}
+	Transcription(Recording{Text: "hello their", Audio: []byte("RIFF"), AudioExt: "wav", Post: post})
+	Transcription(Recording{Text: "raw", Audio: []byte("RIFF"), AudioExt: "wav",
+		Post: PostTranscript{Profile: "friendly", Model: "m", Error: "timeout"}})
+
+	data, err := os.ReadFile(filepath.Join(tmp, "transcribe_log.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 lines, got %q", data)
+	}
+
+	// The rewrite follows the raw text as a fifth field.
+	f := strings.Split(lines[0], "\t")
+	if len(f) != 5 || f[3] != "hello their" || f[4] != "Hello there!" {
+		t.Fatalf("unexpected line: %q", lines[0])
+	}
+	rec := filepath.Join(tmp, f[2])
+	for name, want := range map[string]string{"transcript.txt": "hello their\n", "post_transcript.txt": "Hello there!\n"} {
+		if got, err := os.ReadFile(filepath.Join(rec, name)); err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", name, got, err, want)
+		}
+	}
+	if info, _ := os.ReadFile(filepath.Join(rec, "info.json")); !strings.Contains(string(info), `"profile": "friendly"`) {
+		t.Errorf("info.json lacks the post_transcribe profile: %s", info)
+	}
+
+	// A failed rewrite keeps the line at four fields and records the error.
+	f = strings.Split(lines[1], "\t")
+	if len(f) != 4 {
+		t.Fatalf("unexpected line: %q", lines[1])
+	}
+	rec = filepath.Join(tmp, f[2])
+	if _, err := os.Stat(filepath.Join(rec, "post_transcript.txt")); err == nil {
+		t.Error("post_transcript.txt written for a failed rewrite")
+	}
+	if info, _ := os.ReadFile(filepath.Join(rec, "info.json")); !strings.Contains(string(info), `"error": "timeout"`) {
+		t.Errorf("info.json lacks the post_transcribe error: %s", info)
+	}
 }
 
 func TestCloseIdempotent(t *testing.T) {
