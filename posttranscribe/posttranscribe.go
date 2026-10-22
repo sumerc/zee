@@ -83,7 +83,10 @@ func systemPrompt(profile, hints string) string {
 			" (\"jason\" for JSON, \"get hub\" for GitHub), and the sound-alike is often a real word." +
 			" Wherever a word or phrase sounds like one of these terms and the term makes sense there," +
 			" replace it with the term exactly as written above: this user is more likely to have said" +
-			" the term than a common word that sounds like it."
+			" the term than a common word that sounds like it." +
+			"\nA term from this list often comes out as an ordinary word that sounds like it (\"cloud\" for \"Claude\")." +
+			" Replace that word with the term when the sentence talks about the term itself — someone asks it, uses it, or names it;" +
+			" keep the ordinary word when the sentence is about the ordinary thing (\"the cloud\" in cloud computing)."
 	}
 	return s
 }
