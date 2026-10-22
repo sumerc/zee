@@ -28,7 +28,7 @@ measured and what was rejected — see [design-notes.md](design-notes.md).
 | `-no-hints` | `false` | Ignore `hints.txt` and send no hints; cannot be combined with a non-empty `-hints` |
 | `-transcribe` | – | Transcribe audio file(s) and exit; extra files may follow as positional args, one transcript per line |
 | `-setup` | `false` | Same as `zee setup` |
-| `-debug-transcribe` | `false` | Log transcription text (diagnostics are always logged) |
+| `-debug-transcribe` | `false` | Log transcription text and save each clip's audio + transcript under `recordings/` (diagnostics are always logged) |
 | `-logpath` | OS-specific | Log directory (`./` for current dir) |
 | `-benchmark` | – | WAV file to benchmark instead of live recording |
 | `-runs` | `3` | Benchmark iterations |
@@ -59,7 +59,8 @@ app):
 
 Logs live in `~/Library/Logs/zee/`: `diagnostics_log.txt` (timing, errors;
 rotated at 10 MB), `crash_log.txt` (panics), and `transcribe_log.txt` (only with
-`-debug-transcribe`).
+`-debug-transcribe`; each line points to its `recordings/<timestamp>/` folder of
+`audio.<ext>`, `transcript.txt` and `info.json`, which is never pruned).
 
 ## Other ways to install
 
