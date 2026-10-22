@@ -1744,11 +1744,6 @@ so the next survey starts here rather than at the leaderboard.
   (es/fr/de-English; without a forced language it drifts into translating).
   No Turkish-English corpus exists, so zee's own samples remain the only
   evidence for the case that actually matters here.
-- **The "nobody beats zee's Turkish path" takeaway holds.** Every 2026 arrival
-  that is faster than turbo still has no Turkish: Canary 1b-v2 (25 European
-  languages, same gap as Parakeet v3), Voxtral Mini 3B (8) and Realtime 4B (13),
-  Kyutai STT (en/fr), SenseVoice-small (5 Asian + en), Phi-4-multimodal audio
-  (8). Qwen3-ASR is the sole exception — measured above, not adopted.
 - **Apple SpeechTranscriber (macOS 26) does have Turkish**, and is free and
   zero-download, but commits to **one language per session** — so it cannot do
   the mid-utterance tr/en switching zee exists for. Still the cheapest possible
