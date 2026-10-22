@@ -26,6 +26,7 @@ import (
 	"zee/login"
 	"zee/overlay"
 	"zee/permissions"
+	"zee/posttranscribe"
 	"zee/setup"
 	"zee/shutdown"
 	"zee/transcriber"
@@ -107,10 +108,11 @@ type recordingConfig struct {
 	lang            string
 	hints           string
 	autoPaste       bool
-	tailWait        time.Duration // mic kept open after release so a fast keyup doesn't clip the last word
-	pressToRecordMs float64       // press→mic-live, filled at record start; logged with the transcription metrics
-	releasedAt      time.Time     // recording end, filled once it happens; start of the felt-latency metric
-	micStopMs       float64       // capture stop duration, filled after the record loop ends
+	post            config.PostTranscribe // LLM rewrite before paste; off when post.Active == ""
+	tailWait        time.Duration         // mic kept open after release so a fast keyup doesn't clip the last word
+	pressToRecordMs float64               // press→mic-live, filled at record start; logged with the transcription metrics
+	releasedAt      time.Time             // recording end, filled once it happens; start of the felt-latency metric
+	micStopMs       float64               // capture stop duration, filled after the record loop ends
 }
 
 // clipSave carries the saved clipboard content plus how long the pbpaste fork
@@ -1177,9 +1179,13 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		lang:      activeTranscriber.GetLanguage(),
 		hints:     config.GetHints(),
 		autoPaste: autoPaste,
+		post:      config.Get().PostTranscribe,
 		tailWait:  time.Duration(config.Get().TailWaitMs) * time.Millisecond,
 	}
 	configMu.Unlock()
+	if cfg.post.Active != "" {
+		go posttranscribe.Warm()
+	}
 	if cfg.autoPaste && !permissions.HasAccessibility() {
 		cfg.autoPaste = false
 		tray.SetError("Auto-paste is waiting for Accessibility permission")
@@ -1216,7 +1222,9 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		defer close(updatesDone)
 		var prev string
 		for text := range tSess.Updates() {
-			if cfg.autoPaste && len(text) > len(prev) {
+			// With post-transcribe on, the rewritten text is pasted once at
+			// the end instead of the raw text streaming in.
+			if cfg.autoPaste && cfg.post.Active == "" && len(text) > len(prev) {
 				saveClip()
 				clip.PasteText(text[len(prev):])
 			}
@@ -1300,8 +1308,24 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 		}
 	}
 
-	if closeErr == nil && !cfg.stream && result.HasText && cfg.autoPaste && !skipPaste {
-		lat.PasteCopyMs, lat.PasteKeyMs = clip.PasteText(result.Text)
+	// text is what the user gets; result.Text stays the raw transcript, which
+	// the logs and saved recordings keep as the ASR output.
+	text := result.Text
+	if closeErr == nil && result.HasText && !result.NoSpeech && cfg.post.Active != "" {
+		t := time.Now()
+		out, err := posttranscribe.Rewrite(cfg.post, cfg.hints, text)
+		lat.PostTranscribeMs = float64(time.Since(t).Microseconds()) / 1000
+		if err != nil {
+			log.Warnf("post_transcribe: %v", err)
+			tray.SetError("Post-transcribe failed, used the raw transcript: " + err.Error())
+		} else {
+			log.Info(fmt.Sprintf("post_transcribe: profile=%s ms=%.0f", cfg.post.Active, lat.PostTranscribeMs))
+			text = out
+		}
+	}
+
+	if closeErr == nil && (!cfg.stream || cfg.post.Active != "") && result.HasText && cfg.autoPaste && !skipPaste {
+		lat.PasteCopyMs, lat.PasteKeyMs = clip.PasteText(text)
 	}
 
 	// The text is delivered by here on both paths — streamed pastes were joined
@@ -1375,7 +1399,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	}
 
 	if !result.NoSpeech {
-		clip.SetLastText(result.Text)
+		clip.SetLastText(text)
 		log.Transcription(log.Recording{
 			Text:      result.Text,
 			Audio:     result.AudioData,

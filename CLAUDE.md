@@ -107,6 +107,7 @@ Option+Space keydown → record audio → encode (mode-based) → API call → c
 - `vad.go` - voice activity detection using WebRTC VAD with debounced speech confirmation
 - `silence.go` - silence monitoring with warnings, repeat beeps, and auto-close (toggle mode)
 - `config/` - persistent settings (`config.json`) and vocabulary hints (`hints.txt`)
+- `posttranscribe/` - optional LLM rewrite of the transcript before paste (Groq chat completions); built-in profiles + user prompts from `config.json`'s `post_transcribe` block
 - `log.go` - diagnostic logging and panic capture to `diagnostics_log.txt`
 
 ## Design Philosophy

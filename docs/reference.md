@@ -52,10 +52,42 @@ app):
 
 | File | Contents |
 |---|---|
-| `config.json` | Settings: provider, model, device, hotkey, language, auto-paste |
+| `config.json` | Settings: provider, model, device, hotkey, language, auto-paste, post-transcribe |
 | `credentials.json` | Per-provider API keys, mode 0600. Environment variables are *not* read |
 | `hints.txt` | Vocabulary hints fed to the model |
 | `samples/` | Recordings saved from the tray, plus auto-saved failures |
+
+### Post-transcribe
+
+An optional LLM pass rewrites each transcript before it is pasted. It is off by
+default and set only in `config.json` (then **Reload Config** from the tray, or
+restart). It uses the `groq` key from `credentials.json`, with any provider for
+the transcription itself.
+
+```json
+"post_transcribe": {
+  "active": "friendly",
+  "model": "openai/gpt-oss-120b",
+  "prompts": {
+    "slack": "Rewrite it as a short, casual Slack message. Fix all grammatical errors."
+  }
+}
+```
+
+- `active` — the profile to run; `""` (the default) turns it off.
+- `prompts` — your own profiles, name → a one- or two-sentence instruction. A
+  name that matches a built-in one replaces it.
+- `model` — any Groq chat model; omit it for `openai/gpt-oss-120b`.
+
+Built-in profiles: `grammar` (spelling, punctuation, grammar; wording kept),
+`friendly` (conversational tone), `professional` (work email tone), `concise`
+(filler and repetition removed). Every profile also corrects misheard words
+toward `hints.txt`, keeps the language, and never answers the dictated text.
+
+If the call fails or times out, the raw transcript is pasted and the tray shows
+the error. In streaming mode the text is pasted once at the end instead of
+while you speak. Logs and saved recordings keep the raw transcript; the
+rewrite's time is `post_transcribe_ms` in the `felt_latency` line.
 
 Logs live in `~/Library/Logs/zee/`: `diagnostics_log.txt` (timing, errors;
 rotated at 10 MB), `crash_log.txt` (panics), and `transcribe_log.txt` (only with

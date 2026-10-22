@@ -239,14 +239,15 @@ func HotkeyPress(downToUpMs float64, mode string) {
 // path actually blocked waiting for it — belongs to the serial sum. Zero fields
 // are stages that didn't run (stream path, autoPaste off) and are omitted.
 type LatencyBreakdown struct {
-	TailWaitMs  float64 // configured mic tail-wait after release
-	MicStopMs   float64 // capture device stop + callback clear
-	ConvertMs   float64 // local path: PCM→f32 + PCM→WAV before inference
-	InferenceMs float64 // engine/provider time (repeated from the transcription line)
-	ClipSaveMs  float64 // pbpaste fork, concurrent with inference — informational
-	ClipWaitMs  float64 // block on the pbpaste fork after inference returned
-	PasteCopyMs float64 // pbcopy fork inside PasteText
-	PasteKeyMs  float64 // Cmd+V keystroke synthesis inside PasteText
+	TailWaitMs       float64 // configured mic tail-wait after release
+	MicStopMs        float64 // capture device stop + callback clear
+	ConvertMs        float64 // local path: PCM→f32 + PCM→WAV before inference
+	InferenceMs      float64 // engine/provider time (repeated from the transcription line)
+	ClipSaveMs       float64 // pbpaste fork, concurrent with inference — informational
+	ClipWaitMs       float64 // block on the pbpaste fork after inference returned
+	PostTranscribeMs float64 // LLM rewrite of the transcript before paste
+	PasteCopyMs      float64 // pbcopy fork inside PasteText
+	PasteKeyMs       float64 // Cmd+V keystroke synthesis inside PasteText
 }
 
 // ReleaseToText records the one latency the user actually feels: hotkey release
@@ -261,7 +262,7 @@ func ReleaseToText(ms float64, b LatencyBreakdown) {
 		return
 	}
 	serial := b.TailWaitMs + b.MicStopMs + b.ConvertMs + b.InferenceMs +
-		b.ClipWaitMs + b.PasteCopyMs + b.PasteKeyMs
+		b.ClipWaitMs + b.PostTranscribeMs + b.PasteCopyMs + b.PasteKeyMs
 	ev := diagLog.Info().Float64("release_to_text_ms", ms)
 	for _, f := range []struct {
 		key string
@@ -273,6 +274,7 @@ func ReleaseToText(ms float64, b LatencyBreakdown) {
 		{"inference_ms", b.InferenceMs},
 		{"clip_save_ms", b.ClipSaveMs},
 		{"clip_wait_ms", b.ClipWaitMs},
+		{"post_transcribe_ms", b.PostTranscribeMs},
 		{"paste_copy_ms", b.PasteCopyMs},
 		{"paste_key_ms", b.PasteKeyMs},
 	} {
