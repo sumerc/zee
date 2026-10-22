@@ -68,7 +68,7 @@ overwriting. `BENCH_FILE=` overrides the destination.
 
 ## Flags
 
-- `-debug-transcribe` - enable transcription text logging (diagnostic logging is always on)
+- `-debug-transcribe` - log every transcription to `transcribe_log.txt` and save its audio + transcript under `recordings/<timestamp>/` in the log dir — an eval corpus `make bench-local` can walk (diagnostic logging is always on)
 - `-format <mp3@16|mp3@64|flac>` - audio format (default: mp3@16)
 - `-lang <code>` - language code for transcription (default: en, also settable from tray menu)
 - `-device <name>` - use named microphone device (also switchable from tray menu)
@@ -128,7 +128,7 @@ Option+Space keydown → record audio → encode (mode-based) → API call → c
 - Override with `ZEE_LOG_PATH` env var or `-logpath <path>` flag (supports relative paths, use `./` for current directory)
 - `crash_log.txt` - panic recovery (always enabled)
 - `diagnostics_log.txt` - timing metrics, errors, warnings (always enabled, rotated at 10 MB)
-- `transcribe_log.txt` - transcription text history (requires `-debug-transcribe`)
+- `transcribe_log.txt` - transcription text history, each line with its `recordings/<timestamp>/` folder (`audio.<ext>`, `transcript.txt`, `info.json`); requires `-debug-transcribe`, never pruned
 
 ## Releasing
 

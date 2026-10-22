@@ -240,7 +240,7 @@ func run() {
 	deviceFlag := flag.String("device", "", "Use named microphone device")
 	formatFlag := flag.String("format", "mp3@16", "Audio format: mp3@16, mp3@64, or flac")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
-	debugTranscribeFlag := flag.Bool("debug-transcribe", false, "Enable transcription text logging")
+	debugTranscribeFlag := flag.Bool("debug-transcribe", false, "Log transcriptions and save each clip's audio + transcript under <logdir>/recordings")
 	langFlag := flag.String("lang", "en", "Language code for transcription (e.g., en, es, fr). Empty = auto-detect")
 	logPathFlag := flag.String("logpath", "", "log directory path (default: OS-specific location, use ./ for current dir)")
 	testFlag := flag.Bool("test", false, "Test mode (headless, stdin-driven)")
@@ -1361,7 +1361,15 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 
 	if !result.NoSpeech {
 		clip.SetLastText(result.Text)
-		log.TranscriptionText(result.Text)
+		log.Transcription(log.Recording{
+			Text:      result.Text,
+			Audio:     result.AudioData,
+			AudioExt:  result.AudioFormat,
+			Provider:  cfg.tr.Name(),
+			Model:     cfg.tr.GetModel(),
+			Lang:      cfg.lang,
+			DurationS: recDur.Seconds(),
+		})
 		var totalMs float64
 		if result.Batch != nil {
 			totalMs = result.Batch.TotalTimeMs

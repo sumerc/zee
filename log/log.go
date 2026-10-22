@@ -1,6 +1,7 @@
 package log
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -282,14 +283,67 @@ func ReleaseToText(ms float64, b LatencyBreakdown) {
 	ev.Float64("unaccounted_ms", ms-serial).Msg("felt_latency")
 }
 
-func TranscriptionText(text string) {
+// Recording is one finished dictation, as the transcribe log keeps it.
+type Recording struct {
+	Text      string
+	Audio     []byte
+	AudioExt  string // file extension of Audio: wav, mp3 or flac
+	Provider  string
+	Model     string
+	Lang      string // "" means auto-detect
+	DurationS float64
+}
+
+// Transcription appends the text to transcribe_log.txt and, when there is
+// audio, saves the clip next to it as recordings/<timestamp>/{audio.<ext>,
+// transcript.txt, info.json}. The log line carries the folder's path relative
+// to the log directory, so every line leads to its audio. That layout is what
+// `make bench-local WAV=<dir>/recordings` walks, so the folder doubles as an
+// eval corpus: add a corrected reference.txt beside a transcript.txt.
+func Transcription(r Recording) {
 	if !logReady.Load() || transcribeFile == nil {
 		return
 	}
+	now := time.Now()
+	rel := "-"
+	if len(r.Audio) > 0 {
+		var err error
+		if rel, err = saveRecording(now, r); err != nil {
+			Warn("transcribe_recording_save: " + err.Error())
+			rel = "-"
+		}
+	}
 	logMu.Lock()
 	defer logMu.Unlock()
-	line := fmt.Sprintf("%s\t[%d]\t%s\n", time.Now().Format("2006-01-02 15:04:05"), pid, text)
+	line := fmt.Sprintf("%s\t[%d]\t%s\t%s\n", now.Format("2006-01-02 15:04:05"), pid, rel, r.Text)
 	transcribeFile.WriteString(line)
+}
+
+func saveRecording(now time.Time, r Recording) (string, error) {
+	// Milliseconds keep two quick taps in the same second apart.
+	rel := filepath.Join("recordings", now.Format("2006-01-02T15-04-05.000"))
+	abs := filepath.Join(dir, rel)
+	if err := os.MkdirAll(abs, 0755); err != nil {
+		return "", err
+	}
+	info, _ := json.MarshalIndent(map[string]any{
+		"provider":   r.Provider,
+		"model":      r.Model,
+		"lang":       r.Lang,
+		"format":     r.AudioExt,
+		"duration_s": r.DurationS,
+		"timestamp":  now.Format(time.RFC3339),
+	}, "", "  ")
+	for name, data := range map[string][]byte{
+		"audio." + r.AudioExt: r.Audio,
+		"transcript.txt":      []byte(r.Text + "\n"),
+		"info.json":           info,
+	} {
+		if err := os.WriteFile(filepath.Join(abs, name), data, 0644); err != nil {
+			return "", err
+		}
+	}
+	return rel, nil
 }
 
 func Confidence(confidence float64) {
