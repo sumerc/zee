@@ -2123,3 +2123,83 @@ parakeet on Metal); `0004` (CUDA pad) still applies.
 `patches/parakeet.cpp/0001` deletes the first three so parakeet's configure
 step applies only `0004`. Re-check `0001`'s CPU win before shipping a CPU
 (Linux) parakeet path.
+
+## Nemotron 3.5 ASR as the Turkish engine: measured, not adopted (2026-10-22)
+
+`nvidia/nemotron-3.5-asr-streaming-0.6b` (released 2026-06-04, OpenMDW-1.1):
+a cache-aware FastConformer-RNNT that takes a language prompt (`auto` or a
+locale) and lists tr-TR as transcription-ready. It needs no new engine: the
+vendored parakeet.cpp has run it since `271e70b` (2026-06-06), through the
+`parakeet_capi_*_lang` entry points. That made it the only Turkish-capable
+model that could slot into the existing ggml build.
+
+Setup: parakeet.cpp `e8acc61` with zee's ggml pin and patches, Metal, the
+Makefile's flags. GGUFs converted from the official `.nemo` with the repo's
+own converter (NeMo 3.0.0). Main config is the 1120 ms chunk (`[56,13]`);
+160 ms (`[56,1]`) was also run. NVIDIA's NeMo-Speech.cpp v0.2.0 with its own
+q8_0 GGUF, plus a NeMo PyTorch parity check on 3 clips, gave the same text.
+**The failures below belong to the model, not the runtime.** Corpus: the 32
+`real/` clips plus the synthetic clips of `zee-wer-corpus` (51 clips). The
+whisper column is `whisper-turbo-q5` from `./zee` at the same date, with
+`-lang tr` and auto. M5 Pro, warm, best of 2.
+
+### Speed: the one thing it wins
+
+| clip                | audio | whisper tr | whisper auto | Nemotron q8_0 auto |
+|---------------------|-------|------------|--------------|--------------------|
+| 2026-06-19T16-52-03 | 1.9 s | 276 ms     | 301 ms       | 43 ms              |
+| 2026-07-07T12-35-03 | 9.8 s | 315 ms     | 312 ms       | 130 ms             |
+| 2026-07-29T00-26-07 | 23 s  | 418 ms     | 414 ms       | 267 ms             |
+| 2026-08-07T14-47-18 | 50 s  | 1375 ms    | 1232 ms      | 505 ms             |
+
+q8_0: ~66 xRT marginal with almost no fixed cost. whisper: ~55–60 xRT with a
+~0.2–0.3 s floor per call. Dictation-length clips are 1.5–7x faster. q4_k is
+slower than q8_0 on Metal (~56 xRT) and less accurate. The 160 ms config is
+~36 xRT offline and no more accurate.
+
+### Accuracy: unusable for Turkish
+
+Loanwords on `2026-07-29T00-26-07`: 0/4 in every config (whisper 4/4, Qwen
+1.7B 2/4). The Turkish around them is damaged too.
+
+| spoken              | whisper-turbo-q5  | Nemotron auto  | Nemotron tr-TR |
+|---------------------|-------------------|----------------|----------------|
+| "transcribe"        | transcribe        | transkript üde | transkript üde |
+| "sample"            | sample            | samplova       | samplora       |
+| "check edebilirsin" | check edebilirsin | çekedebilirsin | çekedebilirsin |
+| "Whisper"           | Whisper           | visper         | Visper         |
+
+- **Language-ID fails on Turkish.** On the 7 Turkish clips, `auto` produced
+  Turkish on 3, each with Arabic or Cyrillic spans. The rest came out as
+  ru-RU (Cyrillic), mt-MT, or Hindi/Arabic script. `2026-07-07T12-35-03`,
+  where Qwen gave Polish/Dutch/Czech, comes back Russian.
+- **Forcing tr-TR is worse than auto.** Empty output on 2 of 7 Turkish clips,
+  4 English clips and both English TTS clips. It also cuts clip starts. There
+  is no working equivalent of whisper's `-l tr`.
+- **It drops leading speech in auto mode too.** The 50 s clip loses its first
+  ~12 s.
+- **No code-switching.** One language decision per utterance. English terms
+  get Turkish spelling even under a tr-TR tag.
+- **Synthetic WER:** `tts_tr` 0.24 auto / 0.19 tr-TR (whisper 0.00);
+  `noisy_tr` 1.00 (output in Hungarian; whisper 0.24); the 12 accented-English
+  `mb_*` sentences 0.73 auto (whisper-auto 0.15), 5/12 empty. Clean Turkish
+  TTS lands at ~2x the model card's FLEURS-tr 11.2%.
+
+**Its real strength is English language-ID.** All 20 English clips stayed
+English (whisper-auto: 12/20). It fixes the auto-flip clip
+`2026-08-13T12-37-14`, and near-silent clips come back empty instead of
+"Thank you." That does not help zee: English already goes to Parakeet.
+
+### Verdict
+
+Faster than whisper-turbo on every dictation-length clip, and wrong in a way
+whisper is not: wrong script, empty output, dropped speech. The same
+loanword failure as Qwen, with no code-switching. Revisit only if a later
+checkpoint fixes Turkish language-ID and loanwords. A faster runtime or
+another quantization changes neither.
+
+Open, not verified (2026-10-22): `2026-08-07T14-47-18`, the "50.2 s Turkish
+clip" in the Qwen entry above, may be English speech. whisper `-l en`,
+Nemotron and NeMo-Speech give the same coherent English, and whisper-auto's
+Turkish loops. If so, Qwen did not translate; whisper-auto did. Listen to
+the clip before editing that entry.
