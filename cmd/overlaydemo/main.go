@@ -3,7 +3,8 @@
 //
 //	go run ./cmd/overlaydemo
 //
-// It cycles Recording → Are you talking? → Transcribing every few seconds.
+// It cycles Recording → Are you talking? → Transcribing every few seconds, and
+// steps the top-right tag through none, the palette and an over-long name.
 package main
 
 import (
@@ -29,10 +30,12 @@ func drive() {
 	var state atomic.Int32
 	go func() {
 		states := []overlay.State{overlay.Recording, overlay.Silent, overlay.Transcribing}
+		tags := []string{"", "grammar", "friendly", "professional", "concise", "slack", "teal-six", "a-very-long-profile-name"}
 		for i := 0; ; i++ {
 			s := states[i%len(states)]
 			state.Store(int32(s))
 			overlay.SetState(s)
+			overlay.SetTag(tags[i%len(tags)], overlay.TagColors[i%len(overlay.TagColors)])
 			time.Sleep(3 * time.Second)
 		}
 	}()

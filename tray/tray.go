@@ -67,6 +67,10 @@ var (
 	// (persist=false) are always accepted.
 	langCb func(code string, persist bool) bool
 
+	postProfiles []string // Post-Transcribe entries after "None"
+	postActive   string   // selected profile; "" = None
+	postCb       func(name string)
+
 	appVersion     string
 	checkUpdateCb  func()
 	saveAudioCb    func()
@@ -237,6 +241,42 @@ func OnEditHints(fn func())       { editHintsCb = fn }
 func OnEditSettings(fn func())    { editSettingsCb = fn }
 func OnEditCredentials(fn func()) { editCredsCb = fn }
 func OnReloadConfig(fn func())    { reloadCfgCb = fn }
+
+// SetPostTranscribe lists the post-transcribe profiles and marks the active one
+// ("" = None). Before Init it seeds the menu build; after Init (config-file
+// reload) it re-renders the submenu. A nil onSwitch keeps the current callback.
+func SetPostTranscribe(profiles []string, active string, onSwitch func(name string)) {
+	trayMu.Lock()
+	postProfiles, postActive = profiles, active
+	if onSwitch != nil {
+		postCb = onSwitch
+	}
+	trayMu.Unlock()
+	refreshPostMenu()
+}
+
+// postEntries is the Post-Transcribe submenu in order: None ("") first, then
+// the profiles. Caller holds trayMu.
+func postEntries() []string {
+	return append([]string{""}, postProfiles...)
+}
+
+// choosePost records a click on the idx-th Post-Transcribe entry and reports
+// it; the platform click handler redraws the checkmarks.
+func choosePost(idx int) {
+	trayMu.Lock()
+	names := postEntries()
+	if idx >= len(names) {
+		trayMu.Unlock()
+		return
+	}
+	postActive = names[idx]
+	cb := postCb
+	trayMu.Unlock()
+	if cb != nil {
+		cb(names[idx])
+	}
+}
 
 // SetHotkeyLabel sets the display-only current push-to-talk combo shown (and
 // disabled) in the menu, and the combo hint on the Start/Stop Recording item.

@@ -60,9 +60,10 @@ app):
 ### Post-transcribe
 
 An optional LLM pass rewrites each transcript before it is pasted. It is off by
-default and set only in `config.json` (then **Reload Config** from the tray, or
-restart). It uses the `groq` key from `credentials.json`, with any provider for
-the transcription itself.
+default. Pick a profile from the tray (**Settings → Post-Transcribe**, **None**
+turns it off) or set it in `config.json` and **Reload Config**; either way it
+applies from the next recording, with no restart. It uses the `groq` key from
+`credentials.json`, with any provider for the transcription itself.
 
 ```json
 "post_transcribe": {
@@ -78,11 +79,19 @@ the transcription itself.
 - `prompts` — your own profiles, name → a one- or two-sentence instruction. A
   name that matches a built-in one replaces it.
 - `model` — any Groq chat model; omit it for `openai/gpt-oss-120b`.
+- `colors` — each profile's colour for the recording overlay, `"#RRGGBB"`. zee
+  gives a profile without one a random colour from its palette and saves it,
+  so the colour stays put; edit it to choose your own.
 
 Built-in profiles: `grammar` (spelling, punctuation, grammar; wording kept),
 `friendly` (conversational tone), `professional` (work email tone), `concise`
 (filler and repetition removed). Every profile also corrects misheard words
-toward `hints.txt`, keeps the language, and never answers the dictated text.
+toward `hints.txt`, keeps the sentence in the language you spoke it in (English
+words inside a Turkish sentence stay English), and never answers the dictated
+text.
+
+While a profile is active, the recording overlay shows its name in the
+top-right corner, in its colour.
 
 If the call fails or times out, the raw transcript is pasted and the tray shows
 the error. In streaming mode the text is pasted once at the end instead of

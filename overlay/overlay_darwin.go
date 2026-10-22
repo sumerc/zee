@@ -9,6 +9,7 @@ void zeeOverlayShow(void);
 void zeeOverlayHide(void);
 void zeeOverlaySetState(const char *label, double r, double g, double b, int showMeter);
 void zeeOverlayPushLevel(float v);
+void zeeOverlaySetTag(const char *text, double r, double g, double b);
 void zeeOverlayRun(void);
 */
 import "C"
@@ -30,3 +31,9 @@ func setState(label string, r, g, b float64, showMeter bool) {
 }
 
 func pushLevel(v float32) { C.zeeOverlayPushLevel(C.float(v)) }
+
+func setTag(text string, r, g, b float64) {
+	c := C.CString(text)
+	defer C.free(unsafe.Pointer(c))
+	C.zeeOverlaySetTag(c, C.double(r), C.double(g), C.double(b))
+}

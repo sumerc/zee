@@ -2,9 +2,11 @@ package posttranscribe
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -82,8 +84,8 @@ func TestRewriteUserProfileShadowsBuiltin(t *testing.T) {
 
 func TestRewriteUnknownProfile(t *testing.T) {
 	_, err := Rewrite(config.PostTranscribe{Active: "pirate", Prompts: map[string]string{"mine": "x"}}, "", "x")
-	if err == nil || !strings.Contains(err.Error(), "concise, friendly, grammar, mine, professional") {
-		t.Errorf("err = %v, want the sorted list of profiles", err)
+	if err == nil || !strings.Contains(err.Error(), "grammar, friendly, professional, concise, mine") {
+		t.Errorf("err = %v, want the list of profiles", err)
 	}
 }
 
@@ -103,5 +105,23 @@ func TestRewriteErrors(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
 		}
+	}
+}
+
+func TestProfiles(t *testing.T) {
+	got := Profiles(config.PostTranscribe{Prompts: map[string]string{"slack": "x", "grammar": "y"}})
+	want := []string{"grammar", "friendly", "professional", "concise", "slack"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("Profiles = %q, want %q", got, want)
+	}
+}
+
+// TestBuiltinOrder: every built-in is listed exactly once, so none is missing
+// from the tray menu or shares a tag colour.
+func TestBuiltinOrder(t *testing.T) {
+	got := slices.Sorted(slices.Values(builtinOrder))
+	want := slices.Sorted(maps.Keys(Builtin))
+	if !slices.Equal(got, want) {
+		t.Errorf("builtinOrder = %q, want the keys of Builtin %q", builtinOrder, want)
 	}
 }

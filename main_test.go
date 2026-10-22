@@ -1,14 +1,18 @@
 package main
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"zee/audio"
+	"zee/config"
 	"zee/encoder"
 	"zee/hotkey"
+	"zee/overlay"
+	"zee/posttranscribe"
 	"zee/transcriber"
 )
 
@@ -294,6 +298,34 @@ func TestDeviceChangeAction(t *testing.T) {
 		if got := deviceChangeAction(c.names, c.selected, c.preferred); got != c.want {
 			t.Errorf("%s: deviceChangeAction(%v, sel=%q, pref=%q) = %v, want %v",
 				c.name, c.names, c.selected, c.preferred, got, c.want)
+		}
+	}
+}
+
+// TestEnsureTagColors: every profile without a colour gets a palette colour,
+// saved to config.json; a colour the user set is kept.
+func TestEnsureTagColors(t *testing.T) {
+	config.SetDir(t.TempDir())
+	if err := config.Load(); err != nil {
+		t.Fatal(err)
+	}
+	config.Update(func(s *config.Settings) {
+		s.PostTranscribe.Prompts = map[string]string{"slack": "x"}
+		s.PostTranscribe.Colors = map[string]string{"friendly": "#123456"}
+	})
+
+	ensureTagColors()
+
+	if err := config.Load(); err != nil { // read back what was saved
+		t.Fatal(err)
+	}
+	pt := config.Get().PostTranscribe
+	if pt.Colors["friendly"] != "#123456" {
+		t.Errorf("friendly = %q, want the user's #123456 kept", pt.Colors["friendly"])
+	}
+	for _, n := range posttranscribe.Profiles(pt) {
+		if n != "friendly" && !slices.Contains(overlay.TagColors, pt.Colors[n]) {
+			t.Errorf("%s = %q, want a palette colour", n, pt.Colors[n])
 		}
 	}
 }

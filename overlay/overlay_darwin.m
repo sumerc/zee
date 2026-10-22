@@ -38,6 +38,15 @@
 #define FADE_AFTER 0.04
 #define FADE_DUR   0.14
 
+// The tag: a small pill at the top-right, level with the dot. Its right edge
+// stays inside the shape where the top corner bows in, and TAG_MAX_W keeps it
+// clear of the centred dot; longer text is cut with an ellipsis.
+#define TAG_FONT   10.0
+#define TAG_H      16.0
+#define TAG_PAD_X   4.0
+#define TAG_RIGHT  (PANEL_W - INSET - 4.0)
+#define TAG_MAX_W  (TAG_RIGHT - (PANEL_W + DOT) / 2 - 5.0)
+
 #define ROW_DOT    11.0
 #define ROW_LABEL  28.0
 #define ROW_BARS   58.0
@@ -60,6 +69,8 @@ static CGFloat       gTopBase; // where our own content may start, from the top
 static CGFloat       gPanelH;
 static BOOL          gVisible;
 static BOOL          gMeterShown = YES;
+static CALayer      *gTag;     // pill behind gTagText; hidden when there is no tag
+static CATextLayer  *gTagText;
 
 static void onMain(void (^block)(void)) {
 	if ([NSThread isMainThread]) block();
@@ -118,6 +129,21 @@ static void layoutStatus(NSString *text) {
 	gLabel.frame = CGRectMake((PANEL_W - ceil(sz.width)) / 2 - 1, rowY(ROW_LABEL) - sz.height / 2,
 	                          ceil(sz.width) + 2, ceil(sz.height));
 	gLabel.string = text;
+}
+
+static NSFont *tagFont(void) {
+	return [NSFont systemFontOfSize:TAG_FONT weight:NSFontWeightSemibold];
+}
+
+// layoutTag right-aligns the pill at the dot's row and sizes it to its text.
+static void layoutTag(void) {
+	NSString *text = (NSString *)gTagText.string ?: @"";
+	gTag.hidden = text.length == 0;
+	if (gTag.hidden) return;
+	CGSize sz = [text sizeWithAttributes:@{NSFontAttributeName: tagFont()}];
+	CGFloat w = fmin(ceil(sz.width) + 2 * TAG_PAD_X, TAG_MAX_W);
+	gTag.frame = CGRectMake(TAG_RIGHT - w, rowY(ROW_DOT) - TAG_H / 2, w, TAG_H);
+	gTagText.frame = CGRectMake(TAG_PAD_X, (TAG_H - ceil(sz.height)) / 2, w - 2 * TAG_PAD_X, ceil(sz.height));
 }
 
 // layoutBars maps the level ring buffer onto the bars. Height is Textream's
@@ -192,7 +218,9 @@ static void syncToScreen(void) {
 	gContent.frame = bounds;
 	gMeter.frame = bounds;
 	gLabel.contentsScale = screen.backingScaleFactor;
+	gTagText.contentsScale = screen.backingScaleFactor;
 	layoutStatus((NSString *)gLabel.string ?: @"Recording");
+	layoutTag();
 	layoutBars();
 	[CATransaction commit];
 }
@@ -238,6 +266,20 @@ static void buildPanel(void) {
 	gLabel.fontSize = FONT_SIZE;
 	gLabel.foregroundColor = [NSColor colorWithWhite:1.0 alpha:0.85].CGColor;
 	[gContent addSublayer:gLabel];
+
+	// Coloured text on a faint pill of the same colour: readable on the black
+	// shape for any palette entry, and quieter than the status it sits beside.
+	gTag = [CALayer layer];
+	gTag.cornerRadius = TAG_H / 2;
+	gTag.hidden = YES;
+	[gContent addSublayer:gTag];
+	gTagText = [CATextLayer layer];
+	gTagText.font = (CFTypeRef)tagFont();
+	gTagText.fontSize = TAG_FONT;
+	gTagText.truncationMode = kCATruncationEnd;
+	gTagText.alignmentMode = kCAAlignmentCenter;
+	gTagText.string = @"";
+	[gTag addSublayer:gTagText];
 
 	gMeter = [CALayer layer];
 	[gContent addSublayer:gMeter];
@@ -354,6 +396,20 @@ void zeeOverlaySetState(const char *label, double r, double g, double b, int sho
 		[CATransaction begin];
 		[CATransaction setDisableActions:YES];
 		layoutStatus(text);
+		[CATransaction commit];
+	});
+}
+
+void zeeOverlaySetTag(const char *text, double r, double g, double b) {
+	NSString *str = [NSString stringWithUTF8String:text];
+	onMain(^{
+		buildPanel();
+		[CATransaction begin];
+		[CATransaction setDisableActions:YES];
+		gTagText.string = str;
+		gTagText.foregroundColor = [NSColor colorWithSRGBRed:r green:g blue:b alpha:1.0].CGColor;
+		gTag.backgroundColor = [NSColor colorWithSRGBRed:r green:g blue:b alpha:0.22].CGColor;
+		layoutTag();
 		[CATransaction commit];
 	});
 }

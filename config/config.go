@@ -38,6 +38,9 @@ type PostTranscribe struct {
 	Active  string            `json:"active"`
 	Model   string            `json:"model,omitempty"`   // "" = the package default
 	Prompts map[string]string `json:"prompts,omitempty"` // name → instruction
+	// Colors is each profile's overlay tag colour, "#RRGGBB". zee fills in a
+	// colour for any profile without one, so it stays the same from then on.
+	Colors map[string]string `json:"colors,omitempty"`
 }
 
 const settingsFile = "config.json"

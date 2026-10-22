@@ -54,3 +54,22 @@ func TestEffectiveLangRoundTrip(t *testing.T) {
 		t.Fatalf("switching back should restore tr, got %q", got)
 	}
 }
+
+// TestChoosePost: entry 0 is None (""), the rest follow the profiles; a click
+// reports the choice and moves the selection.
+func TestChoosePost(t *testing.T) {
+	var got []string
+	SetPostTranscribe([]string{"friendly", "grammar"}, "", func(name string) { got = append(got, name) })
+	t.Cleanup(func() { SetPostTranscribe(nil, "", nil) })
+
+	choosePost(2)
+	choosePost(0)
+	choosePost(9) // past the end: ignored
+
+	if len(got) != 2 || got[0] != "grammar" || got[1] != "" {
+		t.Fatalf("callbacks = %q, want [grammar \"\"]", got)
+	}
+	if postActive != "" {
+		t.Errorf("postActive = %q, want None", postActive)
+	}
+}

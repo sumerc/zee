@@ -1,10 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -485,6 +487,13 @@ func run() {
 		}
 	})
 	tray.SetAutoPaste(autoPaste)
+	// A pick is saved like any other tray setting; each recording reads the
+	// config, so it applies from the next one without a restart.
+	ensureTagColors()
+	tray.SetPostTranscribe(posttranscribe.Profiles(cfg.PostTranscribe), cfg.PostTranscribe.Active, func(name string) {
+		config.Update(func(s *config.Settings) { s.PostTranscribe.Active = name })
+		log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
+	})
 
 	var trayModels []tray.Model
 	modelIndex := map[string]transcriber.ModelInfo{}
@@ -874,6 +883,9 @@ func run() {
 			}
 		}
 
+		ensureTagColors() // a profile added to the file gets its colour now
+		tray.SetPostTranscribe(posttranscribe.Profiles(s.PostTranscribe), s.PostTranscribe.Active, nil)
+
 		if want := s.Hotkey.OrDefault(); !want.Equal(hk.Current()) {
 			if err := hk.Rebind(want); err != nil {
 				log.Errorf("settings reload: hotkey %s: %v", want.Label, err)
@@ -1016,6 +1028,9 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		log.Info("recording_device: " + capture.DeviceName())
 		isRecording.Store(true) // already set when the session came from tryStartSession
 		tray.SetRecording(true)
+		// The active post-transcribe profile, top-right; nothing for None.
+		pt := config.Get().PostTranscribe
+		overlay.SetTag(pt.Active, pt.Colors[pt.Active])
 		overlay.Show() // every path — hotkey, toggle, tray — funnels through here
 
 		done, err := handleRecording(capture, sess)
@@ -1424,6 +1439,27 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	}
 
 	setLastRecording(result, cfg, "")
+}
+
+// ensureTagColors gives every post-transcribe profile that has no overlay tag
+// colour a random one from the palette and saves it, so each profile keeps its
+// colour from then on and the user can change it in config.json.
+func ensureTagColors() {
+	pt := config.Get().PostTranscribe
+	if !slices.ContainsFunc(posttranscribe.Profiles(pt), func(n string) bool { return pt.Colors[n] == "" }) {
+		return
+	}
+	config.Update(func(s *config.Settings) {
+		c := &s.PostTranscribe
+		if c.Colors == nil {
+			c.Colors = map[string]string{}
+		}
+		for _, n := range posttranscribe.Profiles(*c) {
+			if c.Colors[n] == "" {
+				c.Colors[n] = overlay.PickTagColor(slices.Collect(maps.Values(c.Colors)))
+			}
+		}
+	})
 }
 
 // setLastRecording stashes the just-finished recording (audio + metadata) so the
