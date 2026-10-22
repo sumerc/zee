@@ -9,6 +9,12 @@ rather than the intuition. When a later measurement supersedes an earlier one,
 the old entry is marked superseded rather than deleted: the fact that something
 *used to be true* is usually why the code looks the way it does.
 
+Every claim carries a timestamp: the date it was checked, plus the version or
+commit it was checked against. No open-ended claims about the outside world
+("nobody beats X", "no model has Y", "library Z has no option for W") — they go
+stale silently and read like live facts. Pin them to what was checked and when,
+or leave them out.
+
 ## Why the audio device is re-init'd on every recording
 
 `audio.Start()` tears down the capture device (`Uninit`) and rebuilds it
@@ -312,8 +318,10 @@ machine, not the clip: measured +999/+935/+1003 ms across 2.5/11.5/27 s. On
 M1-class hardware auto-detect, not whisper itself, is the dominant cost of the
 multilingual path.
 
-Parakeet is unaffected — no language parameter in its C-API; each gguf is
-single-language by build.
+Parakeet TDT models (110m, v3) take no language input; v3 picks among its 25
+languages itself. Only prompt-conditioned models (Nemotron 3.5) read a language,
+through the `parakeet_capi_*_lang` entry points (parakeet.cpp `271e70b`,
+2026-06-06).
 
 **q5_0, not f16** — free on both axes. Warm latency a tie (273 vs 270 ms). No
 quality direction: over 5 real dictations (537 words) the models diverged on
