@@ -2250,3 +2250,33 @@ failed load, or after `Close`). That goroutine can outlive the session and get
 `loadMu` after a provider switch has called `Close`. It would then load the old
 provider's model again, and nothing would ever free it. Those rare cases load
 in Close instead.
+
+## Post-transcribe prompt: minimal generic rules (measured 2026-10-22)
+
+Setup: Groq `openai/gpt-oss-120b`, `reasoning_effort: low`, branch
+`post-transcribe` at `c2a4673`. Eval: 20 transcripts (16 real Turkish/English
+dictations from 2026-10-22, 4 synthetic) × the 4 built-in profiles × 3 runs =
+240 rewrites per prompt. A rewrite fails if it changes the sentence's language,
+drops a listed English word, contains forbidden text (an answer to a dictated
+question, a carried-out "draft me a message", a completed fragment), or lands
+outside 0.45–1.4× the raw length.
+
+| Prompt | Failed |
+|---|---|
+| Rules grown patch by patch, with example words (`"cloud"` → `"Claude"`, `"dipley ettim"` → `"deploy ettim"`) | 71/240 |
+| Minimal generic, first draft | 85/240 |
+| **Minimal generic v2 (shipped)** | **51/240** |
+| v2 + "even when it carries that language's suffix" | 51/240 — not kept |
+
+- **Rejected: example words in the prompt.** Earlier the same day, a
+  `"cloud"` → `"Claude"` example was the only wording that fixed that
+  sound-alike from a plain vocabulary list (0/24 without, 24/24 with). It
+  hard-codes one user's vocabulary, so v2 states the rule generically; it then
+  fixes that case 10/12.
+- **Still failing on v2:** a term split by sound (`"code ex"` → Codex, 12/12
+  failed); English words carrying a Turkish suffix sometimes translated
+  (`"textları"` → `"metinleri"`, 7/12); Whisper mishearings the text alone
+  cannot recover.
+- **Model:** `gpt-oss-20b` answered a dictated question instead of rewriting it
+  (2026-10-22), so 120b is the default. `reasoning_effort: medium` did not
+  improve vocabulary fixes over `low`.

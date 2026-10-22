@@ -74,7 +74,7 @@ func TestRewriteUserProfileShadowsBuiltin(t *testing.T) {
 	if !strings.Contains(sys, "Only fix typos.") || strings.Contains(sys, Builtin["grammar"]) {
 		t.Errorf("user prompt did not replace the built-in:\n%s", sys)
 	}
-	if strings.Contains(sys, "Vocabulary:") {
+	if strings.Contains(sys, "Vocabulary") {
 		t.Error("empty hints should add no vocabulary section")
 	}
 	if last.Model != c.Model || last.ReasoningEffort != "" {
