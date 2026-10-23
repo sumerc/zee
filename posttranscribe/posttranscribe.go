@@ -106,11 +106,12 @@ func Resolve(c config.PostTranscribe) (r config.PostTranscribe, ok bool) {
 	return c, true
 }
 
-func provider(c config.PostTranscribe) string { return cmp.Or(c.Provider, ProviderGroq) }
+// Provider is the provider c runs on.
+func Provider(c config.PostTranscribe) string { return cmp.Or(c.Provider, ProviderGroq) }
 
 // Model is the model c runs on.
 func Model(c config.PostTranscribe) string {
-	if provider(c) == ProviderLocal {
+	if Provider(c) == ProviderLocal {
 		return cmp.Or(c.Model, DefaultLocalModel)
 	}
 	return cmp.Or(c.Model, DefaultModel)
@@ -121,7 +122,7 @@ func Model(c config.PostTranscribe) string {
 // one it runs.
 func local(c config.PostTranscribe) (m localmodel.Model, isLocal bool, err error) {
 	m, known := localEntry(Model(c))
-	switch provider(c) {
+	switch Provider(c) {
 	case ProviderLocal:
 		if !known {
 			return m, false, fmt.Errorf("%q is not a local model (have: %s)", Model(c), strings.Join(localIDs(), ", "))

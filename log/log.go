@@ -302,10 +302,11 @@ type Recording struct {
 // that was pasted instead of Recording.Text, or the error that made zee paste
 // the raw text.
 type PostTranscript struct {
-	Profile string
-	Model   string
-	Text    string
-	Error   string
+	Profile  string
+	Provider string
+	Model    string
+	Text     string
+	Error    string
 }
 
 // Transcription appends the text to transcribe_log.txt and, when there is
@@ -376,7 +377,7 @@ func saveRecording(now time.Time, r Recording) (string, error) {
 		"transcript.txt":      []byte(r.Text + "\n"),
 	}
 	if p := r.Post; p.Profile != "" {
-		post := map[string]any{"profile": p.Profile, "model": p.Model}
+		post := map[string]any{"profile": p.Profile, "provider": p.Provider, "model": p.Model}
 		if p.Error != "" {
 			post["error"] = p.Error
 		}
