@@ -191,6 +191,38 @@ func TestTranscriptionPostTranscribe(t *testing.T) {
 	}
 }
 
+// TestTranscriptionPostTranscribeMultiline: a rewrite with line breaks and
+// tabs stays on one log line, escaped; post_transcript.txt keeps it as is.
+func TestTranscriptionPostTranscribeMultiline(t *testing.T) {
+	tmp := setupLogDir(t)
+	SetTranscribeEnabled(true)
+	t.Cleanup(func() { SetTranscribeEnabled(false) })
+
+	if err := Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	rewrite := "Hi,\r\n\nCould you\tcheck?"
+	Transcription(Recording{Text: "hi could you check", Audio: []byte("RIFF"), AudioExt: "wav",
+		Post: PostTranscript{Profile: "friendly", Model: "m", Text: rewrite}})
+
+	data, err := os.ReadFile(filepath.Join(tmp, "transcribe_log.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("want 1 line, got %q", data)
+	}
+	f := strings.Split(lines[0], "\t")
+	if want := `Hi,\r\n\nCould you\tcheck?`; len(f) != 5 || f[4] != want {
+		t.Fatalf("unexpected line: %q, want last field %q", lines[0], want)
+	}
+	if got, _ := os.ReadFile(filepath.Join(tmp, f[2], "post_transcript.txt")); string(got) != rewrite+"\n" {
+		t.Errorf("post_transcript.txt = %q, want %q", got, rewrite+"\n")
+	}
+}
+
 func TestCloseIdempotent(t *testing.T) {
 	setupLogDir(t)
 

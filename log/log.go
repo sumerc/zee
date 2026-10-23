@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -332,10 +333,14 @@ func Transcription(r Recording) {
 	defer logMu.Unlock()
 	line := fmt.Sprintf("%s\t[%d]\t%s\t%s", now.Format("2006-01-02 15:04:05"), pid, rel, r.Text)
 	if r.Post.Text != "" {
-		line += "\t" + r.Post.Text
+		line += "\t" + lineEscaper.Replace(r.Post.Text)
 	}
 	transcribeFile.WriteString(line + "\n")
 }
+
+// lineEscaper keeps an LLM rewrite, which may hold paragraphs, on its one
+// tab-separated log line; post_transcript.txt keeps the real text.
+var lineEscaper = strings.NewReplacer("\n", `\n`, "\r", `\r`, "\t", `\t`)
 
 func saveRecording(now time.Time, r Recording) (string, error) {
 	// Milliseconds keep two quick taps in the same second apart; a suffix keeps
