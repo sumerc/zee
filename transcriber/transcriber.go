@@ -130,6 +130,10 @@ func plainLangsFromCodes(codes []string) []Language {
 // AllLanguages returns every known language (Auto-detect first, then the rest
 // sorted alphabetically). The tray uses this as the fixed universe of language
 // menu items; SetLanguages then shows only the active model's subset.
+// LanguageName is the English name of an ISO 639-1 code ("tr" → "Turkish"),
+// or "" when the code is unknown.
+func LanguageName(code string) string { return langLabels[code] }
+
 func AllLanguages() []Language {
 	codes := make([]string, 0, len(langLabels))
 	for c := range langLabels {

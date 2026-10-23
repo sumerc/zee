@@ -78,6 +78,12 @@ applies from the next recording, with no restart. It uses the `groq` key from
 - `model` — any Groq chat model; omit it for `openai/gpt-oss-120b`. The rewrite
   has a 5 s budget, so pick a fast model: a slow or reasoning-heavy one times out
   on longer dictations and the raw transcript is pasted instead.
+  Set it to `gemma-4-e2b` to run the rewrite on this Mac instead (Apple
+  Silicon only, no Groq key needed). Put `gemma-4-E2B-it-Q4_K_M.gguf` (3.1 GB)
+  in the models folder; zee loads it when a recording starts and keeps it in
+  memory (about 3 GB) from then on. The local rewrite is told the transcript's
+  language — the one you set, or the one Whisper detected — so it does not
+  translate it. It has no 5 s budget.
 - `colors` — each profile's colour for the recording overlay, `"#RRGGBB"`. zee
   gives a profile without one a random colour from its palette the first time
   you use it, and saves it so the colour stays put; edit it to choose your own.
