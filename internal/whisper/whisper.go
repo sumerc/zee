@@ -49,7 +49,7 @@ static void zee_wsp_silent(enum ggml_log_level l, const char *t, void *u) {
 // Worth capturing because a wrong detection does not merely mislabel the
 // transcript — whisper hard-forces the start-of-transcript token, so the audio
 // decodes AS that language and comes back fluent and wrong. The probability is
-// context, not a verdict: measured, wrong calls reached p=0.91 (design-notes).
+// context, not a verdict: measured, wrong calls reached p=0.91.
 //
 // whisper_log_set is process-wide, so these are too. callMu (Go side) holds
 // every whisper_full call across all Ctx instances, and the result is copied
@@ -148,7 +148,7 @@ static char *zee_wsp_transcribe(struct whisper_context *ctx, const float *pcm,
     p.print_special    = false;
     // no_timestamps stays FALSE even though we only want text: it selects a
     // decoder path that silently drops audio. See audioCtxFor's sibling note
-    // below and docs/design-notes.md — with it set, whisper advances the window
+    // below — with it set, whisper advances the window
     // a fixed 30 s per decode and skips the retry-on-failed-decode path, so
     // whatever the model does not emit in a window is lost for good.
     p.translate        = false;   // transcribe in-language, never translate to English
@@ -162,7 +162,7 @@ static char *zee_wsp_transcribe(struct whisper_context *ctx, const float *pcm,
     // repeated sentence, that repetition becomes the next window's prompt and
     // the loop replaces the rest of a long dictation. The entropy guard
     // (entropy_thold) misses it because the timestamp tokens around each
-    // repeat lift the entropy just over the threshold. See docs/design-notes.md.
+    // repeat lift the entropy just over the threshold.
     p.n_max_text_ctx   = 0;
 
     // Vocabulary hints ride in as the initial prompt — the same string the
@@ -263,7 +263,7 @@ const sampleRate = 16000
 // (D/F/G/I/J/L unchanged), so the lever needs a fresh whisper_state per
 // utterance, which is cheap to create. Returning 0 stays a deliberate choice:
 // sizing is a further speedup but does not preserve the transcript
-// word-for-word. Measurements in design-notes, "audio_ctx sizing".
+// word-for-word.
 func audioCtxFor(int) int { return 0 }
 
 // Available reports whether local Whisper transcription is compiled in.
@@ -383,8 +383,7 @@ func (c *Ctx) transcribeAt(pcm []float32, lang, hints string, audioCtx int) (str
 // Diagnostic only — nothing acts on it. It exists because a mis-detection is
 // invisible in the transcript: the output is fluent, confident and in the wrong
 // language, so the log is the only place it shows. The probability alone does
-// not separate right from wrong calls (a wrong one measured p=0.91; see
-// design-notes "Why English is the default").
+// not separate right from wrong calls (a wrong one measured p=0.91).
 func (c *Ctx) LastDetection() (lang string, p float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

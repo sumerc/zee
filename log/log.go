@@ -338,12 +338,24 @@ func Transcription(r Recording) {
 }
 
 func saveRecording(now time.Time, r Recording) (string, error) {
-	// Milliseconds keep two quick taps in the same second apart.
-	rel := filepath.Join("recordings", now.Format("2006-01-02T15-04-05.000"))
-	abs := filepath.Join(dir, rel)
-	if err := os.MkdirAll(abs, 0755); err != nil {
+	// Milliseconds keep two quick taps in the same second apart; a suffix keeps
+	// two saves in the same millisecond from sharing (and overwriting) a folder.
+	if err := os.MkdirAll(filepath.Join(dir, "recordings"), 0755); err != nil {
 		return "", err
 	}
+	base := filepath.Join("recordings", now.Format("2006-01-02T15-04-05.000"))
+	rel := base
+	for n := 2; ; n++ {
+		err := os.Mkdir(filepath.Join(dir, rel), 0755)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) {
+			return "", err
+		}
+		rel = fmt.Sprintf("%s-%d", base, n)
+	}
+	abs := filepath.Join(dir, rel)
 	meta := map[string]any{
 		"provider":   r.Provider,
 		"model":      r.Model,

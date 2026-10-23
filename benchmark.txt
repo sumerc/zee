@@ -145,7 +145,7 @@ ok  	zee/internal/localbench	39.311s
 ##           is no longer set on whisper_full. That flag made whisper.cpp advance a
 ##           fixed 30 s per window and skip the failed-decode retry, so audio the
 ##           model did not emit was dropped (11 s lost on 21-50-06; 11% of that whole
-##           transcript). Upstream whisper.cpp#2186; see docs/design-notes.md.
+##           transcript). Upstream whisper.cpp#2186.
 ##           Speed impact measured separately (wall, model load in, mean of 3):
 ##             160 s clip  3.78 -> 4.08 s (+8%)
 ##             131 s clip  4.24 -> 3.57 s (-16%, its bad decode burned fallback retries)

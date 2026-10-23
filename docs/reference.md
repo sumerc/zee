@@ -3,9 +3,6 @@
 Everything that doesn't belong in the [README](../README.md): the full flag
 surface, environment variables, building from source, and testing.
 
-For *why* the non-obvious choices were made — engines, models, backends, what was
-measured and what was rejected — see [design-notes.md](design-notes.md).
-
 ## Subcommands
 
 | Command | What it does |
