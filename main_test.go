@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -12,7 +13,6 @@ import (
 	"zee/encoder"
 	"zee/hotkey"
 	"zee/overlay"
-	"zee/posttranscribe"
 	"zee/transcriber"
 )
 
@@ -302,30 +302,41 @@ func TestDeviceChangeAction(t *testing.T) {
 	}
 }
 
-// TestEnsureTagColors: every profile without a colour gets a palette colour,
-// saved to config.json; a colour the user set is kept.
-func TestEnsureTagColors(t *testing.T) {
+// TestTagColor: a profile gets a palette colour on first use, saved to
+// config.json; a colour the user set is kept, unused profiles get none, and
+// "none" writes nothing.
+func TestTagColor(t *testing.T) {
 	config.SetDir(t.TempDir())
 	if err := config.Load(); err != nil {
 		t.Fatal(err)
 	}
+
+	if c := tagColor(""); c != "" {
+		t.Errorf("tagColor(\"\") = %q, want none", c)
+	}
+	if _, err := os.Stat(config.SettingsPath()); err == nil {
+		t.Error("config.json written although no profile was used")
+	}
+
 	config.Update(func(s *config.Settings) {
-		s.PostTranscribe.Prompts = map[string]string{"slack": "x"}
 		s.PostTranscribe.Colors = map[string]string{"friendly": "#123456"}
 	})
-
-	ensureTagColors()
+	if c := tagColor("friendly"); c != "#123456" {
+		t.Errorf("friendly = %q, want the user's #123456 kept", c)
+	}
+	got := tagColor("grammar")
+	if !slices.Contains(overlay.TagColors, got) {
+		t.Errorf("grammar = %q, want a palette colour", got)
+	}
 
 	if err := config.Load(); err != nil { // read back what was saved
 		t.Fatal(err)
 	}
 	pt := config.Get().PostTranscribe
-	if pt.Colors["friendly"] != "#123456" {
-		t.Errorf("friendly = %q, want the user's #123456 kept", pt.Colors["friendly"])
+	if pt.Colors["grammar"] != got || tagColor("grammar") != got {
+		t.Errorf("grammar = %q after reload, want its first colour %q kept", pt.Colors["grammar"], got)
 	}
-	for _, n := range posttranscribe.Profiles(pt) {
-		if n != "friendly" && !slices.Contains(overlay.TagColors, pt.Colors[n]) {
-			t.Errorf("%s = %q, want a palette colour", n, pt.Colors[n])
-		}
+	if c, ok := pt.Colors["concise"]; ok {
+		t.Errorf("concise = %q, want no colour for an unused profile", c)
 	}
 }

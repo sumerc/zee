@@ -489,9 +489,9 @@ func run() {
 	tray.SetAutoPaste(autoPaste)
 	// A pick is saved like any other tray setting; each recording reads the
 	// config, so it applies from the next one without a restart.
-	ensureTagColors()
 	tray.SetPostTranscribe(posttranscribe.Profiles(cfg.PostTranscribe), cfg.PostTranscribe.Active, func(name string) {
 		config.Update(func(s *config.Settings) { s.PostTranscribe.Active = name })
+		tagColor(name) // a first pick gives the profile its colour
 		log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
 	})
 
@@ -883,7 +883,6 @@ func run() {
 			}
 		}
 
-		ensureTagColors() // a profile added to the file gets its colour now
 		tray.SetPostTranscribe(posttranscribe.Profiles(s.PostTranscribe), s.PostTranscribe.Active, nil)
 
 		if want := s.Hotkey.OrDefault(); !want.Equal(hk.Current()) {
@@ -1030,7 +1029,7 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		tray.SetRecording(true)
 		// The active post-transcribe profile, top-right; nothing for None.
 		pt := config.Get().PostTranscribe
-		overlay.SetTag(pt.Active, pt.Colors[pt.Active])
+		overlay.SetTag(pt.Active, tagColor(pt.Active))
 		overlay.Show() // every path — hotkey, toggle, tray — funnels through here
 
 		done, err := handleRecording(capture, sess)
@@ -1441,25 +1440,29 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	setLastRecording(result, cfg, "")
 }
 
-// ensureTagColors gives every post-transcribe profile that has no overlay tag
-// colour a random one from the palette and saves it, so each profile keeps its
-// colour from then on and the user can change it in config.json.
-func ensureTagColors() {
-	pt := config.Get().PostTranscribe
-	if !slices.ContainsFunc(posttranscribe.Profiles(pt), func(n string) bool { return pt.Colors[n] == "" }) {
-		return
+// tagColor returns the overlay tag colour of post-transcribe profile name (""
+// for none). A profile gets a random palette colour the first time it is used,
+// saved so it keeps it from then on and the user can change it in config.json;
+// config.json is not touched for profiles nobody uses.
+func tagColor(name string) string {
+	if name == "" {
+		return ""
 	}
+	if c := config.Get().PostTranscribe.Colors[name]; c != "" {
+		return c
+	}
+	var color string
 	config.Update(func(s *config.Settings) {
 		c := &s.PostTranscribe
-		if c.Colors == nil {
-			c.Colors = map[string]string{}
-		}
-		for _, n := range posttranscribe.Profiles(*c) {
-			if c.Colors[n] == "" {
-				c.Colors[n] = overlay.PickTagColor(slices.Collect(maps.Values(c.Colors)))
+		if c.Colors[name] == "" {
+			if c.Colors == nil {
+				c.Colors = map[string]string{}
 			}
+			c.Colors[name] = overlay.PickTagColor(slices.Collect(maps.Values(c.Colors)))
 		}
+		color = c.Colors[name]
 	})
+	return color
 }
 
 // setLastRecording stashes the just-finished recording (audio + metadata) so the

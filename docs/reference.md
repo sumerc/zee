@@ -77,8 +77,8 @@ applies from the next recording, with no restart. It uses the `groq` key from
   name that matches a built-in one replaces it.
 - `model` — any Groq chat model; omit it for `openai/gpt-oss-120b`.
 - `colors` — each profile's colour for the recording overlay, `"#RRGGBB"`. zee
-  gives a profile without one a random colour from its palette and saves it,
-  so the colour stays put; edit it to choose your own.
+  gives a profile without one a random colour from its palette the first time
+  you use it, and saves it so the colour stays put; edit it to choose your own.
 
 Built-in profiles: `grammar` (spelling, punctuation, grammar; wording kept),
 `friendly` (conversational tone), `professional` (work email tone), `concise`
