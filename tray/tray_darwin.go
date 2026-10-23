@@ -3,6 +3,7 @@
 package tray
 
 import (
+	"cmp"
 	"slices"
 	"sync"
 
@@ -39,6 +40,17 @@ var (
 		code string
 	}
 	mCheckUpdate *systray.MenuItem
+
+	mPost *systray.MenuItem
+	// postItems follow postEntries(): [0] is None. Items are only ever added
+	// (and hidden when unused), so a profile added via Reload Config appears
+	// without rebuilding the menu. Guarded by trayMu.
+	postItems []*systray.MenuItem
+	// postMenuMu serializes refreshPostMenu so two renders can't append the
+	// same new items. Never taken on the main thread: systray waits for the
+	// main thread on every change, so a click handler blocking on it while a
+	// render holds it would freeze the app.
+	postMenuMu sync.Mutex
 
 	modelItems []*systray.MenuItem
 	// modelGroups records each group submenu and its [start,end) slice of
@@ -451,6 +463,10 @@ func onReady() {
 		addLangEntry(lang.Code, lang.Label)
 	}
 
+	// Last in the pipeline order Model → Language → Post-Transcribe.
+	mPost = mSettings.AddSubMenuItem("Post-Transcribe", "Rewrite each transcript with an LLM before it is pasted")
+	refreshPostMenu()
+
 	systray.AddSeparator()
 
 	mCheckUpdate = systray.AddMenuItem("Check for Updates…", "Check for updates")
@@ -596,6 +612,61 @@ func refreshLanguageMenu() {
 		}
 	}
 	updateStatus()
+}
+
+// refreshPostMenu renders the Post-Transcribe submenu from postEntries(),
+// adding items when the list grew and hiding the ones past its end. Off the
+// main thread only (menu build, Reload Config).
+func refreshPostMenu() {
+	if mPost == nil {
+		return
+	}
+	postMenuMu.Lock()
+	defer postMenuMu.Unlock()
+	trayMu.Lock()
+	n, have := len(postEntries()), len(postItems)
+	trayMu.Unlock()
+	for i := have; i < n; i++ {
+		idx := i
+		item := mPost.AddSubMenuItemCheckbox("", "", false)
+		item.Click(func() {
+			choosePost(idx)
+			renderPostChecks()
+		})
+		trayMu.Lock()
+		postItems = append(postItems, item)
+		trayMu.Unlock()
+	}
+
+	trayMu.Lock()
+	names, items := postEntries(), slices.Clone(postItems)
+	trayMu.Unlock()
+	for i, item := range items {
+		if i >= len(names) {
+			item.Hide()
+			continue
+		}
+		item.SetTitle(cmp.Or(names[i].Name, "None"))
+		item.SetTooltip(names[i].Tip)
+		item.Show()
+	}
+	renderPostChecks()
+}
+
+// renderPostChecks checks the active entry and unchecks the rest. It takes no
+// lock across systray calls, so the click handler can run it on the main
+// thread.
+func renderPostChecks() {
+	trayMu.Lock()
+	names, active, items := postEntries(), postActive, slices.Clone(postItems)
+	trayMu.Unlock()
+	for i, item := range items {
+		if i < len(names) && names[i].Name == active {
+			item.Check()
+		} else {
+			item.Uncheck()
+		}
+	}
 }
 
 func updateStatusItem(text string) {

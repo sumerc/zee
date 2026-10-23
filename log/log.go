@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -239,14 +240,15 @@ func HotkeyPress(downToUpMs float64, mode string) {
 // path actually blocked waiting for it — belongs to the serial sum. Zero fields
 // are stages that didn't run (stream path, autoPaste off) and are omitted.
 type LatencyBreakdown struct {
-	TailWaitMs  float64 // configured mic tail-wait after release
-	MicStopMs   float64 // capture device stop + callback clear
-	ConvertMs   float64 // local path: PCM→f32 + PCM→WAV before inference
-	InferenceMs float64 // engine/provider time (repeated from the transcription line)
-	ClipSaveMs  float64 // pbpaste fork, concurrent with inference — informational
-	ClipWaitMs  float64 // block on the pbpaste fork after inference returned
-	PasteCopyMs float64 // pbcopy fork inside PasteText
-	PasteKeyMs  float64 // Cmd+V keystroke synthesis inside PasteText
+	TailWaitMs       float64 // configured mic tail-wait after release
+	MicStopMs        float64 // capture device stop + callback clear
+	ConvertMs        float64 // local path: PCM→f32 + PCM→WAV before inference
+	InferenceMs      float64 // engine/provider time (repeated from the transcription line)
+	ClipSaveMs       float64 // pbpaste fork, concurrent with inference — informational
+	ClipWaitMs       float64 // block on the pbpaste fork after inference returned
+	PostTranscribeMs float64 // LLM rewrite of the transcript before paste
+	PasteCopyMs      float64 // pbcopy fork inside PasteText
+	PasteKeyMs       float64 // Cmd+V keystroke synthesis inside PasteText
 }
 
 // ReleaseToText records the one latency the user actually feels: hotkey release
@@ -261,7 +263,7 @@ func ReleaseToText(ms float64, b LatencyBreakdown) {
 		return
 	}
 	serial := b.TailWaitMs + b.MicStopMs + b.ConvertMs + b.InferenceMs +
-		b.ClipWaitMs + b.PasteCopyMs + b.PasteKeyMs
+		b.ClipWaitMs + b.PostTranscribeMs + b.PasteCopyMs + b.PasteKeyMs
 	ev := diagLog.Info().Float64("release_to_text_ms", ms)
 	for _, f := range []struct {
 		key string
@@ -273,6 +275,7 @@ func ReleaseToText(ms float64, b LatencyBreakdown) {
 		{"inference_ms", b.InferenceMs},
 		{"clip_save_ms", b.ClipSaveMs},
 		{"clip_wait_ms", b.ClipWaitMs},
+		{"post_transcribe_ms", b.PostTranscribeMs},
 		{"paste_copy_ms", b.PasteCopyMs},
 		{"paste_key_ms", b.PasteKeyMs},
 	} {
@@ -292,12 +295,25 @@ type Recording struct {
 	Model     string
 	Lang      string // "" means auto-detect
 	DurationS float64
+	Post      PostTranscript // zero when post-transcribe did not run
+}
+
+// PostTranscript is the post-transcribe outcome for one recording: the text
+// that was pasted instead of Recording.Text, or the error that made zee paste
+// the raw text.
+type PostTranscript struct {
+	Profile string
+	Model   string
+	Text    string
+	Error   string
 }
 
 // Transcription appends the text to transcribe_log.txt and, when there is
 // audio, saves the clip next to it as recordings/<timestamp>/{audio.<ext>,
-// transcript.txt, info.json}. The log line carries the folder's path relative
-// to the log directory, so every line leads to its audio. That layout is what
+// transcript.txt, info.json}, plus post_transcript.txt when post-transcribe
+// rewrote it. The log line carries the folder's path relative to the log
+// directory, so every line leads to its audio; a rewritten text follows the raw
+// one as a last tab-separated field. That layout is what
 // `make bench-local WAV=<dir>/recordings` walks, so the folder doubles as an
 // eval corpus: add a corrected reference.txt beside a transcript.txt.
 func Transcription(r Recording) {
@@ -315,30 +331,62 @@ func Transcription(r Recording) {
 	}
 	logMu.Lock()
 	defer logMu.Unlock()
-	line := fmt.Sprintf("%s\t[%d]\t%s\t%s\n", now.Format("2006-01-02 15:04:05"), pid, rel, r.Text)
-	transcribeFile.WriteString(line)
+	line := fmt.Sprintf("%s\t[%d]\t%s\t%s", now.Format("2006-01-02 15:04:05"), pid, rel, lineEscaper.Replace(r.Text))
+	if r.Post.Text != "" {
+		line += "\t" + lineEscaper.Replace(r.Post.Text)
+	}
+	transcribeFile.WriteString(line + "\n")
 }
 
+// lineEscaper keeps a transcript or an LLM rewrite, which may hold tabs or
+// paragraphs, on its one tab-separated log line; transcript.txt and
+// post_transcript.txt keep the real text. A literal backslash is escaped too,
+// so dictated code like `a\n` stays distinct from a real line break.
+var lineEscaper = strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
+
 func saveRecording(now time.Time, r Recording) (string, error) {
-	// Milliseconds keep two quick taps in the same second apart.
-	rel := filepath.Join("recordings", now.Format("2006-01-02T15-04-05.000"))
-	abs := filepath.Join(dir, rel)
-	if err := os.MkdirAll(abs, 0755); err != nil {
+	// Milliseconds keep two quick taps in the same second apart; a suffix keeps
+	// two saves in the same millisecond from sharing (and overwriting) a folder.
+	if err := os.MkdirAll(filepath.Join(dir, "recordings"), 0755); err != nil {
 		return "", err
 	}
-	info, _ := json.MarshalIndent(map[string]any{
+	base := filepath.Join("recordings", now.Format("2006-01-02T15-04-05.000"))
+	rel := base
+	for n := 2; ; n++ {
+		err := os.Mkdir(filepath.Join(dir, rel), 0755)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) {
+			return "", err
+		}
+		rel = fmt.Sprintf("%s-%d", base, n)
+	}
+	abs := filepath.Join(dir, rel)
+	meta := map[string]any{
 		"provider":   r.Provider,
 		"model":      r.Model,
 		"lang":       r.Lang,
 		"format":     r.AudioExt,
 		"duration_s": r.DurationS,
 		"timestamp":  now.Format(time.RFC3339),
-	}, "", "  ")
-	for name, data := range map[string][]byte{
+	}
+	files := map[string][]byte{
 		"audio." + r.AudioExt: r.Audio,
 		"transcript.txt":      []byte(r.Text + "\n"),
-		"info.json":           info,
-	} {
+	}
+	if p := r.Post; p.Profile != "" {
+		post := map[string]any{"profile": p.Profile, "model": p.Model}
+		if p.Error != "" {
+			post["error"] = p.Error
+		}
+		meta["post_transcribe"] = post
+		if p.Text != "" {
+			files["post_transcript.txt"] = []byte(p.Text + "\n")
+		}
+	}
+	files["info.json"], _ = json.MarshalIndent(meta, "", "  ")
+	for name, data := range files {
 		if err := os.WriteFile(filepath.Join(abs, name), data, 0644); err != nil {
 			return "", err
 		}

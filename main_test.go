@@ -1,14 +1,19 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"zee/audio"
+	"zee/config"
 	"zee/encoder"
 	"zee/hotkey"
+	"zee/overlay"
 	"zee/transcriber"
 )
 
@@ -294,6 +299,159 @@ func TestDeviceChangeAction(t *testing.T) {
 		if got := deviceChangeAction(c.names, c.selected, c.preferred); got != c.want {
 			t.Errorf("%s: deviceChangeAction(%v, sel=%q, pref=%q) = %v, want %v",
 				c.name, c.names, c.selected, c.preferred, got, c.want)
+		}
+	}
+}
+
+// TestTagColor: a profile gets a palette colour on first use, saved to
+// config.json; a colour the user set is kept, unused profiles get none, and
+// "none" writes nothing.
+func TestTagColor(t *testing.T) {
+	config.SetDir(t.TempDir())
+	if err := config.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	if c := tagColor(""); c != "" {
+		t.Errorf("tagColor(\"\") = %q, want none", c)
+	}
+	if _, err := os.Stat(config.SettingsPath()); err == nil {
+		t.Error("config.json written although no profile was used")
+	}
+
+	config.Update(func(s *config.Settings) {
+		s.PostTranscribe.Colors = map[string]string{"friendly": "#123456"}
+	})
+	if c := tagColor("friendly"); c != "#123456" {
+		t.Errorf("friendly = %q, want the user's #123456 kept", c)
+	}
+	got := tagColor("clean")
+	if !slices.Contains(overlay.TagColors, got) {
+		t.Errorf("clean = %q, want a palette colour", got)
+	}
+
+	if err := config.Load(); err != nil { // read back what was saved
+		t.Fatal(err)
+	}
+	pt := config.Get().PostTranscribe
+	if pt.Colors["clean"] != got || tagColor("clean") != got {
+		t.Errorf("clean = %q after reload, want its first colour %q kept", pt.Colors["clean"], got)
+	}
+	if c, ok := pt.Colors["professional"]; ok {
+		t.Errorf("professional = %q, want no colour for an unused profile", c)
+	}
+}
+
+// TestSetTagColor: a first pick writes a new map, so a reader holding the old
+// one never sees it change; a set colour and "none" change nothing.
+func TestSetTagColor(t *testing.T) {
+	old := map[string]string{"friendly": "#123456"}
+	var s config.Settings
+	s.PostTranscribe.Colors = old
+
+	if c := setTagColor(&s, ""); c != "" || len(s.PostTranscribe.Colors) != 1 {
+		t.Errorf("setTagColor(\"\") = %q, colours %v; want none, unchanged", c, s.PostTranscribe.Colors)
+	}
+	if c := setTagColor(&s, "friendly"); c != "#123456" {
+		t.Errorf("friendly = %q, want #123456 kept", c)
+	}
+	c := setTagColor(&s, "clean")
+	if !slices.Contains(overlay.TagColors, c) || s.PostTranscribe.Colors["clean"] != c {
+		t.Errorf("clean = %q, colours %v; want a saved palette colour", c, s.PostTranscribe.Colors)
+	}
+	if _, ok := old["clean"]; ok {
+		t.Error("the colour was written into the map readers hold")
+	}
+}
+
+// TestResolvePost: an unknown profile name in config.json acts as None, so the
+// tray shows None and no recording runs the rewrite; config.json keeps the name.
+func TestResolvePost(t *testing.T) {
+	config.SetDir(t.TempDir())
+	if err := config.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolvePost(config.PostTranscribe{Active: "frendly"}); got.Active != "" {
+		t.Errorf("unknown profile resolved to %q, want none", got.Active)
+	}
+	if got := resolvePost(config.PostTranscribe{Active: "friendly"}); got.Active != "friendly" {
+		t.Errorf("friendly resolved to %q, want it kept", got.Active)
+	}
+	if _, err := os.Stat(config.SettingsPath()); err == nil {
+		t.Error("config.json written for an unknown profile")
+	}
+}
+
+// TestPasteAtEnd: a streaming session with a profile pastes its held-back text
+// even after a session error or a silence auto-close, as the live pastes
+// without a profile would have; batch and live-stream behaviour is unchanged.
+func TestPasteAtEnd(t *testing.T) {
+	errSess := errors.New("stream closed")
+	batch := recordingConfig{}
+	batchPost := recordingConfig{post: config.PostTranscribe{Active: "clean"}}
+	live := recordingConfig{stream: true}
+	held := recordingConfig{stream: true, post: config.PostTranscribe{Active: "clean"}}
+	for _, c := range []struct {
+		name       string
+		cfg        recordingConfig
+		hasText    bool
+		err        error
+		autoClosed bool
+		want       bool
+	}{
+		{"batch", batch, true, nil, false, true},
+		{"batch with profile", batchPost, true, nil, false, true},
+		{"batch error", batch, true, errSess, false, false},
+		{"batch with profile error", batchPost, true, errSess, false, false},
+		{"batch auto-closed", batch, true, nil, true, false},
+		{"batch no text", batch, false, nil, false, false},
+		{"live stream", live, true, nil, false, false},
+		{"live stream error", live, true, errSess, false, false},
+		{"held stream", held, true, nil, false, true},
+		{"held stream error", held, true, errSess, false, true},
+		{"held stream auto-closed", held, true, nil, true, true},
+		{"held stream no text", held, false, errSess, false, false},
+	} {
+		if got := pasteAtEnd(c.cfg, c.hasText, c.err, c.autoClosed); got != c.want {
+			t.Errorf("%s: pasteAtEnd = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// errSession is a finished session that returns committed text together with
+// a session error, as streamSession.Close does when the stream fails midway.
+type errSession struct{ updates chan string }
+
+func (errSession) Feed([]byte)              {}
+func (s errSession) Updates() <-chan string { return s.updates }
+func (errSession) Close() (transcriber.SessionResult, error) {
+	return transcriber.SessionResult{Text: "git rebase", HasText: true}, errors.New("stream closed")
+}
+
+// TestFinishTranscriptionHeldBackError: a held-back stream that fails midway
+// keeps its raw text as the last text; without a profile it was pasted live
+// and the error path leaves the last text alone, as before.
+func TestFinishTranscriptionHeldBackError(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		profile string
+		want    string
+	}{
+		{"profile", "clean", "git rebase"},
+		{"no profile", "", ""},
+	} {
+		clip.SetLastText("")
+		done := make(chan struct{})
+		close(done)
+		sess := errSession{updates: make(chan string)}
+		close(sess.updates)
+		cfg := recordingConfig{stream: true, post: config.PostTranscribe{Active: c.profile}}
+		finishTranscription(sess, nil, done, false, time.Second, cfg)
+		clip.textMu.Lock()
+		got := clip.lastText
+		clip.textMu.Unlock()
+		if got != c.want {
+			t.Errorf("%s: last text = %q, want %q", c.name, got, c.want)
 		}
 	}
 }

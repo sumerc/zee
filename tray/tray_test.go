@@ -54,3 +54,28 @@ func TestEffectiveLangRoundTrip(t *testing.T) {
 		t.Fatalf("switching back should restore tr, got %q", got)
 	}
 }
+
+// TestChoosePost: entry 0 is None (""), the rest follow the profiles; a click
+// reports the choice and moves the selection.
+func TestChoosePost(t *testing.T) {
+	var got []string
+	SetPostTranscribe([]PostProfile{{Name: "friendly"}, {Name: "clean"}}, "", func(name string) { got = append(got, name) })
+	t.Cleanup(func() {
+		// A nil callback keeps the current one, so drop the test's here.
+		SetPostTranscribe(nil, "", nil)
+		trayMu.Lock()
+		postCb = nil
+		trayMu.Unlock()
+	})
+
+	choosePost(2)
+	choosePost(0)
+	choosePost(9) // past the end: ignored
+
+	if len(got) != 2 || got[0] != "clean" || got[1] != "" {
+		t.Fatalf("callbacks = %q, want [clean \"\"]", got)
+	}
+	if postActive != "" {
+		t.Errorf("postActive = %q, want None", postActive)
+	}
+}

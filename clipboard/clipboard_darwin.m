@@ -10,7 +10,7 @@
 // Both replace things that cost real felt latency: pbcopy/pbpaste fork(), and
 // fork freezes every thread for O(resident memory), which is significant once a
 // local model is resident — while keybd_event held Cmd+V down for a hardcoded
-// 100 ms sleep. Measurements in docs/design-notes.md.
+// 100 ms sleep.
 
 // clipCopy replaces the pasteboard with one UTF-8 text item. Returns 1 on
 // success. No locale involved, unlike the pbcopy child process it replaces.

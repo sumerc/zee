@@ -64,10 +64,6 @@ what installs it.
 
 - [**Reference**](docs/reference.md) — flags, environment variables, config and log
   file layout, CLI install, building from source, testing and benchmarks.
-- [**Design notes**](docs/design-notes.md) — *why* the non-obvious choices were
-  made: which engine and model, which backend, what got measured, and which
-  alternatives were tried and rejected. Worth reading before changing anything in
-  `audio/`, `transcriber/`, or the local model registry.
 
 ## About
 

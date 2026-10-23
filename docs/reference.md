@@ -3,9 +3,6 @@
 Everything that doesn't belong in the [README](../README.md): the full flag
 surface, environment variables, building from source, and testing.
 
-For *why* the non-obvious choices were made — engines, models, backends, what was
-measured and what was rejected — see [design-notes.md](design-notes.md).
-
 ## Subcommands
 
 | Command | What it does |
@@ -52,15 +49,60 @@ app):
 
 | File | Contents |
 |---|---|
-| `config.json` | Settings: provider, model, device, hotkey, language, auto-paste |
+| `config.json` | Settings: provider, model, device, hotkey, language, auto-paste, post-transcribe |
 | `credentials.json` | Per-provider API keys, mode 0600. Environment variables are *not* read |
 | `hints.txt` | Vocabulary hints fed to the model |
 | `samples/` | Recordings saved from the tray, plus auto-saved failures |
 
+### Post-transcribe
+
+An optional LLM pass rewrites each transcript before it is pasted. It is off by
+default. Pick a profile from the tray (**Settings → Post-Transcribe**, **None**
+turns it off) or set it in `config.json` and **Reload Config**; either way it
+applies from the next recording, with no restart. It uses the `groq` key from
+`credentials.json`, with any provider for the transcription itself.
+
+```json
+"post_transcribe": {
+  "active": "friendly",
+  "model": "openai/gpt-oss-120b",
+  "prompts": {
+    "slack": "Adjust the tone to casual, for a Slack message, only where needed."
+  }
+}
+```
+
+- `active` — the profile to run; `""` (the default) turns it off.
+- `prompts` — your own profiles, name → a one- or two-sentence instruction. A
+  name that matches a built-in one replaces it.
+- `model` — any Groq chat model; omit it for `openai/gpt-oss-120b`. The rewrite
+  has a 5 s budget, so pick a fast model: a slow or reasoning-heavy one times out
+  on longer dictations and the raw transcript is pasted instead.
+- `colors` — each profile's colour for the recording overlay, `"#RRGGBB"`. zee
+  gives a profile without one a random colour from its palette the first time
+  you use it, and saves it so the colour stays put; edit it to choose your own.
+
+Built-in profiles: `clean` (the cleanup alone, tone untouched), `friendly`
+(conversational tone), `professional` (work email tone). Every profile fixes
+grammar and misheard words (toward `hints.txt`), removes filler, repetition and
+false starts, keeps the sentence in the language you spoke it in (English words
+inside a Turkish sentence stay English), and never answers the dictated text.
+
+While a profile is active, the recording overlay shows its name in the
+top-right corner, in its colour.
+
+If the call fails or times out, the raw transcript is pasted and the tray shows
+the error. In streaming mode the text is pasted once at the end instead of
+while you speak. With `-debug-transcribe`, each recording folder keeps the raw
+`transcript.txt` beside the rewritten `post_transcript.txt`, and `info.json`
+records the profile, the model and any error. The rewrite's time is
+`post_transcribe_ms` in the `felt_latency` line.
+
 Logs live in `~/Library/Logs/zee/`: `diagnostics_log.txt` (timing, errors;
 rotated at 10 MB), `crash_log.txt` (panics), and `transcribe_log.txt` (only with
 `-debug-transcribe`; each line points to its `recordings/<timestamp>/` folder of
-`audio.<ext>`, `transcript.txt` and `info.json`, which is never pruned).
+`audio.<ext>`, `transcript.txt`, `info.json` and, when post-transcribe rewrote
+it, `post_transcript.txt`; the folder is never pruned).
 
 ## Other ways to install
 

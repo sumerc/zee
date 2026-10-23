@@ -19,7 +19,7 @@ GGML_PREFIX   := $(CURDIR)/$(PARAKEET_DIR)/build-release/ggml-prefix
 # zee pins it here instead of taking parakeet.cpp's own pin, so a ggml bump does
 # not wait for a parakeet.cpp release. parakeet-lib moves the nested checkout to
 # this commit before configuring. v0.26.0: ~9% faster whisper on M5 (tensor-core
-# flash attention, few-row MMA mat-mul); see design-notes "ggml 0.26".
+# flash attention, few-row MMA mat-mul).
 GGML_DIR      := third_party/parakeet.cpp/third_party/ggml
 GGML_BASE     := d7cb574130e6f01ad25b3289685489200febcd74
 # In-tree patches to parakeet.cpp, applied as one set like the whisper ones.

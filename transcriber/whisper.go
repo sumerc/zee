@@ -17,8 +17,6 @@ import (
 // modes are asymmetric — a forced "en" still yields readable text for Turkish
 // speech, while auto can hand back Turkish for English and force a redo.
 // Auto stays selectable in the menu for genuinely unknown audio.
-// See docs/design-notes.md, "Why English is the default language for every
-// model".
 
 // whisperEngine adapts a loaded ggml model to localEngine.
 type whisperEngine struct{ ctx *whisper.Ctx }
@@ -26,8 +24,7 @@ type whisperEngine struct{ ctx *whisper.Ctx }
 // Hints are never passed to whisper, in any language. Whisper takes them as
 // initial_prompt, and that prompt conditions the output language and outranks
 // the language parameter: with -lang en, one bare hint word was enough to turn
-// English speech into Turkish. See design-notes, "Known: bare-list hints flip
-// the transcription language".
+// English speech into Turkish.
 //
 // TODO(hints): bring vocabulary biasing back to whisper through a mechanism
 // that is not the decoder prompt (separate PR).

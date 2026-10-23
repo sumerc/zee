@@ -29,7 +29,7 @@ void zeeBeepLoad(int idx, const void *wav, int len) {
 // the audio hardware — prepareToPlay does not prevent it, and the hardware powers
 // back down between beeps — and that landed on the push-to-talk path twice per
 // dictation, at press and at release. The user hears the tone at the same moment;
-// only the caller's wait is gone. Measured cost in docs/design-notes.md.
+// only the caller's wait is gone.
 void zeeBeepPlay(int idx) {
 	AVAudioPlayer *p = _players[idx];
 	if (p == nil) return;

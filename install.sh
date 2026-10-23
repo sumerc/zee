@@ -146,7 +146,7 @@ else
     # Resolve the tag from the /releases/latest redirect, not the GitHub API:
     # parsing the API JSON with awk assumed pretty-printed one-field-per-line
     # output and broke when a TLS-inspecting middlebox re-served the response
-    # minified (see design-notes). A Location header has no shape to mangle,
+    # minified. A Location header has no shape to mangle,
     # and skipping api.github.com also removes its unauthenticated rate limit.
     VERSION="$(curl -fsS -o /dev/null -w '%{redirect_url}' \
       "https://github.com/${REPO}/releases/latest")"

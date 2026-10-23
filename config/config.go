@@ -27,6 +27,21 @@ type Settings struct {
 	// TailWaitMs keeps the mic open this many ms after the hotkey is released so
 	// a fast keyup doesn't clip the last word. 0 disables the wait.
 	TailWaitMs int `json:"tail_wait_ms"`
+	// PostTranscribe rewrites each transcript with an LLM before it is pasted
+	// (see the posttranscribe package). Off unless Active names a profile.
+	PostTranscribe PostTranscribe `json:"post_transcribe"`
+}
+
+// PostTranscribe is the post_transcribe block of config.json. Active picks a
+// profile by name — one of the user's Prompts, else a built-in; "" is off.
+type PostTranscribe struct {
+	Active  string            `json:"active"`
+	Model   string            `json:"model,omitempty"`   // "" = the package default
+	Prompts map[string]string `json:"prompts,omitempty"` // name → instruction
+	// Colors is each profile's overlay tag colour, "#RRGGBB". zee fills in a
+	// colour for a profile the first time it is used, so it stays the same from
+	// then on.
+	Colors map[string]string `json:"colors,omitempty"`
 }
 
 const settingsFile = "config.json"

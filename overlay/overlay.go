@@ -7,6 +7,13 @@
 // bars instead of audible in a warning tone.
 package overlay
 
+import (
+	"math/rand/v2"
+	"slices"
+	"strconv"
+	"strings"
+)
+
 // State is what the overlay tells the user right now.
 type State int
 
@@ -79,6 +86,59 @@ func PushLevel(v float32) {
 		v = 1
 	}
 	pushLevel(v)
+}
+
+// TagColors is the tag palette: saturated neon hues that glow on the black
+// panel, minus red and amber, which already mean Recording and Silent.
+var TagColors = []string{
+	"#00E5FF", // cyan
+	"#FFE600", // yellow
+	"#FF3DF2", // magenta
+	"#7CFF4F", // lime
+	"#FF4FA3", // pink
+	"#B26BFF", // violet
+	"#4D7CFF", // electric blue
+	"#3DFFC5", // mint
+}
+
+// PickTagColor returns a random TagColors entry, preferring one not in used so
+// tags stay apart until the palette runs out.
+func PickTagColor(used []string) string {
+	var free []string
+	for _, c := range TagColors {
+		if !slices.ContainsFunc(used, func(u string) bool { return strings.EqualFold(u, c) }) {
+			free = append(free, c)
+		}
+	}
+	if len(free) == 0 {
+		free = TagColors
+	}
+	return free[rand.IntN(len(free))]
+}
+
+// SetTag shows a small label in the panel's top-right corner, drawn in color
+// ("#RRGGBB"; an unreadable value falls back to the first palette entry), or
+// hides it when text is "". The tag outlives Show/Hide and state changes until
+// set again.
+func SetTag(text, color string) {
+	r, g, b, ok := parseHex(color)
+	if !ok {
+		r, g, b, _ = parseHex(TagColors[0])
+	}
+	setTag(text, r, g, b)
+}
+
+// parseHex reads "#RRGGBB" (the # is optional) into 0..1 components.
+func parseHex(s string) (r, g, b float64, ok bool) {
+	s = strings.TrimPrefix(s, "#")
+	if len(s) != 6 {
+		return 0, 0, 0, false
+	}
+	v, err := strconv.ParseUint(s, 16, 32)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return float64(v>>16&0xff) / 255, float64(v>>8&0xff) / 255, float64(v&0xff) / 255, true
 }
 
 // Run takes over the calling thread with the platform event loop. Only

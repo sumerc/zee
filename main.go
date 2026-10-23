@@ -1,10 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -26,6 +28,7 @@ import (
 	"zee/login"
 	"zee/overlay"
 	"zee/permissions"
+	"zee/posttranscribe"
 	"zee/setup"
 	"zee/shutdown"
 	"zee/transcriber"
@@ -107,10 +110,11 @@ type recordingConfig struct {
 	lang            string
 	hints           string
 	autoPaste       bool
-	tailWait        time.Duration // mic kept open after release so a fast keyup doesn't clip the last word
-	pressToRecordMs float64       // press→mic-live, filled at record start; logged with the transcription metrics
-	releasedAt      time.Time     // recording end, filled once it happens; start of the felt-latency metric
-	micStopMs       float64       // capture stop duration, filled after the record loop ends
+	post            config.PostTranscribe // LLM rewrite before paste; off when post.Active == ""
+	tailWait        time.Duration         // mic kept open after release so a fast keyup doesn't clip the last word
+	pressToRecordMs float64               // press→mic-live, filled at record start; logged with the transcription metrics
+	releasedAt      time.Time             // recording end, filled once it happens; start of the felt-latency metric
+	micStopMs       float64               // capture stop duration, filled after the record loop ends
 }
 
 // clipSave carries the saved clipboard content plus how long the pbpaste fork
@@ -483,6 +487,15 @@ func run() {
 		}
 	})
 	tray.SetAutoPaste(autoPaste)
+	// A pick is saved like any other tray setting; each recording reads the
+	// config, so it applies from the next one without a restart.
+	tray.SetPostTranscribe(postMenu(cfg.PostTranscribe), resolvePost(cfg.PostTranscribe).Active, func(name string) {
+		config.Update(func(s *config.Settings) {
+			s.PostTranscribe.Active = name
+			setTagColor(s, name) // a first pick gives the profile its colour
+		})
+		log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
+	})
 
 	var trayModels []tray.Model
 	modelIndex := map[string]transcriber.ModelInfo{}
@@ -872,6 +885,8 @@ func run() {
 			}
 		}
 
+		tray.SetPostTranscribe(postMenu(s.PostTranscribe), resolvePost(s.PostTranscribe).Active, nil)
+
 		if want := s.Hotkey.OrDefault(); !want.Equal(hk.Current()) {
 			if err := hk.Rebind(want); err != nil {
 				log.Errorf("settings reload: hotkey %s: %v", want.Label, err)
@@ -1014,6 +1029,9 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		log.Info("recording_device: " + capture.DeviceName())
 		isRecording.Store(true) // already set when the session came from tryStartSession
 		tray.SetRecording(true)
+		// The active post-transcribe profile, top-right; nothing for None.
+		pt, _ := posttranscribe.Resolve(config.Get().PostTranscribe)
+		overlay.SetTag(pt.Active, tagColor(pt.Active))
 		overlay.Show() // every path — hotkey, toggle, tray — funnels through here
 
 		done, err := handleRecording(capture, sess)
@@ -1169,6 +1187,7 @@ func ensureAutoPasteAccessibility() {
 func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struct{}, error) {
 	clip.CancelRestore()
 
+	post, _ := posttranscribe.Resolve(config.Get().PostTranscribe)
 	configMu.Lock()
 	cfg := recordingConfig{
 		tr:        activeTranscriber,
@@ -1177,9 +1196,13 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		lang:      activeTranscriber.GetLanguage(),
 		hints:     config.GetHints(),
 		autoPaste: autoPaste,
+		post:      post,
 		tailWait:  time.Duration(config.Get().TailWaitMs) * time.Millisecond,
 	}
 	configMu.Unlock()
+	if cfg.post.Active != "" {
+		go posttranscribe.Warm()
+	}
 	if cfg.autoPaste && !permissions.HasAccessibility() {
 		cfg.autoPaste = false
 		tray.SetError("Auto-paste is waiting for Accessibility permission")
@@ -1216,7 +1239,9 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		defer close(updatesDone)
 		var prev string
 		for text := range tSess.Updates() {
-			if cfg.autoPaste && len(text) > len(prev) {
+			// With post-transcribe on, the rewritten text is pasted once at
+			// the end instead of the raw text streaming in.
+			if cfg.autoPaste && cfg.post.Active == "" && len(text) > len(prev) {
 				saveClip()
 				clip.PasteText(text[len(prev):])
 			}
@@ -1300,8 +1325,29 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 		}
 	}
 
-	if closeErr == nil && !cfg.stream && result.HasText && cfg.autoPaste && !skipPaste {
-		lat.PasteCopyMs, lat.PasteKeyMs = clip.PasteText(result.Text)
+	// text is what the user gets; result.Text stays the raw transcript, which
+	// the logs and saved recordings keep as the ASR output.
+	text := result.Text
+	var post log.PostTranscript
+	if closeErr == nil && result.HasText && !result.NoSpeech && cfg.post.Active != "" {
+		post = log.PostTranscript{Profile: cfg.post.Active, Model: posttranscribe.Model(cfg.post)}
+		t := time.Now()
+		out, err := posttranscribe.Rewrite(cfg.post, cfg.hints, text)
+		lat.PostTranscribeMs = float64(time.Since(t).Microseconds()) / 1000
+		if err != nil {
+			log.Warnf("post_transcribe: %v", err)
+			tray.SetError("Post-transcribe failed, used the raw transcript: " + err.Error())
+			post.Error = err.Error()
+		} else {
+			log.Info(fmt.Sprintf("post_transcribe: profile=%s ms=%.0f", cfg.post.Active, lat.PostTranscribeMs))
+			text = out
+			post.Text = out
+		}
+	}
+
+	pasted := cfg.autoPaste && pasteAtEnd(cfg, result.HasText, closeErr, skipPaste)
+	if pasted {
+		lat.PasteCopyMs, lat.PasteKeyMs = clip.PasteText(text)
 	}
 
 	// The text is delivered by here on both paths — streamed pastes were joined
@@ -1318,11 +1364,14 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 		log.ReleaseToText(float64(time.Since(cfg.releasedAt).Microseconds())/1000, lat)
 	}
 
-	if cfg.autoPaste && !skipPaste {
+	if cfg.autoPaste && (!skipPaste || pasted) {
 		clip.ScheduleRestore(clipPrev)
 	}
 
 	if closeErr != nil {
+		if heldBack(cfg) && result.HasText {
+			clip.SetLastText(text) // the raw text, kept for Copy Last
+		}
 		return
 	}
 
@@ -1375,7 +1424,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	}
 
 	if !result.NoSpeech {
-		clip.SetLastText(result.Text)
+		clip.SetLastText(text)
 		log.Transcription(log.Recording{
 			Text:      result.Text,
 			Audio:     result.AudioData,
@@ -1384,6 +1433,7 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 			Model:     cfg.tr.GetModel(),
 			Lang:      cfg.lang,
 			DurationS: recDur.Seconds(),
+			Post:      post,
 		})
 		var totalMs float64
 		if result.Batch != nil {
@@ -1395,6 +1445,83 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	}
 
 	setLastRecording(result, cfg, "")
+}
+
+// postMenu lists the post-transcribe profiles with their tray tooltips.
+func postMenu(pt config.PostTranscribe) []tray.PostProfile {
+	var ps []tray.PostProfile
+	for _, n := range posttranscribe.Profiles(pt) {
+		ps = append(ps, tray.PostProfile{Name: n, Tip: posttranscribe.Describe(pt, n)})
+	}
+	return ps
+}
+
+// resolvePost is pt as config.json was just loaded: an unknown profile name is
+// warned about once per load (startup or Reload Config) and acts as None.
+// config.json keeps the name.
+func resolvePost(pt config.PostTranscribe) config.PostTranscribe {
+	r, ok := posttranscribe.Resolve(pt)
+	if !ok {
+		log.Warnf("post_transcribe: unknown profile %q, using none", pt.Active)
+	}
+	return r
+}
+
+// heldBack reports whether a recording's text is pasted once at the end
+// instead of streaming in: a streaming session with a post-transcribe profile.
+func heldBack(cfg recordingConfig) bool { return cfg.stream && cfg.post.Active != "" }
+
+// pasteAtEnd reports whether finishTranscription pastes the text. A batch
+// session pastes a clean result unless silence auto-closed the recording. A
+// held-back stream pastes whatever text it has even after a session error (the
+// raw text: Close still returns what was committed) or an auto-close, since
+// without a profile that text would have been pasted live. A live stream has
+// pasted already.
+func pasteAtEnd(cfg recordingConfig, hasText bool, closeErr error, autoClosed bool) bool {
+	if !hasText {
+		return false
+	}
+	if heldBack(cfg) {
+		return true
+	}
+	return !cfg.stream && closeErr == nil && !autoClosed
+}
+
+// tagColor returns the overlay tag colour of post-transcribe profile name (""
+// for none). A profile gets a random palette colour the first time it is used,
+// saved so it keeps it from then on and the user can change it in config.json;
+// config.json is not touched for profiles nobody uses.
+func tagColor(name string) string {
+	if name == "" {
+		return ""
+	}
+	if c := config.Get().PostTranscribe.Colors[name]; c != "" {
+		return c
+	}
+	var color string
+	config.Update(func(s *config.Settings) { color = setTagColor(s, name) })
+	return color
+}
+
+// setTagColor gives profile name a palette colour in s unless it has one, and
+// returns its colour ("" for none). It runs inside config.Update, so a pick
+// and its first colour are one config.json write.
+func setTagColor(s *config.Settings, name string) string {
+	if name == "" {
+		return ""
+	}
+	c := &s.PostTranscribe
+	if c.Colors[name] == "" {
+		// Copy, then write: config.Get hands out this same map, and a reader
+		// holding it must never see it change.
+		colors := maps.Clone(c.Colors)
+		if colors == nil {
+			colors = map[string]string{}
+		}
+		colors[name] = overlay.PickTagColor(slices.Collect(maps.Values(colors)))
+		c.Colors = colors
+	}
+	return c.Colors[name]
 }
 
 // setLastRecording stashes the just-finished recording (audio + metadata) so the
