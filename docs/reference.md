@@ -59,12 +59,13 @@ app):
 An optional LLM pass rewrites each transcript before it is pasted. It is off by
 default. Pick a profile from the tray (**Settings → Post-Transcribe**, **None**
 turns it off) or set it in `config.json` and **Reload Config**; either way it
-applies from the next recording, with no restart. It uses the `groq` key from
-`credentials.json`, with any provider for the transcription itself.
+applies from the next recording, with no restart. It works with any provider
+for the transcription itself.
 
 ```json
 "post_transcribe": {
   "active": "friendly",
+  "provider": "groq",
   "model": "openai/gpt-oss-120b",
   "prompts": {
     "slack": "Adjust the tone to casual, for a Slack message, only where needed."
@@ -75,15 +76,17 @@ applies from the next recording, with no restart. It uses the `groq` key from
 - `active` — the profile to run; `""` (the default) turns it off.
 - `prompts` — your own profiles, name → a one- or two-sentence instruction. A
   name that matches a built-in one replaces it.
-- `model` — any Groq chat model; omit it for `openai/gpt-oss-120b`. The rewrite
-  has a 5 s budget, so pick a fast model: a slow or reasoning-heavy one times out
-  on longer dictations and the raw transcript is pasted instead.
-  Set it to `gemma-4-e2b` to run the rewrite on this Mac instead (Apple
-  Silicon only, no Groq key needed). Put `gemma-4-E2B-it-Q4_K_M.gguf` (3.1 GB)
-  in the models folder; zee loads it when a recording starts and keeps it in
-  memory (about 3 GB) from then on. The local rewrite is told the transcript's
-  language — the one you set, or the one Whisper detected — so it does not
-  translate it. It has no 5 s budget.
+- `provider` — where the rewrite runs: `groq` (the default; it needs the `groq`
+  key) or `local`, on this Mac (Apple Silicon only, no key needed).
+- `model` — for `groq`, any Groq chat model; omit it for `openai/gpt-oss-120b`.
+  The Groq rewrite has a 5 s budget, so pick a fast model: a slow or
+  reasoning-heavy one times out on longer dictations and the raw transcript is
+  pasted instead. For `local`, omit it for `gemma-4-e2b`, the one local model
+  for now. Put `gemma-4-E2B-it-Q4_K_M.gguf` (3.1 GB) in the models folder; zee
+  loads it when a recording starts and keeps it in memory from then on. The
+  local rewrite is told the transcript's language — the one you set, or the
+  one Whisper detected — so it does not translate it. Its time grows with the
+  length of the dictation, and it has no 5 s budget.
 - `colors` — each profile's colour for the recording overlay, `"#RRGGBB"`. zee
   gives a profile without one a random colour from its palette the first time
   you use it, and saves it so the colour stays put; edit it to choose your own.
