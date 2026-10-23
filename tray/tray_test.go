@@ -59,15 +59,21 @@ func TestEffectiveLangRoundTrip(t *testing.T) {
 // reports the choice and moves the selection.
 func TestChoosePost(t *testing.T) {
 	var got []string
-	SetPostTranscribe([]string{"friendly", "grammar"}, "", func(name string) { got = append(got, name) })
-	t.Cleanup(func() { SetPostTranscribe(nil, "", nil) })
+	SetPostTranscribe([]PostProfile{{Name: "friendly"}, {Name: "clean"}}, "", func(name string) { got = append(got, name) })
+	t.Cleanup(func() {
+		// A nil callback keeps the current one, so drop the test's here.
+		SetPostTranscribe(nil, "", nil)
+		trayMu.Lock()
+		postCb = nil
+		trayMu.Unlock()
+	})
 
 	choosePost(2)
 	choosePost(0)
 	choosePost(9) // past the end: ignored
 
-	if len(got) != 2 || got[0] != "grammar" || got[1] != "" {
-		t.Fatalf("callbacks = %q, want [grammar \"\"]", got)
+	if len(got) != 2 || got[0] != "clean" || got[1] != "" {
+		t.Fatalf("callbacks = %q, want [clean \"\"]", got)
 	}
 	if postActive != "" {
 		t.Errorf("postActive = %q, want None", postActive)

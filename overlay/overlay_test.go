@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -28,7 +29,7 @@ func TestPickTagColor(t *testing.T) {
 	for _, c := range TagColors[1:] {
 		used = append(used, c)
 	}
-	used[0] = "#ffd60a" // lower case still counts as taken
+	used[0] = strings.ToLower(used[0]) // lower case still counts as taken
 	for range 20 {
 		if got := PickTagColor(used); got != TagColors[0] {
 			t.Fatalf("PickTagColor = %q, want the only free %q", got, TagColors[0])

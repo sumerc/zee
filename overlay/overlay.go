@@ -88,18 +88,17 @@ func PushLevel(v float32) {
 	pushLevel(v)
 }
 
-// TagColors is the tag palette: Apple's dark-mode system colours minus red and
-// amber, which already mean Recording and Silent. Every entry reads on the
-// black panel and they sit well together, so any pick from it looks right.
+// TagColors is the tag palette: saturated neon hues that glow on the black
+// panel, minus red and amber, which already mean Recording and Silent.
 var TagColors = []string{
-	"#0A84FF", // blue
-	"#FFD60A", // yellow
-	"#BF5AF2", // purple
-	"#30D158", // green
-	"#FF6FB5", // pink
-	"#40C8E0", // teal
-	"#7D7AFF", // indigo
-	"#63E6BE", // mint
+	"#00E5FF", // cyan
+	"#FFE600", // yellow
+	"#FF3DF2", // magenta
+	"#7CFF4F", // lime
+	"#FF4FA3", // pink
+	"#B26BFF", // violet
+	"#4D7CFF", // electric blue
+	"#3DFFC5", // mint
 }
 
 // PickTagColor returns a random TagColors entry, preferring one not in used so

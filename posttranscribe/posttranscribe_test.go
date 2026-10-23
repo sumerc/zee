@@ -71,7 +71,7 @@ func TestRewriteBuiltin(t *testing.T) {
 func TestRewriteStripsTranscriptTags(t *testing.T) {
 	defer func(r string) { reply = r }(reply)
 	reply = `{"choices":[{"message":{"content":"<transcript>\n Hello there! \n</transcript>\n"}}]}`
-	out, err := Rewrite(config.PostTranscribe{Active: "grammar"}, "", "hello their")
+	out, err := Rewrite(config.PostTranscribe{Active: "clean"}, "", "hello their")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,15 +82,15 @@ func TestRewriteStripsTranscriptTags(t *testing.T) {
 
 func TestRewriteUserProfileShadowsBuiltin(t *testing.T) {
 	c := config.PostTranscribe{
-		Active:  "grammar",
+		Active:  "friendly",
 		Model:   "llama-3.3-70b-versatile",
-		Prompts: map[string]string{"grammar": "Only fix typos."},
+		Prompts: map[string]string{"friendly": "Only fix typos."},
 	}
 	if _, err := Rewrite(c, "", "x"); err != nil {
 		t.Fatal(err)
 	}
 	sys := last.Messages[0].Content
-	if !strings.Contains(sys, "Only fix typos.") || strings.Contains(sys, Builtin["grammar"]) {
+	if !strings.Contains(sys, "Only fix typos.") || strings.Contains(sys, Builtin["friendly"]) {
 		t.Errorf("user prompt did not replace the built-in:\n%s", sys)
 	}
 	if strings.Contains(sys, "Vocabulary") {
@@ -103,13 +103,13 @@ func TestRewriteUserProfileShadowsBuiltin(t *testing.T) {
 
 func TestRewriteUnknownProfile(t *testing.T) {
 	_, err := Rewrite(config.PostTranscribe{Active: "pirate", Prompts: map[string]string{"mine": "x"}}, "", "x")
-	if err == nil || !strings.Contains(err.Error(), "grammar, friendly, professional, concise, mine") {
+	if err == nil || !strings.Contains(err.Error(), "clean, friendly, professional, mine") {
 		t.Errorf("err = %v, want the list of profiles", err)
 	}
 }
 
 func TestRewriteErrors(t *testing.T) {
-	defer func() { reply, replyCode = `{"choices":[{"message":{"content":"ok"}}]}`, http.StatusOK }()
+	defer func(r string, c int) { reply, replyCode = r, c }(reply, replyCode)
 	for _, tc := range []struct {
 		name, body string
 		code       int
@@ -121,7 +121,7 @@ func TestRewriteErrors(t *testing.T) {
 		{"empty text", `{"choices":[{"message":{"content":"  "}}]}`, http.StatusOK, "empty"},
 	} {
 		reply, replyCode = tc.body, tc.code
-		_, err := Rewrite(config.PostTranscribe{Active: "grammar"}, "", "x")
+		_, err := Rewrite(config.PostTranscribe{Active: "friendly"}, "", "x")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
 		}
@@ -153,19 +153,22 @@ func TestWarm(t *testing.T) {
 }
 
 func TestProfiles(t *testing.T) {
-	got := Profiles(config.PostTranscribe{Prompts: map[string]string{"slack": "x", "grammar": "y"}})
-	want := []string{"grammar", "friendly", "professional", "concise", "slack"}
+	got := Profiles(config.PostTranscribe{Prompts: map[string]string{"slack": "x", "clean": "y"}})
+	want := []string{"clean", "friendly", "professional", "slack"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("Profiles = %q, want %q", got, want)
 	}
 }
 
-// TestBuiltinOrder: every built-in is listed exactly once, so none is missing
-// from the tray menu or shares a tag colour.
+// TestBuiltinOrder: every built-in is listed exactly once and described, so
+// none is missing from the tray menu or its tooltip.
 func TestBuiltinOrder(t *testing.T) {
 	got := slices.Sorted(slices.Values(builtinOrder))
 	want := slices.Sorted(maps.Keys(Builtin))
 	if !slices.Equal(got, want) {
 		t.Errorf("builtinOrder = %q, want the keys of Builtin %q", builtinOrder, want)
+	}
+	if d := slices.Sorted(maps.Keys(descriptions)); !slices.Equal(d, want) {
+		t.Errorf("descriptions cover %q, want every built-in %q", d, want)
 	}
 }

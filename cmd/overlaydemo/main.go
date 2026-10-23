@@ -30,7 +30,7 @@ func drive() {
 	var state atomic.Int32
 	go func() {
 		states := []overlay.State{overlay.Recording, overlay.Silent, overlay.Transcribing}
-		tags := []string{"", "grammar", "friendly", "professional", "concise", "slack", "teal-six", "a-very-long-profile-name"}
+		tags := []string{"", "clean", "friendly", "professional", "slack", "magenta", "lime", "a-very-long-profile-name"}
 		for i := 0; ; i++ {
 			s := states[i%len(states)]
 			state.Store(int32(s))

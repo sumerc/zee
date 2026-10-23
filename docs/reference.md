@@ -80,12 +80,11 @@ applies from the next recording, with no restart. It uses the `groq` key from
   gives a profile without one a random colour from its palette the first time
   you use it, and saves it so the colour stays put; edit it to choose your own.
 
-Built-in profiles: `grammar` (spelling, punctuation, grammar; wording kept),
-`friendly` (conversational tone), `professional` (work email tone), `concise`
-(filler and repetition removed). Every profile also corrects misheard words
-toward `hints.txt`, keeps the sentence in the language you spoke it in (English
-words inside a Turkish sentence stay English), and never answers the dictated
-text.
+Built-in profiles: `clean` (the cleanup alone, tone untouched), `friendly`
+(conversational tone), `professional` (work email tone). Every profile fixes
+grammar and misheard words (toward `hints.txt`), removes filler, repetition and
+false starts, keeps the sentence in the language you spoke it in (English words
+inside a Turkish sentence stay English), and never answers the dictated text.
 
 While a profile is active, the recording overlay shows its name in the
 top-right corner, in its colour.

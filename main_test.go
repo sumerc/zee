@@ -325,20 +325,20 @@ func TestTagColor(t *testing.T) {
 	if c := tagColor("friendly"); c != "#123456" {
 		t.Errorf("friendly = %q, want the user's #123456 kept", c)
 	}
-	got := tagColor("grammar")
+	got := tagColor("clean")
 	if !slices.Contains(overlay.TagColors, got) {
-		t.Errorf("grammar = %q, want a palette colour", got)
+		t.Errorf("clean = %q, want a palette colour", got)
 	}
 
 	if err := config.Load(); err != nil { // read back what was saved
 		t.Fatal(err)
 	}
 	pt := config.Get().PostTranscribe
-	if pt.Colors["grammar"] != got || tagColor("grammar") != got {
-		t.Errorf("grammar = %q after reload, want its first colour %q kept", pt.Colors["grammar"], got)
+	if pt.Colors["clean"] != got || tagColor("clean") != got {
+		t.Errorf("clean = %q after reload, want its first colour %q kept", pt.Colors["clean"], got)
 	}
-	if c, ok := pt.Colors["concise"]; ok {
-		t.Errorf("concise = %q, want no colour for an unused profile", c)
+	if c, ok := pt.Colors["professional"]; ok {
+		t.Errorf("professional = %q, want no colour for an unused profile", c)
 	}
 }
 
@@ -348,9 +348,9 @@ func TestTagColor(t *testing.T) {
 func TestPasteAtEnd(t *testing.T) {
 	errSess := errors.New("stream closed")
 	batch := recordingConfig{}
-	batchPost := recordingConfig{post: config.PostTranscribe{Active: "grammar"}}
+	batchPost := recordingConfig{post: config.PostTranscribe{Active: "clean"}}
 	live := recordingConfig{stream: true}
-	held := recordingConfig{stream: true, post: config.PostTranscribe{Active: "grammar"}}
+	held := recordingConfig{stream: true, post: config.PostTranscribe{Active: "clean"}}
 	for _, c := range []struct {
 		name       string
 		cfg        recordingConfig
@@ -397,7 +397,7 @@ func TestFinishTranscriptionHeldBackError(t *testing.T) {
 		profile string
 		want    string
 	}{
-		{"profile", "grammar", "git rebase"},
+		{"profile", "clean", "git rebase"},
 		{"no profile", "", ""},
 	} {
 		clip.SetLastText("")

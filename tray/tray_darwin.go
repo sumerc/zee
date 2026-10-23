@@ -646,7 +646,8 @@ func refreshPostMenu() {
 			item.Hide()
 			continue
 		}
-		item.SetTitle(cmp.Or(names[i], "None"))
+		item.SetTitle(cmp.Or(names[i].Name, "None"))
+		item.SetTooltip(names[i].Tip)
 		item.Show()
 	}
 	renderPostChecks()
@@ -660,7 +661,7 @@ func renderPostChecks() {
 	names, active, items := postEntries(), postActive, slices.Clone(postItems)
 	trayMu.Unlock()
 	for i, item := range items {
-		if i < len(names) && names[i] == active {
+		if i < len(names) && names[i].Name == active {
 			item.Check()
 		} else {
 			item.Uncheck()

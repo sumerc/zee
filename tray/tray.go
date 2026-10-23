@@ -67,8 +67,8 @@ var (
 	// (persist=false) are always accepted.
 	langCb func(code string, persist bool) bool
 
-	postProfiles []string // Post-Transcribe entries after "None"
-	postActive   string   // selected profile; "" = None
+	postProfiles []PostProfile // Post-Transcribe entries after "None"
+	postActive   string        // selected profile; "" = None
 	postCb       func(name string)
 
 	appVersion     string
@@ -242,10 +242,19 @@ func OnEditSettings(fn func())    { editSettingsCb = fn }
 func OnEditCredentials(fn func()) { editCredsCb = fn }
 func OnReloadConfig(fn func())    { reloadCfgCb = fn }
 
+// PostProfile is one Post-Transcribe menu entry: the profile name and the
+// tooltip shown when hovering it.
+type PostProfile struct {
+	Name, Tip string
+}
+
+// noneTip is the tooltip of the None entry.
+const noneTip = "Paste the transcript as spoken."
+
 // SetPostTranscribe lists the post-transcribe profiles and marks the active one
 // ("" = None). Before Init it seeds the menu build; after Init (config-file
 // reload) it re-renders the submenu. A nil onSwitch keeps the current callback.
-func SetPostTranscribe(profiles []string, active string, onSwitch func(name string)) {
+func SetPostTranscribe(profiles []PostProfile, active string, onSwitch func(name string)) {
 	trayMu.Lock()
 	postProfiles, postActive = profiles, active
 	if onSwitch != nil {
@@ -257,8 +266,8 @@ func SetPostTranscribe(profiles []string, active string, onSwitch func(name stri
 
 // postEntries is the Post-Transcribe submenu in order: None ("") first, then
 // the profiles. Caller holds trayMu.
-func postEntries() []string {
-	return append([]string{""}, postProfiles...)
+func postEntries() []PostProfile {
+	return append([]PostProfile{{Tip: noneTip}}, postProfiles...)
 }
 
 // choosePost records a click on the idx-th Post-Transcribe entry and reports
@@ -270,11 +279,11 @@ func choosePost(idx int) {
 		trayMu.Unlock()
 		return
 	}
-	postActive = names[idx]
+	postActive = names[idx].Name
 	cb := postCb
 	trayMu.Unlock()
 	if cb != nil {
-		cb(names[idx])
+		cb(names[idx].Name)
 	}
 }
 

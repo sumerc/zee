@@ -489,7 +489,7 @@ func run() {
 	tray.SetAutoPaste(autoPaste)
 	// A pick is saved like any other tray setting; each recording reads the
 	// config, so it applies from the next one without a restart.
-	tray.SetPostTranscribe(posttranscribe.Profiles(cfg.PostTranscribe), cfg.PostTranscribe.Active, func(name string) {
+	tray.SetPostTranscribe(postMenu(cfg.PostTranscribe), cfg.PostTranscribe.Active, func(name string) {
 		config.Update(func(s *config.Settings) { s.PostTranscribe.Active = name })
 		tagColor(name) // a first pick gives the profile its colour
 		log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
@@ -883,7 +883,7 @@ func run() {
 			}
 		}
 
-		tray.SetPostTranscribe(posttranscribe.Profiles(s.PostTranscribe), s.PostTranscribe.Active, nil)
+		tray.SetPostTranscribe(postMenu(s.PostTranscribe), s.PostTranscribe.Active, nil)
 
 		if want := s.Hotkey.OrDefault(); !want.Equal(hk.Current()) {
 			if err := hk.Rebind(want); err != nil {
@@ -1444,6 +1444,15 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	setLastRecording(result, cfg, "")
 }
 
+// postMenu lists the post-transcribe profiles with their tray tooltips.
+func postMenu(pt config.PostTranscribe) []tray.PostProfile {
+	var ps []tray.PostProfile
+	for _, n := range posttranscribe.Profiles(pt) {
+		ps = append(ps, tray.PostProfile{Name: n, Tip: posttranscribe.Describe(pt, n)})
+	}
+	return ps
+}
+
 // heldBack reports whether a recording's text is pasted once at the end
 // instead of streaming in: a streaming session with a post-transcribe profile.
 func heldBack(cfg recordingConfig) bool { return cfg.stream && cfg.post.Active != "" }
@@ -1479,10 +1488,14 @@ func tagColor(name string) string {
 	config.Update(func(s *config.Settings) {
 		c := &s.PostTranscribe
 		if c.Colors[name] == "" {
-			if c.Colors == nil {
-				c.Colors = map[string]string{}
+			// Copy, then write: config.Get hands out this same map, and a
+			// reader holding it must never see it change.
+			colors := maps.Clone(c.Colors)
+			if colors == nil {
+				colors = map[string]string{}
 			}
-			c.Colors[name] = overlay.PickTagColor(slices.Collect(maps.Values(c.Colors)))
+			colors[name] = overlay.PickTagColor(slices.Collect(maps.Values(colors)))
+			c.Colors = colors
 		}
 		color = c.Colors[name]
 	})

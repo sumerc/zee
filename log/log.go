@@ -339,8 +339,10 @@ func Transcription(r Recording) {
 }
 
 // lineEscaper keeps an LLM rewrite, which may hold paragraphs, on its one
-// tab-separated log line; post_transcript.txt keeps the real text.
-var lineEscaper = strings.NewReplacer("\n", `\n`, "\r", `\r`, "\t", `\t`)
+// tab-separated log line; post_transcript.txt keeps the real text. A literal
+// backslash is escaped too, so dictated code like `a\n` stays distinct from a
+// real line break.
+var lineEscaper = strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
 
 func saveRecording(now time.Time, r Recording) (string, error) {
 	// Milliseconds keep two quick taps in the same second apart; a suffix keeps

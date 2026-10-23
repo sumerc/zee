@@ -202,7 +202,7 @@ func TestTranscriptionPostTranscribeMultiline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rewrite := "Hi,\r\n\nCould you\tcheck?"
+	rewrite := "Hi,\r\n\nCould you\tcheck C:\\new?"
 	Transcription(Recording{Text: "hi could you check", Audio: []byte("RIFF"), AudioExt: "wav",
 		Post: PostTranscript{Profile: "friendly", Model: "m", Text: rewrite}})
 
@@ -215,7 +215,7 @@ func TestTranscriptionPostTranscribeMultiline(t *testing.T) {
 		t.Fatalf("want 1 line, got %q", data)
 	}
 	f := strings.Split(lines[0], "\t")
-	if want := `Hi,\r\n\nCould you\tcheck?`; len(f) != 5 || f[4] != want {
+	if want := `Hi,\r\n\nCould you\tcheck C:\\new?`; len(f) != 5 || f[4] != want {
 		t.Fatalf("unexpected line: %q, want last field %q", lines[0], want)
 	}
 	if got, _ := os.ReadFile(filepath.Join(tmp, f[2], "post_transcript.txt")); string(got) != rewrite+"\n" {

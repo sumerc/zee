@@ -20,7 +20,7 @@
 #define BAR_MIN_H   3.0
 #define INSET      16.0   // horizontal inset of the shape's body
 #define BOTTOM_R   18.0
-#define PANEL_W   200.0
+#define PANEL_W   216.0
 #define COLLAPSED_W 148.0 // width of the notch we grow out of
 #define DOT         7.0
 #define FONT_SIZE  11.0
@@ -41,17 +41,19 @@
 // The tag: a small pill at the top-right, level with the dot. Its right edge
 // stays inside the shape where the top corner bows in, and TAG_MAX_W keeps it
 // clear of the centred dot; longer text is cut with an ellipsis.
-#define TAG_FONT   10.0
-#define TAG_H      16.0
-#define TAG_PAD_X   4.0
-#define TAG_RIGHT  (PANEL_W - INSET - 4.0)
-#define TAG_MAX_W  (TAG_RIGHT - (PANEL_W + DOT) / 2 - 5.0)
+#define TAG_FONT    9.5
+#define TAG_H      15.0
+#define TAG_PAD_X   6.0
+#define TAG_CORE    0.45 // text colour washed this far toward white
+#define TAG_FILL    0.25 // pill fill: the colour darkened to this much
+#define TAG_RIGHT  (PANEL_W - INSET - 7.0)
+#define TAG_MAX_W  (TAG_RIGHT - (PANEL_W + DOT) / 2 - 8.0)
 
-#define ROW_DOT    11.0
-#define ROW_LABEL  28.0
-#define ROW_BARS   58.0
-#define BODY_H     82.0   // ROW_BARS + half a bar + bottom padding
-#define COMPACT_H  46.0   // shape height with the meter hidden: label + padding
+#define ROW_DOT    13.0
+#define ROW_LABEL  34.0
+#define ROW_BARS   62.0
+#define BODY_H     86.0   // ROW_BARS + half a bar + bottom padding
+#define COMPACT_H  52.0   // shape height with the meter hidden: label + padding
 
 static NSPanel      *gPanel;
 static CAShapeLayer *gShape;
@@ -267,13 +269,17 @@ static void buildPanel(void) {
 	gLabel.foregroundColor = [NSColor colorWithWhite:1.0 alpha:0.85].CGColor;
 	[gContent addSublayer:gLabel];
 
-	// Coloured text on a faint pill of the same colour: readable on the black
-	// shape for any palette entry, and quieter than the status it sits beside.
+	// A neon sign on the black shape: outlined pill with a dark solid fill,
+	// glowing text. Colours are set per tag in zeeOverlaySetTag.
 	gTag = [CALayer layer];
 	gTag.cornerRadius = TAG_H / 2;
 	gTag.hidden = YES;
 	[gContent addSublayer:gTag];
+	gTag.borderWidth = 1.0;
 	gTagText = [CATextLayer layer];
+	gTagText.shadowOpacity = 1.0;
+	gTagText.shadowRadius = 3.0;
+	gTagText.shadowOffset = CGSizeZero;
 	gTagText.font = (CFTypeRef)tagFont();
 	gTagText.fontSize = TAG_FONT;
 	gTagText.truncationMode = kCATruncationEnd;
@@ -407,8 +413,17 @@ void zeeOverlaySetTag(const char *text, double r, double g, double b) {
 		[CATransaction begin];
 		[CATransaction setDisableActions:YES];
 		gTagText.string = str;
-		gTagText.foregroundColor = [NSColor colorWithSRGBRed:r green:g blue:b alpha:1.0].CGColor;
-		gTag.backgroundColor = [NSColor colorWithSRGBRed:r green:g blue:b alpha:0.22].CGColor;
+		// Neon sign: the text is the colour washed toward white (a tube's hot
+		// core) with a glow of the pure colour; the pill is an opaque, dark fill
+		// of the colour with a sharp outline, and does not glow itself.
+		CGColorRef pure = [NSColor colorWithSRGBRed:r green:g blue:b alpha:1.0].CGColor;
+		gTagText.foregroundColor = [NSColor colorWithSRGBRed:r + (1 - r) * TAG_CORE
+		                                               green:g + (1 - g) * TAG_CORE
+		                                                blue:b + (1 - b) * TAG_CORE
+		                                               alpha:1.0].CGColor;
+		gTagText.shadowColor = pure;
+		gTag.borderColor = pure;
+		gTag.backgroundColor = [NSColor colorWithSRGBRed:r * TAG_FILL green:g * TAG_FILL blue:b * TAG_FILL alpha:1.0].CGColor;
 		layoutTag();
 		[CATransaction commit];
 	});
