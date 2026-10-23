@@ -91,6 +91,9 @@ func systemPrompt(profile, hints string) string {
 	return s
 }
 
+// maxErrBody is how many runes of an HTTP error body the returned error keeps.
+const maxErrBody = 200
+
 var apiURL = "https://api.groq.com/openai/v1/chat/completions"
 
 var client = sync.OnceValue(func() *transcriber.TracedClient {
@@ -168,7 +171,12 @@ func complete(apiKey, model, system, text string) (string, error) {
 		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s API error %d: %s", Provider, resp.StatusCode, string(resp.Body))
+		// The error ends up in the tray, so a long error page is cut short.
+		body := []rune(string(resp.Body))
+		if len(body) > maxErrBody {
+			body = append(body[:maxErrBody], '…')
+		}
+		return "", fmt.Errorf("%s API error %d: %s", Provider, resp.StatusCode, string(body))
 	}
 	var r response
 	if err := json.Unmarshal(resp.Body, &r); err != nil {

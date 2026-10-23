@@ -111,6 +111,7 @@ func TestRewriteErrors(t *testing.T) {
 		want       string
 	}{
 		{"http error", `{"error":"bad key"}`, http.StatusUnauthorized, "401"},
+		{"long http error", strings.Repeat("x", 1000), http.StatusBadGateway, strings.Repeat("x", maxErrBody) + "…"},
 		{"no choices", `{"choices":[]}`, http.StatusOK, "no choices"},
 		{"empty text", `{"choices":[{"message":{"content":"  "}}]}`, http.StatusOK, "empty"},
 	} {
@@ -118,6 +119,9 @@ func TestRewriteErrors(t *testing.T) {
 		_, err := Rewrite(config.PostTranscribe{Active: "grammar"}, "", "x")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+		}
+		if err != nil && strings.Contains(err.Error(), strings.Repeat("x", maxErrBody+1)) {
+			t.Errorf("%s: error body not cut short: %d bytes", tc.name, len(err.Error()))
 		}
 	}
 }
