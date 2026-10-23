@@ -94,7 +94,7 @@ func TestInitWithoutTranscribe(t *testing.T) {
 	}
 }
 
-func TestTranscriptionText(t *testing.T) {
+func TestTranscription(t *testing.T) {
 	tmp := setupLogDir(t)
 	SetTranscribeEnabled(true)
 	t.Cleanup(func() { SetTranscribeEnabled(false) })
@@ -103,19 +103,36 @@ func TestTranscriptionText(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	TranscriptionText("hello world")
+	Transcription(Recording{Text: "hello world", Audio: []byte("RIFF"), AudioExt: "wav", Provider: "parakeet"})
+	Transcription(Recording{Text: "no audio"})
 
 	data, err := os.ReadFile(filepath.Join(tmp, "transcribe_log.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	line := string(data)
-	if !strings.Contains(line, "hello world") {
-		t.Errorf("transcribe_log.txt missing text, got: %q", line)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 lines, got %q", data)
 	}
-	// format: "2006-01-02 15:04:05\t[pid]\ttext\n"
-	if !strings.Contains(line, "\t") {
-		t.Errorf("expected tab-separated format, got: %q", line)
+
+	// format: "2006-01-02 15:04:05\t[pid]\t<recording dir or ->\ttext"
+	f := strings.Split(lines[0], "\t")
+	if len(f) != 4 || f[3] != "hello world" {
+		t.Fatalf("unexpected line: %q", lines[0])
+	}
+	rec := filepath.Join(tmp, f[2])
+	for name, want := range map[string]string{"audio.wav": "RIFF", "transcript.txt": "hello world\n"} {
+		got, err := os.ReadFile(filepath.Join(rec, name))
+		if err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", name, got, err, want)
+		}
+	}
+	if info, err := os.ReadFile(filepath.Join(rec, "info.json")); err != nil || !strings.Contains(string(info), `"parakeet"`) {
+		t.Errorf("info.json = %q, %v", info, err)
+	}
+
+	if f := strings.Split(lines[1], "\t"); len(f) != 4 || f[2] != "-" {
+		t.Errorf("line without audio should carry \"-\" as its path: %q", lines[1])
 	}
 }
 

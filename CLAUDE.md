@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Rules
 - **CHANGELOG.md** — do not touch it. It is written only at release time, by hand. Never add an entry for a fix, a feature, or anything else during normal work.
-- **docs/design-notes.md** — the *why* behind non-obvious choices, and the record of what was measured (including options tried and rejected). Read it before revisiting an engine/model/backend decision; a surprising line of code usually has its reason there. Add an entry when a decision rests on a measurement or a rejected alternative — facts, not narrative. **Facts are updated; decisions are superseded.** A statement about the world (what an API offers, what a model file contains) that turns out to be wrong or has changed gets edited in place — never leave a knowingly-false sentence standing for the record, since the next reader cannot tell it from a live one. A *decision* overturned by later evidence gets marked superseded rather than deleted; the code often still reflects why it *used* to be the right call, and a rejected option must stay rejected on the record.
+- **docs/design-notes.md** — the *why* behind non-obvious choices, and the record of what was measured (including options tried and rejected). Read it before revisiting an engine/model/backend decision; a surprising line of code usually has its reason there. Add an entry when a decision rests on a measurement or a rejected alternative — facts, not narrative. **Facts are updated; decisions are superseded.** A statement about the world (what an API offers, what a model file contains) that turns out to be wrong or has changed gets edited in place — never leave a knowingly-false sentence standing for the record, since the next reader cannot tell it from a live one. A *decision* overturned by later evidence gets marked superseded rather than deleted; the code often still reflects why it *used* to be the right call, and a rejected option must stay rejected on the record. **Every claim carries a timestamp** — the date checked plus the version/commit checked against; no open-ended market claims ("nobody beats X", "no model has Y").
 - **No performance numbers in code comments** — they are machine-specific and go stale silently. Say *what* is slow and *why* ("-play blocks while it starts the audio hardware"), and put the measurement in `docs/design-notes.md`, where the hardware is on the record. If a number really must appear in a comment, name the machine with it (e.g. "~47 ms on an M5 Pro").
 - **Clean package interface** — every package must expose a single, platform-neutral interface describing *what it provides*, defined once (typically in `<pkg>.go`). Public API, shared types, and guard logic live there; platform/provider files (build-tag variants) only implement the backend hooks. Never duplicate the public API across build-tag files (see `audio/`: `audio.go` owns the capture interface plus `PlayStart/PlayEnd/...`, platform files provide only the backends — `initSound`/`playOne` for playback, the malgo/pulse capture impls).
 
@@ -68,7 +68,7 @@ overwriting. `BENCH_FILE=` overrides the destination.
 
 ## Flags
 
-- `-debug-transcribe` - enable transcription text logging (diagnostic logging is always on)
+- `-debug-transcribe` - log every transcription to `transcribe_log.txt` and save its audio + transcript under `recordings/<timestamp>/` in the log dir — an eval corpus `make bench-local` can walk (diagnostic logging is always on)
 - `-format <mp3@16|mp3@64|flac>` - audio format (default: mp3@16)
 - `-lang <code>` - language code for transcription (default: en, also settable from tray menu)
 - `-device <name>` - use named microphone device (also switchable from tray menu)
@@ -128,7 +128,7 @@ Option+Space keydown → record audio → encode (mode-based) → API call → c
 - Override with `ZEE_LOG_PATH` env var or `-logpath <path>` flag (supports relative paths, use `./` for current directory)
 - `crash_log.txt` - panic recovery (always enabled)
 - `diagnostics_log.txt` - timing metrics, errors, warnings (always enabled, rotated at 10 MB)
-- `transcribe_log.txt` - transcription text history (requires `-debug-transcribe`)
+- `transcribe_log.txt` - transcription text history, each line with its `recordings/<timestamp>/` folder (`audio.<ext>`, `transcript.txt`, `info.json`); requires `-debug-transcribe`, never pruned
 
 ## Releasing
 
