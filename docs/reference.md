@@ -104,7 +104,7 @@ If the call fails or times out, the raw transcript is pasted and the tray shows
 the error. In streaming mode the text is pasted once at the end instead of
 while you speak. With `-debug-transcribe`, each recording folder keeps the raw
 `transcript.txt` beside the rewritten `post_transcript.txt`, and `info.json`
-records the profile, the model and any error. The rewrite's time is
+records the profile, the provider, the model and any error. The rewrite's time is
 `post_transcribe_ms` in the `felt_latency` line.
 
 Logs live in `~/Library/Logs/zee/`: `diagnostics_log.txt` (timing, errors;
