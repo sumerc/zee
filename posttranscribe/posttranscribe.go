@@ -79,6 +79,7 @@ const rules = `You clean up a speech-to-text transcript before it is pasted. The
 Fix phonetic and transcription errors, and remove filler, repetition and false starts. Keep the speaker's words, meaning and intent: do not rewrite, and add nothing.
 Keep each word in the language it was spoken in, even where the sentence's language has its own word for it: never translate.
 Restore an English word that the transcriber spelled by its sound in another language's letters to its English spelling, keeping any suffix.
+Keep code, file paths, URLs, commands and numbers exactly as they are.
 Reply with the cleaned text only.`
 
 func systemPrompt(profile, hints string) string {
