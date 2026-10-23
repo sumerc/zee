@@ -1,6 +1,7 @@
 package transcriber
 
 import (
+	"cmp"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -110,6 +111,7 @@ func (bs *batchSession) Close() (SessionResult, error) {
 	netMetrics := result.Metrics
 
 	sr := SessionResult{
+		Lang:        cmp.Or(bs.cfg.Language, langCode(result.Lang)),
 		Text:        text,
 		HasText:     !noSpeech,
 		NoSpeech:    noSpeech,

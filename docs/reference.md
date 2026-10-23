@@ -84,8 +84,10 @@ for the transcription itself.
   pasted instead. For `local`, omit it for `gemma-4-e2b`, the one local model
   for now. Put `gemma-4-E2B-it-Q4_K_M.gguf` (3.1 GB) in the models folder; zee
   loads it when a recording starts and keeps it in memory from then on. The
-  local rewrite is told the transcript's language — the one you set, or the
-  one Whisper detected — so it does not translate it. Its time grows with the
+  local rewrite is told the transcript's language — the one you set, or with
+  Auto-detect the one the transcription detected (local Whisper, Groq,
+  Deepgram, Mistral and ElevenLabs report it; OpenAI does not) — so it does
+  not translate it. Its time grows with the
   length of the dictation, and it has no 5 s budget.
 - `colors` — each profile's colour for the recording overlay, `"#RRGGBB"`. zee
   gives a profile without one a random colour from its palette the first time

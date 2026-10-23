@@ -112,6 +112,7 @@ func (m *Mistral) Transcribe(audioData []byte, format, lang, hints string) (*Res
 
 	return &Result{
 		Text:        mResp.Text,
+		Lang:        mResp.Language,
 		Metrics:     resp.Metrics,
 		RateLimit:   remaining + "/" + limit,
 		Duration:    mResp.Duration,

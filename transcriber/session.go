@@ -66,7 +66,8 @@ type SessionResult struct {
 	AudioData    []byte       // exact bytes sent to the model
 	AudioFormat  string       // "mp3", "flac", or "wav"
 	// Lang is the transcript's language (ISO 639-1): the one the session was
-	// forced to, else the one auto-detect picked; "" when neither is known.
+	// forced to, else the one the engine or provider detected; "" when neither
+	// is known.
 	Lang string
 }
 
