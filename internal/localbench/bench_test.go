@@ -155,6 +155,9 @@ func BenchmarkTranscribe(b *testing.B) {
 	clips := benchClips(b)
 
 	for _, m := range localmodel.All() {
+		if m.Engine == localmodel.EngineLlama {
+			continue // a post-transcribe LLM, not a speech model
+		}
 		if !localmodel.Present(m) {
 			b.Logf("skipping %s: not downloaded (run make download-models)", m.ID)
 			continue

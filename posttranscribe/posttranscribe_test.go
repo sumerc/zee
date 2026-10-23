@@ -47,7 +47,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestRewriteBuiltin(t *testing.T) {
-	out, err := Rewrite(config.PostTranscribe{Active: "friendly"}, "Claude, JSON", "hello their")
+	out, err := Rewrite(config.PostTranscribe{Active: "friendly"}, "Claude, JSON", "tr", "hello their")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +64,9 @@ func TestRewriteBuiltin(t *testing.T) {
 	if !strings.Contains(user, "<transcript>\nhello their\n</transcript>") {
 		t.Errorf("user message = %q", user)
 	}
+	if strings.Contains(sys, "The transcript is in") {
+		t.Errorf("Groq prompt names the language; only the local model gets that line:\n%s", sys)
+	}
 }
 
 // TestRewriteStripsTranscriptTags: a reply that echoes the <transcript>
@@ -71,7 +74,7 @@ func TestRewriteBuiltin(t *testing.T) {
 func TestRewriteStripsTranscriptTags(t *testing.T) {
 	defer func(r string) { reply = r }(reply)
 	reply = `{"choices":[{"message":{"content":"<transcript>\n Hello there! \n</transcript>\n"}}]}`
-	out, err := Rewrite(config.PostTranscribe{Active: "clean"}, "", "hello their")
+	out, err := Rewrite(config.PostTranscribe{Active: "clean"}, "", "", "hello their")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +89,7 @@ func TestRewriteUserProfileShadowsBuiltin(t *testing.T) {
 		Model:   "llama-3.3-70b-versatile",
 		Prompts: map[string]string{"friendly": "Only fix typos."},
 	}
-	if _, err := Rewrite(c, "", "x"); err != nil {
+	if _, err := Rewrite(c, "", "", "x"); err != nil {
 		t.Fatal(err)
 	}
 	sys := last.Messages[0].Content
@@ -102,7 +105,7 @@ func TestRewriteUserProfileShadowsBuiltin(t *testing.T) {
 }
 
 func TestRewriteUnknownProfile(t *testing.T) {
-	_, err := Rewrite(config.PostTranscribe{Active: "pirate", Prompts: map[string]string{"mine": "x"}}, "", "x")
+	_, err := Rewrite(config.PostTranscribe{Active: "pirate", Prompts: map[string]string{"mine": "x"}}, "", "", "x")
 	if err == nil || !strings.Contains(err.Error(), "clean, friendly, professional, mine") {
 		t.Errorf("err = %v, want the list of profiles", err)
 	}
@@ -141,7 +144,7 @@ func TestRewriteErrors(t *testing.T) {
 		{"empty text", `{"choices":[{"message":{"content":"  "}}]}`, http.StatusOK, "empty"},
 	} {
 		reply, replyCode = tc.body, tc.code
-		_, err := Rewrite(config.PostTranscribe{Active: "friendly"}, "", "x")
+		_, err := Rewrite(config.PostTranscribe{Active: "friendly"}, "", "", "x")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
 		}
@@ -160,7 +163,7 @@ func TestWarm(t *testing.T) {
 	warms.Store(0)
 
 	for want := int32(1); want <= 2; want++ {
-		Warm()
+		Warm(config.PostTranscribe{})
 		// The new client's own warm-up runs in the background.
 		for deadline := time.Now().Add(2 * time.Second); warms.Load() < want && time.Now().Before(deadline); {
 			time.Sleep(5 * time.Millisecond)
