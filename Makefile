@@ -254,7 +254,7 @@ bench-save: whisper-lib download-models
 		| grep -vE 'duplicate librar|Backend using device' >> "$(BENCH_FILE)"
 	@echo "appended a baseline block to $(BENCH_FILE)"
 
-test-integration: whisper-lib
+test-integration: whisper-lib llama-lib
 	@tmp=$$(mktemp -d) && \
 	$(CGO_ENV) go build -o "$$tmp/zee-test-bin" . && \
 	ZEE_TEST_BIN="$$tmp/zee-test-bin" $(CGO_ENV) go test -race -tags integration -v -timeout 600s -count=1 ./test/ ; \
