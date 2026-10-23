@@ -2203,3 +2203,50 @@ clip" in the Qwen entry above, may be English speech. whisper `-l en`,
 Nemotron and NeMo-Speech give the same coherent English, and whisper-auto's
 Turkish loops. If so, Qwen did not translate; whisper-auto did. Listen to
 the clip before editing that entry.
+
+## The silence warning clears on a 1 s window, not the 8 s one that raised it (2026-10-20)
+
+The warning fires when under 10% of the last 8 s (80 × 100 ms ticks) holds
+speech. It used to clear when that same 8 s window reached 25%. At the moment
+it fires the window is near-empty, so clearing needed 20 speech ticks — at
+least 2 s of unbroken speech, about 3 s with normal pauses. The rule dated from
+February, but it only became noticeable once the overlay (2026-07-25) put the
+"Silent" label in front of the user while its level bars, gated on a 250 ms
+VAD hold, visibly reacted at once.
+
+Now: clear when 5 of the last 10 ticks hold speech (0.5 s minimum). A lone VAD
+false positive is 1 of 10 and does not clear. On a clear the 8 s warn window
+restarts — otherwise the few speech ticks that cleared it leave the 8 s ratio
+under 10% and the warning re-fires (with its error beep) on the next tick.
+
+## A stalled stream fails the session; it never blocks capture or drops chunks (2026-10-20)
+
+`streamSession.Feed` runs on the capture callback, under the recording lock.
+It used to hand chunks to the sender with a blocking channel send. On a network
+stall the websocket write blocked (the stream context has no deadline), the
+128-chunk queue filled, and Feed blocked for good: `isRecording` stayed true and
+the hotkey was dead until restart.
+
+Now each write has its own timeout, Feed never blocks, and a full queue fails the
+stream. Close aborts a failed stream at once and gives a healthy one a bounded
+time to flush. Rejected: dropping chunks on a full queue and carrying on. That
+would paste a transcript with silent holes in it. A failed stream instead takes
+the existing error path, and the full PCM (kept regardless of stream health) is
+auto-saved to `samples/` for a retry.
+
+## A local session waits for the model in Close, not NewSession (2026-10-20)
+
+`localProvider.NewSession` used to wait out the model load (read + warm-up)
+before it returned. `handleRecording` calls it before `rec.Start()`, so while a
+model loaded at startup or after a switch, the start beep and overlay said
+"Recording" but no audio was captured, and the speech was lost. The comment
+saying "recording overlaps the load" was wrong.
+
+Now NewSession returns at once and the session resolves the engine in Close.
+Only a model file missing from disk still fails in NewSession, because no
+recording could be transcribed with it. Rejected: starting a `go p.load()` from
+NewSession to also overlap loads that no background warm started (after a
+failed load, or after `Close`). That goroutine can outlive the session and get
+`loadMu` after a provider switch has called `Close`. It would then load the old
+provider's model again, and nothing would ever free it. Those rare cases load
+in Close instead.

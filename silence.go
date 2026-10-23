@@ -10,7 +10,13 @@ const (
 	silenceWarnEvery    = 8 * time.Second
 	silenceAutoCloseDur = 30 * time.Second
 	speechMinRatio      = 0.10
-	speechClearRatio    = 0.25 // higher threshold to clear warning (hysteresis)
+
+	// The warning clears on a short window, not the 8s one that raised it:
+	// that window is nearly empty when the warning fires, so clearing on it
+	// kept the warning up for seconds after speech resumed. Half of the last
+	// second still ignores a lone VAD false positive.
+	silenceClearWindow = 1 * time.Second
+	speechClearRatio   = 0.5
 )
 
 type SilenceEvent int
@@ -25,6 +31,7 @@ const (
 
 type silenceMonitor struct {
 	warnAt   int
+	clearAt  int
 	windowSz int
 
 	silenceClose *atomic.Bool
@@ -34,6 +41,7 @@ type silenceMonitor struct {
 	speechCount int
 	warned      bool
 	lastBeep    int
+	armedAt     int // tick the warn window starts from: session start or last clear
 }
 
 func newSilenceMonitor(silenceClose *atomic.Bool) *silenceMonitor {
@@ -41,6 +49,7 @@ func newSilenceMonitor(silenceClose *atomic.Bool) *silenceMonitor {
 	windowSz := int(silenceAutoCloseDur / tickInterval)
 	return &silenceMonitor{
 		warnAt:       warnAt,
+		clearAt:      int(silenceClearWindow / tickInterval),
 		windowSz:     windowSz,
 		silenceClose: silenceClose,
 		window:       make([]bool, windowSz),
@@ -74,17 +83,18 @@ func (m *silenceMonitor) Tick(hasSpeech bool) SilenceEvent {
 	}
 	m.ticks++
 
-	r := m.ratio(m.warnAt)
-
-	// Warn: 8s window below threshold
-	if m.ticks >= m.warnAt && r < speechMinRatio && !m.warned {
+	// Warn: 8s window below threshold. The window restarts on a clear —
+	// the speech that cleared it is too little to keep a full 8s window above
+	// threshold, and the warning would fire again on the next tick.
+	if !m.warned && m.ticks-m.armedAt >= m.warnAt && m.ratio(m.warnAt) < speechMinRatio {
 		m.warned = true
 		m.lastBeep = m.ticks
 		return SilenceWarn
 	}
-	// Clear: speech ratio above clear threshold
-	if m.warned && r >= speechClearRatio {
+	// Clear: speech in the last second
+	if m.warned && m.ratio(m.clearAt) >= speechClearRatio {
 		m.warned = false
+		m.armedAt = m.ticks
 		return SilenceWarnClear
 	}
 

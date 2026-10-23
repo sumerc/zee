@@ -47,7 +47,7 @@ func AwaitRecord(hk Hotkey, longPress, timeout time.Duration) (stop <-chan struc
 	}
 	stopCh := make(chan struct{})
 	go func() {
-		WaitStop(hk, longPress, nil)
+		WaitStop(hk, longPress, nil, nil)
 		close(stopCh)
 	}()
 	return stopCh, true
@@ -60,11 +60,16 @@ func AwaitRecord(hk Hotkey, longPress, timeout time.Duration) (stop <-chan struc
 // (the app uses it to arm silence auto-close). Shared by the main record loop
 // and `zee doctor`, so both behave identically.
 //
+// ended (optional; nil never fires) closes when the recording stops some other
+// way — silence auto-close, the tray, an error. Toggle mode then returns at
+// once instead of waiting for a tap: otherwise the user's next press, meant to
+// start a new recording, would be eaten as the stop tap of the finished one.
+//
 // It returns how long keydown→keyup took as observed (downToUp) and whether it
 // resolved to toggle mode — surfaced for diagnostics: a downToUp far above
 // longPress on a quick tap means the keyup event arrived late (a stalled run
 // loop), which is what makes a tap misfire as a hold.
-func WaitStop(hk Hotkey, longPress time.Duration, onToggle func()) (downToUp time.Duration, toggled bool) {
+func WaitStop(hk Hotkey, longPress time.Duration, ended <-chan struct{}, onToggle func()) (downToUp time.Duration, toggled bool) {
 	start := time.Now()
 	timer := time.NewTimer(longPress)
 	defer timer.Stop()
@@ -77,8 +82,11 @@ func WaitStop(hk Hotkey, longPress time.Duration, onToggle func()) (downToUp tim
 		if onToggle != nil {
 			onToggle()
 		}
-		<-hk.Keydown()
-		<-hk.Keyup()
+		select {
+		case <-hk.Keydown():
+			<-hk.Keyup()
+		case <-ended:
+		}
 		return downToUp, true
 	}
 }

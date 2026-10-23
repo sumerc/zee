@@ -117,12 +117,20 @@ func (d *Deepgram) startStream(ctx context.Context, cfg streamSessionConfig) (ra
 }
 
 func (s *deepgramStreamSession) Send(pcm []byte) error {
-	return s.conn.Write(s.ctx, websocket.MessageBinary, pcm)
+	return s.write(websocket.MessageBinary, pcm)
 }
 
 func (s *deepgramStreamSession) CloseSend() error {
-	msg := []byte(`{"type":"Finalize"}`)
-	return s.conn.Write(s.ctx, websocket.MessageText, msg)
+	return s.write(websocket.MessageText, []byte(`{"type":"Finalize"}`))
+}
+
+// write bounds each write on its own: the stream ctx has no deadline (it lives
+// as long as the session), so a stalled network would block a bare write
+// forever. A timed-out write closes the connection, failing the stream.
+func (s *deepgramStreamSession) write(typ websocket.MessageType, p []byte) error {
+	ctx, cancel := context.WithTimeout(s.ctx, streamSendTimeout)
+	defer cancel()
+	return s.conn.Write(ctx, typ, p)
 }
 
 func (s *deepgramStreamSession) Recv() (streamUpdate, error) {

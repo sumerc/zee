@@ -1,6 +1,7 @@
 package transcriber
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,8 +16,24 @@ const (
 	streamChunkBytes   = encoder.SampleRate * encoder.Channels * (encoder.BitsPerSample / 8) * streamChunkMs / 1000
 	streamFinalizeIdle = 200 * time.Millisecond
 	streamFinalizeMax  = 2000 * time.Millisecond
+	// streamSendTimeout bounds one websocket write. A stalled network makes a
+	// write block instead of fail, and a sender stuck there never drains audioCh.
+	streamSendTimeout = 5 * time.Second
+	// streamQueueChunks is how much audio may wait for the sender before Feed
+	// gives up on the stream.
+	streamQueueChunks = 128
 )
 
+// streamDrainMax bounds how long Close waits for the sender to flush the
+// queued audio before it aborts the stream. A var so tests can shorten it.
+var streamDrainMax = 5 * time.Second
+
+// errStreamStalled is recorded when the sender falls a full queue behind:
+// Feed runs on the capture callback and must never block on the network.
+var errStreamStalled = errors.New("stream stalled: network not keeping up, audio kept for saving")
+
+// rawStreamSession is one provider websocket. Close must unblock a Send or Recv
+// in progress; streamSession relies on it to abort a stalled stream.
 type rawStreamSession interface {
 	Send(pcm []byte) error
 	CloseSend() error
@@ -51,7 +68,6 @@ type streamSession struct {
 
 	mu      sync.Mutex
 	err     error
-	errOnce sync.Once
 	closing bool
 	stats   streamStats
 }
@@ -74,7 +90,7 @@ func (s streamStats) audioDuration() float64 {
 
 func newStreamSession(dial func() (rawStreamSession, error)) *streamSession {
 	ss := &streamSession{
-		audioCh:   make(chan []byte, 128),
+		audioCh:   make(chan []byte, streamQueueChunks),
 		updates:   make(chan string, 16),
 		startedAt: time.Now(),
 		sendDone:  make(chan struct{}),
@@ -91,11 +107,7 @@ func newStreamSession(dial func() (rawStreamSession, error)) *streamSession {
 		ss.mu.Unlock()
 
 		if err != nil {
-			ss.errOnce.Do(func() {
-				ss.mu.Lock()
-				ss.err = err
-				ss.mu.Unlock()
-			})
+			ss.recordErr(err)
 			close(ss.sendDone)
 			close(ss.recvDone)
 			close(ss.connected)
@@ -138,7 +150,22 @@ func (s *streamSession) Feed(pcm []byte) {
 	s.feedMu.Unlock()
 
 	for _, chunk := range chunks {
-		s.audioCh <- chunk
+		if !s.enqueue(chunk) {
+			return
+		}
+	}
+}
+
+// enqueue hands a chunk to the sender without blocking. A full queue means the
+// sender is stuck on the network: the stream is failed rather than letting the
+// capture callback (and the recording lock it holds) wait on it.
+func (s *streamSession) enqueue(chunk []byte) bool {
+	select {
+	case s.audioCh <- chunk:
+		return true
+	default:
+		s.recordErr(errStreamStalled)
+		return false
 	}
 }
 
@@ -149,47 +176,52 @@ func (s *streamSession) Updates() <-chan string {
 func (s *streamSession) Close() (SessionResult, error) {
 	<-s.connected
 
-	// If connection failed, drain and return error
-	s.mu.Lock()
-	if s.err != nil {
-		connErr := s.err
-		s.mu.Unlock()
-		go func() { // drain audioCh so any blocked Feed() unblocks
-			for range s.audioCh {
-			}
-		}()
-		s.feedMu.Lock()
-		s.feedBuf = nil
-		s.feedMu.Unlock()
-		close(s.audioCh)
-		<-s.sendDone
-		<-s.recvDone
+	// The dial failed: sender and receiver never ran.
+	if s.ws == nil {
 		close(s.updates)
 		sr := SessionResult{NoSpeech: true}
 		s.attachAudio(&sr)
-		return sr, connErr
+		return sr, s.sessionErr()
 	}
-	s.mu.Unlock()
 
 	// Flush remaining buffered PCM
 	s.feedMu.Lock()
-	if len(s.feedBuf) > 0 {
+	if len(s.feedBuf) > 0 && s.sessionErr() == nil {
 		tail := make([]byte, len(s.feedBuf))
 		copy(tail, s.feedBuf)
-		s.feedBuf = nil
-		s.audioCh <- tail
+		s.enqueue(tail)
 	}
+	s.feedBuf = nil
 	s.feedMu.Unlock()
 	close(s.audioCh)
 	finalizeStart := time.Now()
 
-	<-s.sendDone
-
-	// Wait for server finalize acknowledgment, then brief quiet period
+	// A failed stream has nothing left worth sending: abort it now, which also
+	// unblocks a write stuck on the network. A healthy one gets streamDrainMax
+	// to flush its queue.
+	if s.sessionErr() != nil {
+		s.ws.Close()
+	}
 	select {
-	case <-s.finalized:
-		time.Sleep(streamFinalizeIdle)
-	case <-time.After(streamFinalizeMax):
+	case <-s.sendDone:
+	case <-time.After(streamDrainMax):
+		s.recordErr(fmt.Errorf("stream send did not finish in %s", streamDrainMax))
+		s.ws.Close()
+		select {
+		case <-s.sendDone:
+		case <-time.After(2 * time.Second):
+			log.Warn("stream sender drain timeout")
+		}
+	}
+
+	// Wait for server finalize acknowledgment, then brief quiet period. A
+	// failed stream never gets one.
+	if s.sessionErr() == nil {
+		select {
+		case <-s.finalized:
+			time.Sleep(streamFinalizeIdle)
+		case <-time.After(streamFinalizeMax):
+		}
 	}
 
 	s.mu.Lock()
@@ -265,6 +297,9 @@ func (s *streamSession) attachAudio(sr *SessionResult) {
 func (s *streamSession) runSender() {
 	defer close(s.sendDone)
 	for chunk := range s.audioCh {
+		if s.sessionErr() != nil {
+			return // the stream already failed; the queued audio is moot
+		}
 		if err := s.ws.Send(chunk); err != nil {
 			s.setErr(err)
 			return
@@ -335,18 +370,29 @@ func (s *streamSession) runReceiver() {
 	}
 }
 
+// setErr records a sender/receiver failure and closes the websocket so the
+// other goroutine unblocks. Only those goroutines call it, so ws is set.
 func (s *streamSession) setErr(err error) {
-	if err == nil {
-		return
+	if err != nil && s.recordErr(err) {
+		s.ws.Close()
 	}
-	s.errOnce.Do(func() {
-		s.mu.Lock()
-		s.err = err
-		s.mu.Unlock()
-		if s.ws != nil {
-			s.ws.Close()
-		}
-	})
+}
+
+// recordErr keeps the first error and reports whether this call set it.
+func (s *streamSession) recordErr(err error) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return false
+	}
+	s.err = err
+	return true
+}
+
+func (s *streamSession) sessionErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
 }
 
 func (s *streamSession) formatMetrics(stats streamStats) []string {

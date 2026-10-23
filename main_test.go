@@ -49,7 +49,7 @@ func TestRecordSessionsBlocksDuringInference(t *testing.T) {
 
 	// Start a recording, let it capture briefly, then stop it (as a keyup would)
 	// so the 800ms "inference" begins.
-	sessions <- recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}}
+	sessions <- recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}, Ended: make(chan struct{})}
 	time.Sleep(150 * time.Millisecond)
 	requestStop()
 
@@ -120,7 +120,7 @@ func TestRecordSessionsPicksUpDeviceSwitch(t *testing.T) {
 
 	runSession := func() {
 		want := atomic.LoadInt32(&cycles) + 1
-		sessions <- recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}}
+		sessions <- recSession{Stop: resetStop(), SilenceClose: &atomic.Bool{}, Ended: make(chan struct{})}
 		time.Sleep(120 * time.Millisecond)
 		requestStop()
 		deadline := time.Now().Add(3 * time.Second)
@@ -151,6 +151,10 @@ func TestRecordSessionsPicksUpDeviceSwitch(t *testing.T) {
 	}
 }
 
+// TestListenHotkey_TrayStopNoStaleSignal: a toggle recording ended from the
+// tray must leave the hotkey ready — the very next tap starts a new session
+// (it used to be eaten as the stop tap of the finished one), and that session
+// is not stopped by a stale signal from the old one.
 func TestListenHotkey_TrayStopNoStaleSignal(t *testing.T) {
 	hk := hotkey.NewFake()
 	sessions := make(chan recSession, 3)
@@ -162,28 +166,29 @@ func TestListenHotkey_TrayStopNoStaleSignal(t *testing.T) {
 	isRecording.Store(false)
 	hk.SimKeydown()
 	sess1 := <-sessions
-	isRecording.Store(true)
 	time.Sleep(10 * time.Millisecond)
 	hk.SimKeyup()
 
-	// 2. Tray stop ends the recording externally
+	// 2. Tray stop ends the recording externally; recordSessions closes Ended
+	// and releases the cycle.
 	requestStop()
-	isRecording.Store(false)
 	select {
 	case <-sess1.Stop:
 	case <-time.After(time.Second):
 		t.Fatal("tray stop did not end session")
 	}
+	close(sess1.Ended)
+	isRecording.Store(false)
+	time.Sleep(20 * time.Millisecond) // let listenHotkey leave WaitStop
 
-	// 3. Still in toggleRecording — this tap transitions back to idle
+	// 3. The next tap starts a new session at once
 	hk.SimKeydown()
-	hk.SimKeyup()
-	time.Sleep(20 * time.Millisecond) // let state machine settle
-
-	// 4. New tap should start a session that stays alive
-	hk.SimKeydown()
-	sess2 := <-sessions
-	isRecording.Store(true)
+	var sess2 recSession
+	select {
+	case sess2 = <-sessions:
+	case <-time.After(time.Second):
+		t.Fatal("first tap after a tray stop was swallowed instead of starting a recording")
+	}
 	time.Sleep(10 * time.Millisecond)
 	hk.SimKeyup()
 
@@ -191,8 +196,9 @@ func TestListenHotkey_TrayStopNoStaleSignal(t *testing.T) {
 	case <-sess2.Stop:
 		t.Fatal("new session immediately stopped by stale stopCh signal")
 	case <-time.After(300 * time.Millisecond):
-		// session stayed alive — fix works
+		// session stayed alive
 	}
+	isRecording.Store(false)
 }
 
 func TestListenHotkey_StopsTrayRecording(t *testing.T) {

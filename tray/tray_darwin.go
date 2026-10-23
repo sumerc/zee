@@ -3,6 +3,9 @@
 package tray
 
 import (
+	"slices"
+	"sync"
+
 	"github.com/energye/systray"
 	"golang.design/x/hotkey/mainthread"
 
@@ -15,8 +18,12 @@ var (
 	mCopy          *systray.MenuItem
 	mDevices       *systray.MenuItem
 	mDefaultDevice *systray.MenuItem
-	deviceItems    []*systray.MenuItem
+	deviceItems    []*systray.MenuItem // guarded by trayMu
 	deviceReady    chan struct{}
+	// deviceMenuMu serializes RefreshDevices (the device watcher and Reload
+	// Config both call it), so two renders can't append the same new items.
+	// Never taken on the main thread.
+	deviceMenuMu sync.Mutex
 
 	mSettings     *systray.MenuItem
 	mAutoPaste    *systray.MenuItem
@@ -38,12 +45,14 @@ var (
 	// models, so a model-state change can re-derive the group's enabled state
 	// and "(no API key)" suffix (a key added via Reload Config re-enables its
 	// provider without rebuilding the menu).
-	modelGroups []struct {
-		item       *systray.MenuItem
-		label      string
-		start, end int
-	}
+	modelGroups []modelGroup
 )
+
+type modelGroup struct {
+	item       *systray.MenuItem
+	label      string
+	start, end int
+}
 
 func Init() <-chan struct{} {
 	deviceReady = make(chan struct{})
@@ -137,32 +146,50 @@ func addDeviceItem(parent *systray.MenuItem, idx int, name string, checked bool)
 		if cb != nil && currentName != "" {
 			cb(currentName)
 		}
-		trayMu.Lock()
-		if mDefaultDevice != nil {
-			mDefaultDevice.Uncheck()
-		}
-		for _, it := range deviceItems {
-			it.Uncheck()
-		}
-		if idx < len(deviceItems) {
-			deviceItems[idx].Check()
-		}
-		trayMu.Unlock()
+		checkDevice(idx)
 	})
 	return item
 }
 
+// checkDevice moves the checkmark to deviceItems[idx], or to System Default
+// when idx is -1.
+func checkDevice(idx int) {
+	trayMu.Lock()
+	items := deviceItems
+	trayMu.Unlock()
+	if idx < 0 {
+		mDefaultDevice.Check()
+	} else {
+		mDefaultDevice.Uncheck()
+	}
+	for i, it := range items {
+		if i == idx {
+			it.Check()
+		} else {
+			it.Uncheck()
+		}
+	}
+}
+
+// RefreshDevices re-renders the device submenu. It runs off the main thread,
+// and every systray call waits for the main thread to apply it — where menu
+// click handlers take trayMu — so state is swapped under trayMu and the menu is
+// drawn after releasing it. Holding trayMu across the draw was a lock cycle
+// that froze the app.
 func RefreshDevices(names []string, selected string) {
 	if deviceReady == nil {
 		return
 	}
 	<-deviceReady
 
-	trayMu.Lock()
-	defer trayMu.Unlock()
+	deviceMenuMu.Lock()
+	defer deviceMenuMu.Unlock()
 
+	trayMu.Lock()
 	deviceNames = names
 	deviceSel = selected
+	items := deviceItems
+	trayMu.Unlock()
 
 	if mDefaultDevice != nil {
 		if selected == "" {
@@ -172,7 +199,7 @@ func RefreshDevices(names []string, selected string) {
 		}
 	}
 
-	for i, item := range deviceItems {
+	for i, item := range items {
 		if i < len(names) {
 			label := deviceDisplayName(names[i])
 			item.SetTitle(label)
@@ -189,9 +216,14 @@ func RefreshDevices(names []string, selected string) {
 		}
 	}
 
-	for i := len(deviceItems); i < len(names); i++ {
-		item := addDeviceItem(mDevices, i, names[i], names[i] == selected)
-		deviceItems = append(deviceItems, item)
+	var added []*systray.MenuItem
+	for i := len(items); i < len(names); i++ {
+		added = append(added, addDeviceItem(mDevices, i, names[i], names[i] == selected))
+	}
+	if len(added) > 0 {
+		trayMu.Lock()
+		deviceItems = append(deviceItems, added...)
+		trayMu.Unlock()
 	}
 }
 
@@ -327,8 +359,12 @@ func onReady() {
 
 	mDevices = mSettings.AddSubMenuItem("Microphone", "Select input device")
 
+	// onReady runs off the main thread too: the menu is built from snapshots,
+	// never with trayMu held across a systray call.
 	trayMu.Lock()
-	mDefaultDevice = mDevices.AddSubMenuItemCheckbox("System Default", "Use system default device", deviceSel == "")
+	devSel, devNames := deviceSel, deviceNames
+	trayMu.Unlock()
+	mDefaultDevice = mDevices.AddSubMenuItemCheckbox("System Default", "Use system default device", devSel == "")
 	mDefaultDevice.Click(func() {
 		trayMu.Lock()
 		cb := deviceCb
@@ -336,34 +372,33 @@ func onReady() {
 		if cb != nil {
 			cb("")
 		}
-		trayMu.Lock()
-		for _, it := range deviceItems {
-			it.Uncheck()
-		}
-		mDefaultDevice.Check()
-		trayMu.Unlock()
+		checkDevice(-1)
 	})
-	deviceItems = make([]*systray.MenuItem, 0, len(deviceNames))
-	for i, name := range deviceNames {
-		item := addDeviceItem(mDevices, i, name, name == deviceSel)
-		deviceItems = append(deviceItems, item)
+	devItems := make([]*systray.MenuItem, 0, len(devNames))
+	for i, name := range devNames {
+		devItems = append(devItems, addDeviceItem(mDevices, i, name, name == devSel))
 	}
+	trayMu.Lock()
+	deviceItems = devItems
 	trayMu.Unlock()
 
 	// Divide the input device from the transcription pair (Model + Language).
 	addSubmenuSeparator(mSettings)
 
 	trayMu.Lock()
-	if len(models) > 0 {
+	snap := slices.Clone(models)
+	trayMu.Unlock()
+	if len(snap) > 0 {
 		mBackend = mSettings.AddSubMenuItem("Model", "Select transcription model")
-		modelItems = make([]*systray.MenuItem, len(models))
-		// models are grouped by Group (contiguous); one submenu per group. Both
+		items := make([]*systray.MenuItem, len(snap))
+		var groups []modelGroup
+		// Models are grouped by Group (contiguous); one submenu per group. Both
 		// local engines share the "Local" group, each cloud provider is its own.
-		for i := 0; i < len(models); {
-			group := models[i].Group
+		for i := 0; i < len(snap); {
+			group := snap[i].Group
 			j, anyUsable := i, false
-			for j < len(models) && models[j].Group == group {
-				if models[j].State != ModelUnavailable {
+			for j < len(snap) && snap[j].Group == group {
+				if snap[j].State != ModelUnavailable {
 					anyUsable = true
 				}
 				j++
@@ -376,14 +411,10 @@ func onReady() {
 			if !anyUsable {
 				provMenu.Disable()
 			}
-			modelGroups = append(modelGroups, struct {
-				item       *systray.MenuItem
-				label      string
-				start, end int
-			}{provMenu, group, i, j})
+			groups = append(groups, modelGroup{provMenu, group, i, j})
 			for k := i; k < j; k++ {
 				idx := k
-				m := models[k]
+				m := snap[k]
 				item := provMenu.AddSubMenuItemCheckbox(modelTitle(m), m.Label, m.Active && m.State == ModelReady)
 				if m.State == ModelUnavailable || m.State == ModelDownloading {
 					item.Disable()
@@ -400,16 +431,18 @@ func onReady() {
 					}
 					cb(mm.Provider, mm.ModelID)
 				})
-				modelItems[idx] = item
+				items[idx] = item
 			}
 			// Divide Local from the cloud providers.
-			if group == "Local" && j < len(models) {
+			if group == "Local" && j < len(snap) {
 				addSubmenuSeparator(mBackend)
 			}
 			i = j
 		}
+		trayMu.Lock()
+		modelItems, modelGroups = items, groups
+		trayMu.Unlock()
 	}
-	trayMu.Unlock()
 
 	// Build a fixed item per known language (systray can't add items after
 	// CreateMenu). refreshLanguageMenu then shows only the active model's set.
