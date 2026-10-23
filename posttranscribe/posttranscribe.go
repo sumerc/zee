@@ -26,9 +26,10 @@ const Provider = "groq"
 
 const DefaultModel = "openai/gpt-oss-120b"
 
-// timeout bounds the whole rewrite. On expiry the caller pastes the raw
-// transcript, so it only has to be long enough for a slow-but-healthy reply.
-const timeout = 15 * time.Second
+// timeout bounds the whole rewrite. It is short because the rewrite runs while
+// the recorder is held: the paste waits for it and the hotkey is refused. On
+// expiry the caller pastes the raw transcript.
+const timeout = 5 * time.Second
 
 // Builtin profiles, selectable by name from config.json. A user prompt with
 // the same name replaces the built-in one.
