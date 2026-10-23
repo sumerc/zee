@@ -490,8 +490,10 @@ func run() {
 	// A pick is saved like any other tray setting; each recording reads the
 	// config, so it applies from the next one without a restart.
 	tray.SetPostTranscribe(postMenu(cfg.PostTranscribe), resolvePost(cfg.PostTranscribe).Active, func(name string) {
-		config.Update(func(s *config.Settings) { s.PostTranscribe.Active = name })
-		tagColor(name) // a first pick gives the profile its colour
+		config.Update(func(s *config.Settings) {
+			s.PostTranscribe.Active = name
+			setTagColor(s, name) // a first pick gives the profile its colour
+		})
 		log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
 	})
 
@@ -1496,21 +1498,29 @@ func tagColor(name string) string {
 		return c
 	}
 	var color string
-	config.Update(func(s *config.Settings) {
-		c := &s.PostTranscribe
-		if c.Colors[name] == "" {
-			// Copy, then write: config.Get hands out this same map, and a
-			// reader holding it must never see it change.
-			colors := maps.Clone(c.Colors)
-			if colors == nil {
-				colors = map[string]string{}
-			}
-			colors[name] = overlay.PickTagColor(slices.Collect(maps.Values(colors)))
-			c.Colors = colors
-		}
-		color = c.Colors[name]
-	})
+	config.Update(func(s *config.Settings) { color = setTagColor(s, name) })
 	return color
+}
+
+// setTagColor gives profile name a palette colour in s unless it has one, and
+// returns its colour ("" for none). It runs inside config.Update, so a pick
+// and its first colour are one config.json write.
+func setTagColor(s *config.Settings, name string) string {
+	if name == "" {
+		return ""
+	}
+	c := &s.PostTranscribe
+	if c.Colors[name] == "" {
+		// Copy, then write: config.Get hands out this same map, and a reader
+		// holding it must never see it change.
+		colors := maps.Clone(c.Colors)
+		if colors == nil {
+			colors = map[string]string{}
+		}
+		colors[name] = overlay.PickTagColor(slices.Collect(maps.Values(colors)))
+		c.Colors = colors
+	}
+	return c.Colors[name]
 }
 
 // setLastRecording stashes the just-finished recording (audio + metadata) so the

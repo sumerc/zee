@@ -342,6 +342,28 @@ func TestTagColor(t *testing.T) {
 	}
 }
 
+// TestSetTagColor: a first pick writes a new map, so a reader holding the old
+// one never sees it change; a set colour and "none" change nothing.
+func TestSetTagColor(t *testing.T) {
+	old := map[string]string{"friendly": "#123456"}
+	var s config.Settings
+	s.PostTranscribe.Colors = old
+
+	if c := setTagColor(&s, ""); c != "" || len(s.PostTranscribe.Colors) != 1 {
+		t.Errorf("setTagColor(\"\") = %q, colours %v; want none, unchanged", c, s.PostTranscribe.Colors)
+	}
+	if c := setTagColor(&s, "friendly"); c != "#123456" {
+		t.Errorf("friendly = %q, want #123456 kept", c)
+	}
+	c := setTagColor(&s, "clean")
+	if !slices.Contains(overlay.TagColors, c) || s.PostTranscribe.Colors["clean"] != c {
+		t.Errorf("clean = %q, colours %v; want a saved palette colour", c, s.PostTranscribe.Colors)
+	}
+	if _, ok := old["clean"]; ok {
+		t.Error("the colour was written into the map readers hold")
+	}
+}
+
 // TestResolvePost: an unknown profile name in config.json acts as None, so the
 // tray shows None and no recording runs the rewrite; config.json keeps the name.
 func TestResolvePost(t *testing.T) {
