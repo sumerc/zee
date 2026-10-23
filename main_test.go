@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"slices"
 	"sync"
@@ -338,5 +339,79 @@ func TestTagColor(t *testing.T) {
 	}
 	if c, ok := pt.Colors["concise"]; ok {
 		t.Errorf("concise = %q, want no colour for an unused profile", c)
+	}
+}
+
+// TestPasteAtEnd: a streaming session with a profile pastes its held-back text
+// even after a session error or a silence auto-close, as the live pastes
+// without a profile would have; batch and live-stream behaviour is unchanged.
+func TestPasteAtEnd(t *testing.T) {
+	errSess := errors.New("stream closed")
+	batch := recordingConfig{}
+	batchPost := recordingConfig{post: config.PostTranscribe{Active: "grammar"}}
+	live := recordingConfig{stream: true}
+	held := recordingConfig{stream: true, post: config.PostTranscribe{Active: "grammar"}}
+	for _, c := range []struct {
+		name       string
+		cfg        recordingConfig
+		hasText    bool
+		err        error
+		autoClosed bool
+		want       bool
+	}{
+		{"batch", batch, true, nil, false, true},
+		{"batch with profile", batchPost, true, nil, false, true},
+		{"batch error", batch, true, errSess, false, false},
+		{"batch with profile error", batchPost, true, errSess, false, false},
+		{"batch auto-closed", batch, true, nil, true, false},
+		{"batch no text", batch, false, nil, false, false},
+		{"live stream", live, true, nil, false, false},
+		{"live stream error", live, true, errSess, false, false},
+		{"held stream", held, true, nil, false, true},
+		{"held stream error", held, true, errSess, false, true},
+		{"held stream auto-closed", held, true, nil, true, true},
+		{"held stream no text", held, false, errSess, false, false},
+	} {
+		if got := pasteAtEnd(c.cfg, c.hasText, c.err, c.autoClosed); got != c.want {
+			t.Errorf("%s: pasteAtEnd = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// errSession is a finished session that returns committed text together with
+// a session error, as streamSession.Close does when the stream fails midway.
+type errSession struct{ updates chan string }
+
+func (errSession) Feed([]byte)              {}
+func (s errSession) Updates() <-chan string { return s.updates }
+func (errSession) Close() (transcriber.SessionResult, error) {
+	return transcriber.SessionResult{Text: "git rebase", HasText: true}, errors.New("stream closed")
+}
+
+// TestFinishTranscriptionHeldBackError: a held-back stream that fails midway
+// keeps its raw text as the last text; without a profile it was pasted live
+// and the error path leaves the last text alone, as before.
+func TestFinishTranscriptionHeldBackError(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		profile string
+		want    string
+	}{
+		{"profile", "grammar", "git rebase"},
+		{"no profile", "", ""},
+	} {
+		clip.SetLastText("")
+		done := make(chan struct{})
+		close(done)
+		sess := errSession{updates: make(chan string)}
+		close(sess.updates)
+		cfg := recordingConfig{stream: true, post: config.PostTranscribe{Active: c.profile}}
+		finishTranscription(sess, nil, done, false, time.Second, cfg)
+		clip.textMu.Lock()
+		got := clip.lastText
+		clip.textMu.Unlock()
+		if got != c.want {
+			t.Errorf("%s: last text = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

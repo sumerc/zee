@@ -1342,7 +1342,8 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 		}
 	}
 
-	if closeErr == nil && (!cfg.stream || cfg.post.Active != "") && result.HasText && cfg.autoPaste && !skipPaste {
+	pasted := cfg.autoPaste && pasteAtEnd(cfg, result.HasText, closeErr, skipPaste)
+	if pasted {
 		lat.PasteCopyMs, lat.PasteKeyMs = clip.PasteText(text)
 	}
 
@@ -1360,11 +1361,14 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 		log.ReleaseToText(float64(time.Since(cfg.releasedAt).Microseconds())/1000, lat)
 	}
 
-	if cfg.autoPaste && !skipPaste {
+	if cfg.autoPaste && (!skipPaste || pasted) {
 		clip.ScheduleRestore(clipPrev)
 	}
 
 	if closeErr != nil {
+		if heldBack(cfg) && result.HasText {
+			clip.SetLastText(text) // the raw text, kept for Copy Last
+		}
 		return
 	}
 
@@ -1438,6 +1442,26 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	}
 
 	setLastRecording(result, cfg, "")
+}
+
+// heldBack reports whether a recording's text is pasted once at the end
+// instead of streaming in: a streaming session with a post-transcribe profile.
+func heldBack(cfg recordingConfig) bool { return cfg.stream && cfg.post.Active != "" }
+
+// pasteAtEnd reports whether finishTranscription pastes the text. A batch
+// session pastes a clean result unless silence auto-closed the recording. A
+// held-back stream pastes whatever text it has even after a session error (the
+// raw text: Close still returns what was committed) or an auto-close, since
+// without a profile that text would have been pasted live. A live stream has
+// pasted already.
+func pasteAtEnd(cfg recordingConfig, hasText bool, closeErr error, autoClosed bool) bool {
+	if !hasText {
+		return false
+	}
+	if heldBack(cfg) {
+		return true
+	}
+	return !cfg.stream && closeErr == nil && !autoClosed
 }
 
 // tagColor returns the overlay tag colour of post-transcribe profile name (""
