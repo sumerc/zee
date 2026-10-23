@@ -85,6 +85,17 @@ func prompt(c config.PostTranscribe) (string, error) {
 	return "", fmt.Errorf("unknown profile %q (have: %s)", c.Active, strings.Join(Profiles(c), ", "))
 }
 
+// Resolve returns c as it runs: an Active that names no profile (a typo in
+// config.json) is cleared, so it acts as None instead of failing every
+// recording. ok is false when Active was cleared.
+func Resolve(c config.PostTranscribe) (r config.PostTranscribe, ok bool) {
+	if _, err := prompt(c); c.Active != "" && err != nil {
+		c.Active = ""
+		return c, false
+	}
+	return c, true
+}
+
 // Model is the model c runs on.
 func Model(c config.PostTranscribe) string { return cmp.Or(c.Model, DefaultModel) }
 

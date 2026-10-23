@@ -342,6 +342,24 @@ func TestTagColor(t *testing.T) {
 	}
 }
 
+// TestResolvePost: an unknown profile name in config.json acts as None, so the
+// tray shows None and no recording runs the rewrite; config.json keeps the name.
+func TestResolvePost(t *testing.T) {
+	config.SetDir(t.TempDir())
+	if err := config.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolvePost(config.PostTranscribe{Active: "frendly"}); got.Active != "" {
+		t.Errorf("unknown profile resolved to %q, want none", got.Active)
+	}
+	if got := resolvePost(config.PostTranscribe{Active: "friendly"}); got.Active != "friendly" {
+		t.Errorf("friendly resolved to %q, want it kept", got.Active)
+	}
+	if _, err := os.Stat(config.SettingsPath()); err == nil {
+		t.Error("config.json written for an unknown profile")
+	}
+}
+
 // TestPasteAtEnd: a streaming session with a profile pastes its held-back text
 // even after a session error or a silence auto-close, as the live pastes
 // without a profile would have; batch and live-stream behaviour is unchanged.

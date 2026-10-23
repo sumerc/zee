@@ -489,7 +489,7 @@ func run() {
 	tray.SetAutoPaste(autoPaste)
 	// A pick is saved like any other tray setting; each recording reads the
 	// config, so it applies from the next one without a restart.
-	tray.SetPostTranscribe(postMenu(cfg.PostTranscribe), cfg.PostTranscribe.Active, func(name string) {
+	tray.SetPostTranscribe(postMenu(cfg.PostTranscribe), resolvePost(cfg.PostTranscribe).Active, func(name string) {
 		config.Update(func(s *config.Settings) { s.PostTranscribe.Active = name })
 		tagColor(name) // a first pick gives the profile its colour
 		log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
@@ -883,7 +883,7 @@ func run() {
 			}
 		}
 
-		tray.SetPostTranscribe(postMenu(s.PostTranscribe), s.PostTranscribe.Active, nil)
+		tray.SetPostTranscribe(postMenu(s.PostTranscribe), resolvePost(s.PostTranscribe).Active, nil)
 
 		if want := s.Hotkey.OrDefault(); !want.Equal(hk.Current()) {
 			if err := hk.Rebind(want); err != nil {
@@ -1028,7 +1028,7 @@ func recordSessions(getCapture func() audio.CaptureDevice, sessions <-chan recSe
 		isRecording.Store(true) // already set when the session came from tryStartSession
 		tray.SetRecording(true)
 		// The active post-transcribe profile, top-right; nothing for None.
-		pt := config.Get().PostTranscribe
+		pt, _ := posttranscribe.Resolve(config.Get().PostTranscribe)
 		overlay.SetTag(pt.Active, tagColor(pt.Active))
 		overlay.Show() // every path — hotkey, toggle, tray — funnels through here
 
@@ -1185,6 +1185,7 @@ func ensureAutoPasteAccessibility() {
 func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struct{}, error) {
 	clip.CancelRestore()
 
+	post, _ := posttranscribe.Resolve(config.Get().PostTranscribe)
 	configMu.Lock()
 	cfg := recordingConfig{
 		tr:        activeTranscriber,
@@ -1193,7 +1194,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 		lang:      activeTranscriber.GetLanguage(),
 		hints:     config.GetHints(),
 		autoPaste: autoPaste,
-		post:      config.Get().PostTranscribe,
+		post:      post,
 		tailWait:  time.Duration(config.Get().TailWaitMs) * time.Millisecond,
 	}
 	configMu.Unlock()
@@ -1451,6 +1452,16 @@ func postMenu(pt config.PostTranscribe) []tray.PostProfile {
 		ps = append(ps, tray.PostProfile{Name: n, Tip: posttranscribe.Describe(pt, n)})
 	}
 	return ps
+}
+
+// resolvePost is pt as config.json was just loaded: an unknown profile name is
+// warned about once here and acts as None. config.json keeps the name.
+func resolvePost(pt config.PostTranscribe) config.PostTranscribe {
+	r, ok := posttranscribe.Resolve(pt)
+	if !ok {
+		log.Warnf("post_transcribe: unknown profile %q, using none", pt.Active)
+	}
+	return r
 }
 
 // heldBack reports whether a recording's text is pasted once at the end

@@ -108,6 +108,26 @@ func TestRewriteUnknownProfile(t *testing.T) {
 	}
 }
 
+// TestResolve: a name that is no profile acts as None; None, a built-in and a
+// user prompt are kept, and the other fields always are.
+func TestResolve(t *testing.T) {
+	prompts := map[string]string{"mine": "x"}
+	for _, tc := range []struct {
+		active, want string
+		ok           bool
+	}{
+		{"", "", true},
+		{"clean", "clean", true},
+		{"mine", "mine", true},
+		{"frendly", "", false},
+	} {
+		got, ok := Resolve(config.PostTranscribe{Active: tc.active, Model: "m", Prompts: prompts})
+		if got.Active != tc.want || ok != tc.ok || got.Model != "m" || got.Prompts["mine"] != "x" {
+			t.Errorf("Resolve(%q) = %+v, %v; want Active %q, %v", tc.active, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
 func TestRewriteErrors(t *testing.T) {
 	defer func(r string, c int) { reply, replyCode = r, c }(reply, replyCode)
 	for _, tc := range []struct {
