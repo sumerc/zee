@@ -30,7 +30,7 @@ type languageDetector interface {
 // transcriptLang is the language the transcript is in: the forced one, else
 // what auto-detect picked, for engines that detect.
 func transcriptLang(e localEngine, forced string) string {
-	if forced != "" && forced != "auto" {
+	if forced != "" {
 		return forced
 	}
 	if d, ok := e.(languageDetector); ok {

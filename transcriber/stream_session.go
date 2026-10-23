@@ -62,6 +62,8 @@ type streamSession struct {
 	finalized     chan struct{}
 	finalizedOnce sync.Once
 
+	lang string // SessionResult.Lang; set by the provider before the session is used
+
 	feedBuf []byte
 	pcmBuf  []byte // full session PCM, returned as WAV in SessionResult.AudioData
 	feedMu  sync.Mutex
@@ -259,6 +261,7 @@ func (s *streamSession) Close() (SessionResult, error) {
 	audioDuration := stats.audioDuration()
 
 	sr := SessionResult{
+		Lang:     s.lang,
 		Text:     cleanText,
 		HasText:  !noSpeech,
 		NoSpeech: noSpeech,
