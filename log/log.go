@@ -331,17 +331,17 @@ func Transcription(r Recording) {
 	}
 	logMu.Lock()
 	defer logMu.Unlock()
-	line := fmt.Sprintf("%s\t[%d]\t%s\t%s", now.Format("2006-01-02 15:04:05"), pid, rel, r.Text)
+	line := fmt.Sprintf("%s\t[%d]\t%s\t%s", now.Format("2006-01-02 15:04:05"), pid, rel, lineEscaper.Replace(r.Text))
 	if r.Post.Text != "" {
 		line += "\t" + lineEscaper.Replace(r.Post.Text)
 	}
 	transcribeFile.WriteString(line + "\n")
 }
 
-// lineEscaper keeps an LLM rewrite, which may hold paragraphs, on its one
-// tab-separated log line; post_transcript.txt keeps the real text. A literal
-// backslash is escaped too, so dictated code like `a\n` stays distinct from a
-// real line break.
+// lineEscaper keeps a transcript or an LLM rewrite, which may hold tabs or
+// paragraphs, on its one tab-separated log line; transcript.txt and
+// post_transcript.txt keep the real text. A literal backslash is escaped too,
+// so dictated code like `a\n` stays distinct from a real line break.
 var lineEscaper = strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
 
 func saveRecording(now time.Time, r Recording) (string, error) {

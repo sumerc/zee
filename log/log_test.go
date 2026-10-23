@@ -191,8 +191,9 @@ func TestTranscriptionPostTranscribe(t *testing.T) {
 	}
 }
 
-// TestTranscriptionPostTranscribeMultiline: a rewrite with line breaks and
-// tabs stays on one log line, escaped; post_transcript.txt keeps it as is.
+// TestTranscriptionPostTranscribeMultiline: a raw transcript and a rewrite with
+// line breaks and tabs stay on one log line, escaped; transcript.txt and
+// post_transcript.txt keep them as is.
 func TestTranscriptionPostTranscribeMultiline(t *testing.T) {
 	tmp := setupLogDir(t)
 	SetTranscribeEnabled(true)
@@ -202,8 +203,9 @@ func TestTranscriptionPostTranscribeMultiline(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	raw := "hi\tcould you\ncheck"
 	rewrite := "Hi,\r\n\nCould you\tcheck C:\\new?"
-	Transcription(Recording{Text: "hi could you check", Audio: []byte("RIFF"), AudioExt: "wav",
+	Transcription(Recording{Text: raw, Audio: []byte("RIFF"), AudioExt: "wav",
 		Post: PostTranscript{Profile: "friendly", Model: "m", Text: rewrite}})
 
 	data, err := os.ReadFile(filepath.Join(tmp, "transcribe_log.txt"))
@@ -215,11 +217,13 @@ func TestTranscriptionPostTranscribeMultiline(t *testing.T) {
 		t.Fatalf("want 1 line, got %q", data)
 	}
 	f := strings.Split(lines[0], "\t")
-	if want := `Hi,\r\n\nCould you\tcheck C:\\new?`; len(f) != 5 || f[4] != want {
+	if want := `Hi,\r\n\nCould you\tcheck C:\\new?`; len(f) != 5 || f[3] != `hi\tcould you\ncheck` || f[4] != want {
 		t.Fatalf("unexpected line: %q, want last field %q", lines[0], want)
 	}
-	if got, _ := os.ReadFile(filepath.Join(tmp, f[2], "post_transcript.txt")); string(got) != rewrite+"\n" {
-		t.Errorf("post_transcript.txt = %q, want %q", got, rewrite+"\n")
+	for name, want := range map[string]string{"transcript.txt": raw + "\n", "post_transcript.txt": rewrite + "\n"} {
+		if got, _ := os.ReadFile(filepath.Join(tmp, f[2], name)); string(got) != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
 	}
 }
 
