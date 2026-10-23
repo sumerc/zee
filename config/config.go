@@ -35,9 +35,10 @@ type Settings struct {
 // PostTranscribe is the post_transcribe block of config.json. Active picks a
 // profile by name — one of the user's Prompts, else a built-in; "" is off.
 type PostTranscribe struct {
-	Active  string            `json:"active"`
-	Model   string            `json:"model,omitempty"`   // "" = the package default
-	Prompts map[string]string `json:"prompts,omitempty"` // name → instruction
+	Active   string            `json:"active"`
+	Provider string            `json:"provider,omitempty"` // "groq" (the default) or "local"
+	Model    string            `json:"model,omitempty"`    // "" = the provider's default
+	Prompts  map[string]string `json:"prompts,omitempty"`  // name → instruction
 	// Colors is each profile's overlay tag colour, "#RRGGBB". zee fills in a
 	// colour for a profile the first time it is used, so it stays the same from
 	// then on.

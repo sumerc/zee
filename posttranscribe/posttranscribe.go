@@ -18,13 +18,23 @@ import (
 	"time"
 
 	"zee/config"
+	"zee/localmodel"
 	"zee/transcriber"
 )
 
-// Provider is the credentials.json key whose API key the rewrite uses.
-const Provider = "groq"
+// Providers, config.json's post_transcribe.provider. ProviderGroq is also the
+// credentials.json key whose API key the Groq rewrite uses.
+const (
+	ProviderGroq  = "groq"
+	ProviderLocal = "local"
+)
 
-const DefaultModel = "openai/gpt-oss-120b"
+// DefaultModel and DefaultLocalModel are what Groq and local run when
+// post_transcribe.model is unset.
+const (
+	DefaultModel      = "openai/gpt-oss-120b"
+	DefaultLocalModel = localmodel.IDGemma4E2B
+)
 
 // timeout bounds the whole rewrite. It is short because the rewrite runs while
 // the recorder is held: the paste waits for it and the hotkey is refused. On
@@ -96,8 +106,35 @@ func Resolve(c config.PostTranscribe) (r config.PostTranscribe, ok bool) {
 	return c, true
 }
 
+func provider(c config.PostTranscribe) string { return cmp.Or(c.Provider, ProviderGroq) }
+
 // Model is the model c runs on.
-func Model(c config.PostTranscribe) string { return cmp.Or(c.Model, DefaultModel) }
+func Model(c config.PostTranscribe) string {
+	if provider(c) == ProviderLocal {
+		return cmp.Or(c.Model, DefaultLocalModel)
+	}
+	return cmp.Or(c.Model, DefaultModel)
+}
+
+// local resolves c's provider: isLocal and the model to load for "local",
+// false for Groq, an error when the provider is unknown or the model is not
+// one it runs.
+func local(c config.PostTranscribe) (m localmodel.Model, isLocal bool, err error) {
+	m, known := localEntry(Model(c))
+	switch provider(c) {
+	case ProviderLocal:
+		if !known {
+			return m, false, fmt.Errorf("%q is not a local model (have: %s)", Model(c), strings.Join(localIDs(), ", "))
+		}
+		return m, true, nil
+	case ProviderGroq:
+		if known {
+			return m, false, fmt.Errorf("%q is a local model: set post_transcribe.provider to %q", Model(c), ProviderLocal)
+		}
+		return m, false, nil
+	}
+	return m, false, fmt.Errorf("unknown post_transcribe provider %q (want %q or %q)", c.Provider, ProviderGroq, ProviderLocal)
+}
 
 // rules wrap every profile: a light cleanup that keeps the speaker's words
 // and language. Deliberately generic — no example words — and measured on
@@ -151,7 +188,11 @@ func client() (*transcriber.TracedClient, bool) {
 // so the rewrite does not pay for it. For Groq it opens the TLS connection;
 // a local model is loaded, which blocks until it is resident.
 func Warm(c config.PostTranscribe) {
-	if m, ok := localEntry(Model(c)); ok {
+	m, isLocal, err := local(c)
+	if err != nil {
+		return // Rewrite reports it
+	}
+	if isLocal {
 		loadLocal(m) // an error comes back again from Rewrite
 		return
 	}
@@ -186,14 +227,18 @@ func Rewrite(c config.PostTranscribe, hints, lang, text string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	if m, ok := localEntry(Model(c)); ok {
+	m, isLocal, err := local(c)
+	if err != nil {
+		return "", err
+	}
+	if isLocal {
 		// Naming the language stops a small local model from translating the
 		// transcript; Groq's models were measured without the line.
 		return completeLocal(m, systemPrompt(profile, hints, transcriber.LanguageName(lang)), text)
 	}
-	apiKey := config.APIKey(Provider)
+	apiKey := config.APIKey(ProviderGroq)
 	if apiKey == "" {
-		return "", fmt.Errorf("no %s API key in credentials.json", Provider)
+		return "", fmt.Errorf("no %s API key in credentials.json", ProviderGroq)
 	}
 
 	return complete(apiKey, Model(c), systemPrompt(profile, hints, ""), text)
@@ -257,14 +302,14 @@ func complete(apiKey, model, system, text string) (string, error) {
 		if len(body) > maxErrBody {
 			body = append(body[:maxErrBody], '…')
 		}
-		return "", fmt.Errorf("%s API error %d: %s", Provider, resp.StatusCode, string(body))
+		return "", fmt.Errorf("%s API error %d: %s", ProviderGroq, resp.StatusCode, string(body))
 	}
 	var r response
 	if err := json.Unmarshal(resp.Body, &r); err != nil {
-		return "", fmt.Errorf("%s response parse error: %w", Provider, err)
+		return "", fmt.Errorf("%s response parse error: %w", ProviderGroq, err)
 	}
 	if len(r.Choices) == 0 {
-		return "", fmt.Errorf("%s returned no choices", Provider)
+		return "", fmt.Errorf("%s returned no choices", ProviderGroq)
 	}
-	return cleanReply(Provider, r.Choices[0].Message.Content)
+	return cleanReply(ProviderGroq, r.Choices[0].Message.Content)
 }

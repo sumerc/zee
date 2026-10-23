@@ -20,11 +20,21 @@ var (
 	loadedPath string
 )
 
-// localEntry returns the registry entry when model names a local LLM
-// (config.json's post_transcribe.model set to its ID, e.g. "gemma-4-e2b").
+// localEntry returns the registry entry when model names a local LLM.
 func localEntry(model string) (localmodel.Model, bool) {
 	m, ok := localmodel.ByID(model)
 	return m, ok && m.Engine == localmodel.EngineLlama
+}
+
+// localIDs lists the local LLMs, for error messages.
+func localIDs() []string {
+	var ids []string
+	for _, m := range localmodel.All() {
+		if m.Engine == localmodel.EngineLlama {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids
 }
 
 // loadLocal returns m loaded, loading it if it is not the resident model.

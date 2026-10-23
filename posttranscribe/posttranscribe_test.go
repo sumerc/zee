@@ -41,7 +41,7 @@ func TestMain(m *testing.M) {
 	dir, _ := os.MkdirTemp("", "zee-posttranscribe")
 	defer os.RemoveAll(dir)
 	config.SetDir(dir)
-	config.SetAPIKey(Provider, "test-key")
+	config.SetAPIKey(ProviderGroq, "test-key")
 
 	os.Exit(m.Run())
 }
