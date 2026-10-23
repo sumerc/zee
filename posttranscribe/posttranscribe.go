@@ -80,7 +80,7 @@ Fix phonetic and transcription errors, and remove filler, repetition and false s
 Keep each word in the language it was spoken in, even where the sentence's language has its own word for it: never translate.
 Restore an English word that the transcriber spelled by its sound in another language's letters to its English spelling, keeping any suffix.
 Keep code, file paths, URLs, commands and numbers exactly as they are.
-Reply with the cleaned text only.`
+Reply with the cleaned text only — no preamble, no quotes, no tags.`
 
 func systemPrompt(profile, hints string) string {
 	s := rules + "\n\nInstruction: " + profile
@@ -135,7 +135,7 @@ func Rewrite(c config.PostTranscribe, hints, text string) (string, error) {
 }
 
 // complete sends one system prompt + transcript to the chat API and returns
-// the trimmed reply.
+// the trimmed reply, minus the <transcript> wrapper a model sometimes echoes.
 func complete(apiKey, model, system, text string) (string, error) {
 	req := request{
 		Model: model,
@@ -178,6 +178,8 @@ func complete(apiKey, model, system, text string) (string, error) {
 		return "", fmt.Errorf("%s returned no choices", Provider)
 	}
 	out := strings.TrimSpace(r.Choices[0].Message.Content)
+	out = strings.TrimSpace(strings.TrimPrefix(out, "<transcript>"))
+	out = strings.TrimSpace(strings.TrimSuffix(out, "</transcript>"))
 	if out == "" {
 		return "", fmt.Errorf("%s returned empty text", Provider)
 	}

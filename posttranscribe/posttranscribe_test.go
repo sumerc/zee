@@ -61,6 +61,20 @@ func TestRewriteBuiltin(t *testing.T) {
 	}
 }
 
+// TestRewriteStripsTranscriptTags: a reply that echoes the <transcript>
+// wrapper is unwrapped before it is pasted.
+func TestRewriteStripsTranscriptTags(t *testing.T) {
+	defer func(r string) { reply = r }(reply)
+	reply = `{"choices":[{"message":{"content":"<transcript>\n Hello there! \n</transcript>\n"}}]}`
+	out, err := Rewrite(config.PostTranscribe{Active: "grammar"}, "", "hello their")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "Hello there!" {
+		t.Errorf("out = %q, want the reply without the tags", out)
+	}
+}
+
 func TestRewriteUserProfileShadowsBuiltin(t *testing.T) {
 	c := config.PostTranscribe{
 		Active:  "grammar",
