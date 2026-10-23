@@ -96,13 +96,31 @@ const maxErrBody = 200
 
 var apiURL = "https://api.groq.com/openai/v1/chat/completions"
 
-var client = sync.OnceValue(func() *transcriber.TracedClient {
-	return transcriber.NewTracedClient(apiURL)
-})
+var (
+	clientMu sync.Mutex
+	shared   *transcriber.TracedClient
+)
+
+// client returns the shared HTTP client, created on first use so nothing
+// touches the network while post-transcribe is off, and whether this call
+// created it. A new client warms its own connection.
+func client() (*transcriber.TracedClient, bool) {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	if shared != nil {
+		return shared, false
+	}
+	shared = transcriber.NewTracedClient(apiURL)
+	return shared, true
+}
 
 // Warm opens the TLS connection ahead of the request; call it when recording
 // starts so the rewrite does not pay for the handshake.
-func Warm() { client().Warm() }
+func Warm() {
+	if c, created := client(); !created {
+		c.Warm()
+	}
+}
 
 type message struct {
 	Role    string `json:"role"`
@@ -166,7 +184,8 @@ func complete(apiKey, model, system, text string) (string, error) {
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := client().Do(httpReq)
+	c, _ := client()
+	resp, err := c.Do(httpReq)
 	if err != nil {
 		return "", err
 	}

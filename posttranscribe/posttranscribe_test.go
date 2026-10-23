@@ -8,14 +8,18 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"zee/config"
 )
 
-// last is the most recent chat request the fake server received.
+// last is the most recent chat request the fake server received; warms
+// counts the warm-up HEAD requests.
 var (
 	last      request
+	warms     atomic.Int32
 	reply     = `{"choices":[{"message":{"role":"assistant","content":"  Hello there!  "}}]}`
 	replyCode = http.StatusOK
 )
@@ -23,7 +27,8 @@ var (
 func TestMain(m *testing.M) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			return // TracedClient's warm-up HEAD
+			warms.Add(1) // TracedClient's warm-up HEAD
+			return
 		}
 		last = request{}
 		json.NewDecoder(r.Body).Decode(&last)
@@ -122,6 +127,27 @@ func TestRewriteErrors(t *testing.T) {
 		}
 		if err != nil && strings.Contains(err.Error(), strings.Repeat("x", maxErrBody+1)) {
 			t.Errorf("%s: error body not cut short: %d bytes", tc.name, len(err.Error()))
+		}
+	}
+}
+
+// TestWarm: every Warm sends exactly one warm-up, including the first, whose
+// call creates the client that already warms itself.
+func TestWarm(t *testing.T) {
+	clientMu.Lock()
+	shared = nil
+	clientMu.Unlock()
+	warms.Store(0)
+
+	for want := int32(1); want <= 2; want++ {
+		Warm()
+		// The new client's own warm-up runs in the background.
+		for deadline := time.Now().Add(2 * time.Second); warms.Load() < want && time.Now().Before(deadline); {
+			time.Sleep(5 * time.Millisecond)
+		}
+		time.Sleep(50 * time.Millisecond) // room for a stray second warm-up
+		if got := warms.Load(); got != want {
+			t.Fatalf("after Warm #%d: %d warm-ups, want %d", want, got, want)
 		}
 	}
 }
