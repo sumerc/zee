@@ -18,8 +18,8 @@ import (
 // transcript in the wrong language, which looks like a transcription bug rather
 // than a detection one, and the log is the only place the difference shows.
 // Measured on real dictation, a correct call and a wrong one are NOT separated
-// by the winner's probability, so the runner-up
-// matters too and is worth having on the record when it becomes available.
+// by the winner's probability, so the runner-up matters too and is worth
+// having on the record when it becomes available.
 // languageDetector is the optional engine method logDetectedLanguage probes.
 // Named, and asserted on whisperEngine, so a rename or signature change fails
 // the build instead of silently dropping the lang_detect line.

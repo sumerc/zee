@@ -147,10 +147,9 @@ static char *zee_wsp_transcribe(struct whisper_context *ctx, const float *pcm,
     p.print_timestamps = false;
     p.print_special    = false;
     // no_timestamps stays FALSE even though we only want text: it selects a
-    // decoder path that silently drops audio. See audioCtxFor's sibling note
-    // below — with it set, whisper advances the window
-    // a fixed 30 s per decode and skips the retry-on-failed-decode path, so
-    // whatever the model does not emit in a window is lost for good.
+    // decoder path that silently drops audio. With it set, whisper advances the
+    // window a fixed 30 s per decode and skips the retry-on-failed-decode path,
+    // so whatever the model does not emit in a window is lost for good.
     p.translate        = false;   // transcribe in-language, never translate to English
     p.language         = lang;    // "auto" => detect (one extra decode step; see audioCtxFor)
     p.audio_ctx        = audio_ctx;  // 0 = full window; see audioCtxFor
