@@ -75,7 +75,9 @@ applies from the next recording, with no restart. It uses the `groq` key from
 - `active` — the profile to run; `""` (the default) turns it off.
 - `prompts` — your own profiles, name → a one- or two-sentence instruction. A
   name that matches a built-in one replaces it.
-- `model` — any Groq chat model; omit it for `openai/gpt-oss-120b`.
+- `model` — any Groq chat model; omit it for `openai/gpt-oss-120b`. The rewrite
+  has a 5 s budget, so pick a fast model: a slow or reasoning-heavy one times out
+  on longer dictations and the raw transcript is pasted instead.
 - `colors` — each profile's colour for the recording overlay, `"#RRGGBB"`. zee
   gives a profile without one a random colour from its palette the first time
   you use it, and saves it so the colour stays put; edit it to choose your own.

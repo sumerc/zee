@@ -1457,7 +1457,8 @@ func postMenu(pt config.PostTranscribe) []tray.PostProfile {
 }
 
 // resolvePost is pt as config.json was just loaded: an unknown profile name is
-// warned about once here and acts as None. config.json keeps the name.
+// warned about once per load (startup or Reload Config) and acts as None.
+// config.json keeps the name.
 func resolvePost(pt config.PostTranscribe) config.PostTranscribe {
 	r, ok := posttranscribe.Resolve(pt)
 	if !ok {
