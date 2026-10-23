@@ -67,7 +67,7 @@ applies from the next recording, with no restart. It uses the `groq` key from
   "active": "friendly",
   "model": "openai/gpt-oss-120b",
   "prompts": {
-    "slack": "Rewrite it as a short, casual Slack message. Fix all grammatical errors."
+    "slack": "Adjust the tone to casual, for a Slack message, only where needed."
   }
 }
 ```
