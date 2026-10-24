@@ -1201,7 +1201,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 	}
 	configMu.Unlock()
 	if cfg.post.Active != "" {
-		go posttranscribe.Warm()
+		go posttranscribe.Warm(cfg.post)
 	}
 	if cfg.autoPaste && !permissions.HasAccessibility() {
 		cfg.autoPaste = false
@@ -1330,16 +1330,17 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	text := result.Text
 	var post log.PostTranscript
 	if closeErr == nil && result.HasText && !result.NoSpeech && cfg.post.Active != "" {
-		post = log.PostTranscript{Profile: cfg.post.Active, Model: posttranscribe.Model(cfg.post)}
+		post = log.PostTranscript{Profile: cfg.post.Active, Provider: posttranscribe.Provider(cfg.post), Model: posttranscribe.Model(cfg.post)}
 		t := time.Now()
-		out, err := posttranscribe.Rewrite(cfg.post, cfg.hints, text)
+		out, err := posttranscribe.Rewrite(cfg.post, cfg.hints, result.Lang, text)
 		lat.PostTranscribeMs = float64(time.Since(t).Microseconds()) / 1000
 		if err != nil {
 			log.Warnf("post_transcribe: %v", err)
 			tray.SetError("Post-transcribe failed, used the raw transcript: " + err.Error())
 			post.Error = err.Error()
 		} else {
-			log.Info(fmt.Sprintf("post_transcribe: profile=%s ms=%.0f", cfg.post.Active, lat.PostTranscribeMs))
+			log.Info(fmt.Sprintf("post_transcribe: profile=%s provider=%s model=%s ms=%.0f",
+				post.Profile, post.Provider, post.Model, lat.PostTranscribeMs))
 			text = out
 			post.Text = out
 		}

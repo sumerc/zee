@@ -66,7 +66,11 @@ func (d *Deepgram) newStreamSession(ctx context.Context, lang, hints string) (Se
 			Hints:      hints,
 		})
 	}
-	return newStreamSession(dial), nil
+	s := newStreamSession(dial)
+	// The stream reports no language; the tray always sets one for Deepgram
+	// (see nova3Langs), so the forced one is the transcript's.
+	s.lang = lang
+	return s, nil
 }
 
 type deepgramResponse struct {
@@ -77,8 +81,9 @@ type deepgramResponse struct {
 	Results struct {
 		Channels []struct {
 			Alternatives []struct {
-				Transcript string  `json:"transcript"`
-				Confidence float64 `json:"confidence"`
+				Transcript string   `json:"transcript"`
+				Confidence float64  `json:"confidence"`
+				Languages  []string `json:"languages"` // multi mode: dominant first
 			} `json:"alternatives"`
 		} `json:"channels"`
 	} `json:"results"`
@@ -133,12 +138,15 @@ func (d *Deepgram) Transcribe(audioData []byte, format, lang, hints string) (*Re
 		return nil, fmt.Errorf("deepgram response parse error: %w", err)
 	}
 
-	var text string
+	var text, detected string
 	var confidence float64
 	if len(dgResp.Results.Channels) > 0 && len(dgResp.Results.Channels[0].Alternatives) > 0 {
 		alt := dgResp.Results.Channels[0].Alternatives[0]
 		text = alt.Transcript
 		confidence = alt.Confidence
+		if len(alt.Languages) > 0 {
+			detected = alt.Languages[0]
+		}
 	}
 
 	remaining := firstNonEmpty(resp.Header,
@@ -148,6 +156,7 @@ func (d *Deepgram) Transcribe(audioData []byte, format, lang, hints string) (*Re
 
 	return &Result{
 		Text:       text,
+		Lang:       detected,
 		Metrics:    resp.Metrics,
 		RateLimit:  remaining + "/" + limit,
 		Confidence: confidence,

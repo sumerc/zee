@@ -148,7 +148,7 @@ func TestTranscriptionPostTranscribe(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	post := PostTranscript{Profile: "friendly", Model: "m", Text: "Hello there!"}
+	post := PostTranscript{Profile: "friendly", Provider: "local", Model: "m", Text: "Hello there!"}
 	Transcription(Recording{Text: "hello their", Audio: []byte("RIFF"), AudioExt: "wav", Post: post})
 	Transcription(Recording{Text: "raw", Audio: []byte("RIFF"), AudioExt: "wav",
 		Post: PostTranscript{Profile: "friendly", Model: "m", Error: "timeout"}})
@@ -173,8 +173,9 @@ func TestTranscriptionPostTranscribe(t *testing.T) {
 			t.Errorf("%s = %q, %v; want %q", name, got, err, want)
 		}
 	}
-	if info, _ := os.ReadFile(filepath.Join(rec, "info.json")); !strings.Contains(string(info), `"profile": "friendly"`) {
-		t.Errorf("info.json lacks the post_transcribe profile: %s", info)
+	if info, _ := os.ReadFile(filepath.Join(rec, "info.json")); !strings.Contains(string(info), `"profile": "friendly"`) ||
+		!strings.Contains(string(info), `"provider": "local"`) {
+		t.Errorf("info.json lacks the post_transcribe profile or provider: %s", info)
 	}
 
 	// A failed rewrite keeps the line at four fields and records the error.

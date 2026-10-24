@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark bench-local bench-save clean bump-version release icns app parakeet-lib whisper-lib download-models manifest model-release
+.PHONY: build build-linux-amd64 build-linux-arm64 test test-integration benchmark bench-local bench-save clean bump-version release icns app parakeet-lib whisper-lib llama-lib download-models manifest model-release
 
 # --match 'v*' keeps model-release tags (models-vN) out of the app version.
 VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo "dev")
@@ -38,12 +38,19 @@ WHISPER_PATCHES := patches/whisper.cpp
 # no test can distinguish from a fast one. Bumping the submodule therefore has to
 # stop the build until a human re-validates and moves this pin.
 WHISPER_BASE  := f049fff95a089aa9969deb009cdd4892b3e74916
+# llama.cpp runs the local post-transcribe model and links the same ggml too
+# (-DLLAMA_USE_SYSTEM_GGML=ON). Its pin must be a llama.cpp commit whose
+# vendored ggml has the same version as GGML_BASE — for 0.26.0 that is
+# f05c8b278..4ed1c8507 (2026-10-05..15) — or libllama compiles against a ggml
+# API that is not the one it links. Move LLAMA_BASE together with GGML_BASE.
+LLAMA_DIR     := third_party/llama.cpp
+LLAMA_BASE    := f05c8b278091b716c002c331911a51d4927f0c74
 HOST          := $(shell go env GOOS)/$(shell go env GOARCH)
 ifeq ($(HOST),darwin/arm64)
 CGO_ENV := MACOSX_DEPLOYMENT_TARGET=$(MACOS_MIN) CGO_CFLAGS=-mmacosx-version-min=$(MACOS_MIN) CGO_LDFLAGS=-mmacosx-version-min=$(MACOS_MIN)
 endif
 
-build: whisper-lib download-models
+build: whisper-lib llama-lib download-models
 	$(CGO_ENV) go build -ldflags="-X main.version=$(VERSION)" -o zee
 
 # The dev model folder `localmodels download` writes to (cmd/localmodels keeps
@@ -84,7 +91,7 @@ parakeet-lib:
 	  git -C $(GGML_DIR) cat-file -e $(GGML_BASE)^{commit} 2>/dev/null || \
 	    git -C $(GGML_DIR) fetch --depth 1 origin $(GGML_BASE) || exit 1; \
 	  git -C $(GGML_DIR) checkout -f -q $(GGML_BASE) || exit 1; \
-	  rm -rf $(PARAKEET_DIR)/build-release $(WHISPER_DIR)/build-release; \
+	  rm -rf $(PARAKEET_DIR)/build-release $(WHISPER_DIR)/build-release $(LLAMA_DIR)/build-release; \
 	fi; \
 	pats=$$(ls $(CURDIR)/$(PARAKEET_PATCHES)/*.patch 2>/dev/null); \
 	if [ -n "$$pats" ]; then \
@@ -159,13 +166,43 @@ whisper-lib: parakeet-lib
 	fi && \
 	cmake --build $(WHISPER_DIR)/build-release -j
 
+# Build libllama.a against the ggml parakeet installed, like whisper-lib: one
+# ggml in the process. Only the llama library is built (no tools, server or
+# network code).
+llama-lib: parakeet-lib
+	@if [ "$(HOST)" != "darwin/arm64" ]; then exit 0; fi; \
+	if [ ! -f $(LLAMA_DIR)/CMakeLists.txt ]; then \
+	  echo "==> initializing llama.cpp submodule (first checkout)"; \
+	  git submodule update --init $(LLAMA_DIR); \
+	fi; \
+	head=$$(git -C $(LLAMA_DIR) rev-parse HEAD); \
+	if [ "$$head" != "$(LLAMA_BASE)" ]; then \
+	  echo "ERROR: llama.cpp is at $$head, not $(LLAMA_BASE)."; \
+	  echo "       Its ggml must match GGML_BASE: move LLAMA_BASE only to a llama.cpp"; \
+	  echo "       commit whose ggml/ has the same version, then delete"; \
+	  echo "       $(LLAMA_DIR)/build-release and rebuild."; \
+	  exit 1; \
+	fi; \
+	if [ ! -d $(LLAMA_DIR)/build-release ]; then \
+	  echo "==> configuring llama.cpp (one-time)"; \
+	  cmake -S $(LLAMA_DIR) -B $(LLAMA_DIR)/build-release \
+	    -DLLAMA_USE_SYSTEM_GGML=ON -DCMAKE_PREFIX_PATH=$(GGML_PREFIX) \
+	    -DBUILD_SHARED_LIBS=OFF -DGGML_METAL=ON \
+	    -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF \
+	    -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF \
+	    -DLLAMA_OPENSSL=OFF \
+	    -DCMAKE_OSX_DEPLOYMENT_TARGET=$(MACOS_MIN) \
+	    -DCMAKE_C_FLAGS="-mcpu=apple-m1" -DCMAKE_CXX_FLAGS="-mcpu=apple-m1"; \
+	fi && \
+	cmake --build $(LLAMA_DIR)/build-release --target llama -j
+
 build-linux-amd64:
 	GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-amd64
 
 build-linux-arm64:
 	GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=$(VERSION) -s -w" -o zee-linux-arm64
 
-test: whisper-lib
+test: whisper-lib llama-lib
 	$(CGO_ENV) go test -race -v ./...
 
 benchmark: build
@@ -217,7 +254,7 @@ bench-save: whisper-lib download-models
 		| grep -vE 'duplicate librar|Backend using device' >> "$(BENCH_FILE)"
 	@echo "appended a baseline block to $(BENCH_FILE)"
 
-test-integration: whisper-lib
+test-integration: whisper-lib llama-lib
 	@tmp=$$(mktemp -d) && \
 	$(CGO_ENV) go build -o "$$tmp/zee-test-bin" . && \
 	ZEE_TEST_BIN="$$tmp/zee-test-bin" $(CGO_ENV) go test -race -tags integration -v -timeout 600s -count=1 ./test/ ; \

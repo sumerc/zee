@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/text/language"
 )
 
 type NetworkMetrics struct {
@@ -49,6 +52,7 @@ type Segment struct {
 
 type Result struct {
 	Text         string
+	Lang         string // the language the provider detected, in its own form; "" if none
 	Metrics      *NetworkMetrics
 	RateLimit    string
 	Confidence   float64
@@ -130,6 +134,31 @@ func plainLangsFromCodes(codes []string) []Language {
 // AllLanguages returns every known language (Auto-detect first, then the rest
 // sorted alphabetically). The tray uses this as the fixed universe of language
 // menu items; SetLanguages then shows only the active model's subset.
+// langCode normalizes a language as a provider reports it — an ISO 639-1 or
+// 639-3 code ("tr", "tur") or an English name ("Turkish") — to ISO 639-1.
+// It is "" when s is empty or not a language zee lists.
+func langCode(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if b, err := language.ParseBase(s); err == nil {
+		if code := b.String(); langLabels[code] != "" {
+			return code
+		}
+	}
+	for code, name := range langLabels {
+		if strings.EqualFold(name, s) {
+			return code
+		}
+	}
+	return ""
+}
+
+// LanguageName is the English name of an ISO 639-1 code ("tr" → "Turkish"),
+// or "" when the code is unknown.
+func LanguageName(code string) string { return langLabels[code] }
+
 func AllLanguages() []Language {
 	codes := make([]string, 0, len(langLabels))
 	for c := range langLabels {

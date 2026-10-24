@@ -40,6 +40,9 @@ const baseURL = "https://github.com/sumerc/zee/releases/download/models-" + Vers
 const (
 	EngineParakeet = "parakeet"
 	EngineWhisper  = "whisper"
+	// EngineLlama models are not speech models: they run the post-transcribe
+	// rewrite (posttranscribe, internal/llama) and stay out of the STT menus.
+	EngineLlama = "llama"
 )
 
 // Model IDs (stable; persisted in config.json and shown in the tray).
@@ -47,6 +50,7 @@ const (
 	ID110mEN    = "parakeet-110m-en"  // default, English-only, loaded at startup
 	IDWhisperQ5 = "whisper-turbo-q5"  // multilingual, pre-fetched
 	IDV3Multi   = "parakeet-v3-multi" // multilingual fast path, opt-in download
+	IDGemma4E2B = "gemma-4-e2b"       // local post-transcribe LLM, opt-in download
 )
 
 // retiredIDs maps model IDs that no longer exist to their successor, so a
@@ -65,7 +69,7 @@ var retiredIDs = map[string]string{
 type Model struct {
 	ID           string
 	Label        string
-	Engine       string // EngineParakeet | EngineWhisper
+	Engine       string // EngineParakeet | EngineWhisper | EngineLlama
 	Filename     string
 	SHA256       string
 	SizeBytes    int64
@@ -126,6 +130,15 @@ var models = []Model{
 		SizeBytes:    574041195,
 		Multilingual: true,
 		PreFetch:     true,
+	},
+	{
+		ID:           IDGemma4E2B,
+		Label:        "Post-transcribe — local (Gemma 4 E2B)",
+		Engine:       EngineLlama,
+		Filename:     "gemma-4-E2B-it-Q4_K_M.gguf",
+		SHA256:       "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+		SizeBytes:    3106738272,
+		Multilingual: true,
 	},
 }
 
