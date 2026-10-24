@@ -86,7 +86,7 @@ for the transcription itself.
   loads it when a recording starts and keeps it in memory from then on. The
   local rewrite is told the transcript's language — the one you set, or with
   Auto-detect the one the transcription detected (local Whisper, Groq,
-  Deepgram, Mistral and ElevenLabs report it; OpenAI does not) — so it does
+  Deepgram and ElevenLabs report it; Mistral and OpenAI do not) — so it does
   not translate it. Its time grows with the
   length of the dictation, and it has no 5 s budget.
 - `colors` — each profile's colour for the recording overlay, `"#RRGGBB"`. zee
