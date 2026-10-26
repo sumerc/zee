@@ -211,6 +211,9 @@ func TestNormalize(t *testing.T) {
 	if _, changed := Normalize(got); changed {
 		t.Error("a normalized config changed again")
 	}
+	if got, changed := Normalize(config.PostTranscribe{Profiles: map[string]config.Profile{}}); changed || len(got.Profiles) != 0 {
+		t.Errorf("every profile deleted: %v, %v; want it kept empty", got.Profiles, changed)
+	}
 
 	old := config.PostTranscribe{
 		Prompts: map[string]string{"slack": "Casual tone."},

@@ -182,3 +182,19 @@ func TestReloadExternalEdits(t *testing.T) {
 		t.Fatalf("Get().Language = %q after failed reload, want fr (untouched)", got)
 	}
 }
+
+// TestEmptyProfilesPersist: a config with every profile deleted reads back
+// empty, not absent, so the defaults are not seeded again.
+func TestEmptyProfilesPersist(t *testing.T) {
+	SetDir(t.TempDir())
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	Update(func(s *Settings) { s.PostTranscribe.Profiles = map[string]Profile{} })
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	if p := Get().PostTranscribe.Profiles; p == nil || len(p) != 0 {
+		t.Errorf("profiles = %#v, want an empty map", p)
+	}
+}

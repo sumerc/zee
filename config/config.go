@@ -38,7 +38,9 @@ type PostTranscribe struct {
 	Active   string             `json:"active"`
 	Provider string             `json:"provider,omitempty"` // "groq" (the default) or "local"
 	Model    string             `json:"model,omitempty"`    // "" = the provider's default
-	Profiles map[string]Profile `json:"profiles,omitempty"`
+	// Profiles has no omitempty: an empty map is the user deleting every
+	// profile, and must not read back as absent (which seeds the defaults).
+	Profiles map[string]Profile `json:"profiles"`
 	// Prompts and Colors are the earlier form (name → instruction, name →
 	// colour); posttranscribe.Normalize folds them into Profiles once.
 	Prompts map[string]string `json:"prompts,omitempty"`
