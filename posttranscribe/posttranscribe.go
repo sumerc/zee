@@ -109,12 +109,13 @@ func Normalize(c config.PostTranscribe) (config.PostTranscribe, bool) {
 		c.Profiles = maps.Clone(c.Profiles)
 	}
 	// An earlier prompt was the instruction alone, run under the shared rules:
-	// it becomes the clean default with its instruction swapped in, quoted so
-	// a "{{" in it stays text. The instruction was its tray tooltip.
+	// it becomes the clean default with its instruction swapped in, every "{"
+	// quoted so braces stay text — also a trailing "{" that would otherwise
+	// join the "{{" after it. The instruction was its tray tooltip.
 	base := Defaults()["clean"].Prompt
 	for name, instr := range c.Prompts {
 		p := c.Profiles[name]
-		quoted := strings.ReplaceAll(instr, "{{", `{{"{{"}}`)
+		quoted := strings.ReplaceAll(instr, "{", `{{"{"}}`)
 		p.Prompt = strings.Replace(base, "Instruction: Change nothing more.", "Instruction: "+quoted, 1)
 		p.Description = instr
 		c.Profiles[name] = p

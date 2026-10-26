@@ -245,6 +245,17 @@ func TestNormalize(t *testing.T) {
 	if err != nil || sys != measuredPrompt("Warm, keep {{braces}}.", "", "") {
 		t.Errorf("friendly = %q, %v; want the instruction kept as text", sys, err)
 	}
+	// Any brace is text, also one that ends the instruction next to the
+	// template's own "{{if .Hints}}".
+	for _, instr := range []string{"Wrap in {", "a {{b}} c", "}}", "{{{"} {
+		got, _ := Normalize(config.PostTranscribe{Prompts: map[string]string{"p": instr}})
+		for _, hints := range []string{"", "Kubernetes"} {
+			sys, err := render("p", got.Profiles["p"].Prompt, Vars{Hints: hints})
+			if err != nil || sys != measuredPrompt(instr, hints, "") {
+				t.Errorf("%q with hints %q = %q, %v; want the instruction kept as text", instr, hints, sys, err)
+			}
+		}
+	}
 }
 
 // TestVarsDocumented: every template variable is listed in docs/reference.md.
