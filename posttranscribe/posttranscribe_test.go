@@ -216,7 +216,7 @@ func TestNormalize(t *testing.T) {
 	}
 
 	old := config.PostTranscribe{
-		Prompts: map[string]string{"slack": "Casual tone."},
+		Prompts: map[string]string{"slack": "Casual tone.", "friendly": "Warm, keep {{braces}}."},
 		Colors:  map[string]string{"clean": "#111111", "slack": "#222222", "gone": "#333333"},
 	}
 	got, changed = Normalize(old)
@@ -232,6 +232,18 @@ func TestNormalize(t *testing.T) {
 	}
 	if _, ok := got.Profiles["gone"]; ok {
 		t.Error("a colour alone made a profile")
+	}
+	// A migrated prompt is described by its instruction, also where it
+	// replaced a default, and a "{{" in it is text, not a template action.
+	if d := got.Profiles["slack"].Description; d != "Casual tone." {
+		t.Errorf("slack description = %q, want its instruction", d)
+	}
+	if d := got.Profiles["friendly"].Description; d != "Warm, keep {{braces}}." {
+		t.Errorf("friendly description = %q, want its instruction, not the default's", d)
+	}
+	sys, err = render("friendly", got.Profiles["friendly"].Prompt, Vars{})
+	if err != nil || sys != measuredPrompt("Warm, keep {{braces}}.", "", "") {
+		t.Errorf("friendly = %q, %v; want the instruction kept as text", sys, err)
 	}
 }
 
