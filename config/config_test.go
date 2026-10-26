@@ -118,8 +118,8 @@ func TestSettingsCorruptFile(t *testing.T) {
 
 	os.WriteFile(filepath.Join(d, "config.json"), []byte("not json{{{"), 0644)
 
-	if err := Load(); err != nil {
-		t.Fatalf("Load should not error on corrupt file: %v", err)
+	if err := Load(); err == nil {
+		t.Fatal("Load on corrupt file: want error, got nil")
 	}
 	s := Get()
 	if s.Language != "en" {

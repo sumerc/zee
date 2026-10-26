@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"slices"
@@ -343,6 +344,22 @@ func TestTagColor(t *testing.T) {
 	}
 	if c := pt.Profiles["professional"].Color; c != "" {
 		t.Errorf("professional = %q, want no colour for an unused profile", c)
+	}
+}
+
+// TestLoadConfigCorrupt: a config.json that does not parse runs on the
+// defaults and is not saved over at startup.
+func TestLoadConfigCorrupt(t *testing.T) {
+	config.SetDir(t.TempDir())
+	bad := []byte(`{"language": "fr",`)
+	if err := os.WriteFile(config.SettingsPath(), bad, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if s := loadConfig(); s.Language != "en" {
+		t.Errorf("language = %q, want the default en", s.Language)
+	}
+	if got, err := os.ReadFile(config.SettingsPath()); err != nil || !bytes.Equal(got, bad) {
+		t.Errorf("config.json = %q, %v; want the user's file untouched", got, err)
 	}
 }
 

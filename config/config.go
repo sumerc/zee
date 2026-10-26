@@ -167,6 +167,9 @@ func IsAppBundle() bool {
 	return ok
 }
 
+// Load reads config.json into the live settings. A missing file is the
+// defaults. A file that does not parse also leaves the defaults live, and is
+// returned as an error: the caller must not save them over the user's file.
 func Load() error {
 	current = defaults
 
@@ -184,8 +187,7 @@ func Load() error {
 	// (Auto-detect), which must persist.
 	s := defaults
 	if err := json.Unmarshal(data, &s); err != nil {
-		log.Warnf("settings: corrupt config.json, using defaults: %v", err)
-		return nil
+		return fmt.Errorf("invalid config.json, using defaults: %w", err)
 	}
 	current = s
 	return nil

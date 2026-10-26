@@ -304,10 +304,7 @@ func run() {
 		os.Exit(setup.Run())
 	}
 	// Load persistent settings, merge with CLI flags
-	if err := config.Load(); err != nil {
-		log.Warnf("settings: %v", err)
-	}
-	cfg := normalizePost()
+	cfg := loadConfig()
 	flagSet := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
 	if !flagSet["lang"] {
@@ -1454,6 +1451,17 @@ func postMenu(pt config.PostTranscribe) []tray.PostProfile {
 		ps = append(ps, tray.PostProfile{Name: n, Tip: posttranscribe.Describe(pt, n)})
 	}
 	return ps
+}
+
+// loadConfig loads config.json at startup and normalizes it. A file that
+// does not load runs on the defaults and is not saved over: the user's file
+// stays as it is until they fix it and pick Reload Config.
+func loadConfig() config.Settings {
+	if err := config.Load(); err != nil {
+		log.Warnf("settings: %v", err)
+		return config.Get()
+	}
+	return normalizePost()
 }
 
 // normalizePost brings config.json's post_transcribe block to its current
