@@ -23,7 +23,10 @@ func TestLocalEntry(t *testing.T) {
 // TestLocalPrompt: the language line sits between the rules and the
 // instruction, the place it was measured in, and the turn is Gemma 4's.
 func TestLocalPrompt(t *testing.T) {
-	sys := systemPrompt(Builtin["clean"], "", "Turkish")
+	sys, err := render("clean", Defaults()["clean"].Prompt, Vars{Language: "Turkish"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(sys, "tags.\nThe transcript is in Turkish.\n\nInstruction: ") {
 		t.Errorf("language line misplaced:\n%s", sys)
 	}
@@ -59,7 +62,7 @@ func TestProvider(t *testing.T) {
 		}
 	}
 	// The mismatch fails before any request is sent.
-	_, err := Rewrite(config.PostTranscribe{Active: "clean", Model: DefaultLocalModel}, "", "", "x")
+	_, err := Rewrite(config.PostTranscribe{Active: "clean", Model: DefaultLocalModel, Profiles: Defaults()}, "", "", "x")
 	if err == nil {
 		t.Error("Rewrite with a local model on Groq succeeded")
 	}
@@ -72,7 +75,7 @@ func TestRewriteLocalMissing(t *testing.T) {
 	if localmodel.Present(m) {
 		t.Skip("model is on disk")
 	}
-	_, err := Rewrite(config.PostTranscribe{Active: "clean", Provider: ProviderLocal}, "", "en", "x")
+	_, err := Rewrite(config.PostTranscribe{Active: "clean", Provider: ProviderLocal, Profiles: Defaults()}, "", "en", "x")
 	if err == nil || !strings.Contains(err.Error(), m.Filename) {
 		t.Errorf("err = %v, want a not-downloaded error naming %s", err, m.Filename)
 	}
@@ -84,7 +87,7 @@ func TestRewriteLocal(t *testing.T) {
 	if !llama.Available() || !localmodel.Present(m) {
 		t.Skip("local LLM not compiled in or not downloaded")
 	}
-	out, err := Rewrite(config.PostTranscribe{Active: "clean", Provider: ProviderLocal}, "", "en", "um so hello their how are you")
+	out, err := Rewrite(config.PostTranscribe{Active: "clean", Provider: ProviderLocal, Profiles: Defaults()}, "", "en", "um so hello their how are you")
 	if err != nil {
 		t.Fatal(err)
 	}

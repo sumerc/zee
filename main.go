@@ -307,7 +307,7 @@ func run() {
 	if err := config.Load(); err != nil {
 		log.Warnf("settings: %v", err)
 	}
-	cfg := config.Get()
+	cfg := normalizePost()
 	flagSet := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
 	if !flagSet["lang"] {
@@ -901,12 +901,11 @@ func run() {
 		if guardBusy("Can't reload the config while recording or transcribing.") {
 			return
 		}
-		s, err := config.Reload()
-		if err != nil {
+		if _, err := config.Reload(); err != nil {
 			alert.Warn("Config reload failed — keeping current settings.\n\n" + err.Error())
 			return
 		}
-		applyCfg(s)
+		applyCfg(normalizePost())
 
 		// Credentials may have changed too: a cloud transcriber bakes its key in
 		// at construction, so rebuild the active one; then re-derive every
@@ -1457,6 +1456,16 @@ func postMenu(pt config.PostTranscribe) []tray.PostProfile {
 	return ps
 }
 
+// normalizePost brings config.json's post_transcribe block to its current
+// form — the default profiles the first time, the earlier prompts/colors maps
+// folded in — saves it if that changed anything, and returns the settings.
+func normalizePost() config.Settings {
+	if _, changed := posttranscribe.Normalize(config.Get().PostTranscribe); changed {
+		config.Update(func(s *config.Settings) { s.PostTranscribe, _ = posttranscribe.Normalize(s.PostTranscribe) })
+	}
+	return config.Get()
+}
+
 // resolvePost is pt as config.json was just loaded: an unknown profile name is
 // warned about once per load (startup or Reload Config) and acts as None.
 // config.json keeps the name.
@@ -1496,7 +1505,7 @@ func tagColor(name string) string {
 	if name == "" {
 		return ""
 	}
-	if c := config.Get().PostTranscribe.Colors[name]; c != "" {
+	if c := config.Get().PostTranscribe.Profiles[name].Color; c != "" {
 		return c
 	}
 	var color string
@@ -1512,17 +1521,20 @@ func setTagColor(s *config.Settings, name string) string {
 		return ""
 	}
 	c := &s.PostTranscribe
-	if c.Colors[name] == "" {
-		// Copy, then write: config.Get hands out this same map, and a reader
-		// holding it must never see it change.
-		colors := maps.Clone(c.Colors)
-		if colors == nil {
-			colors = map[string]string{}
-		}
-		colors[name] = overlay.PickTagColor(slices.Collect(maps.Values(colors)))
-		c.Colors = colors
+	p, ok := c.Profiles[name]
+	if !ok || p.Color != "" {
+		return p.Color
 	}
-	return c.Colors[name]
+	var used []string
+	for _, q := range c.Profiles {
+		used = append(used, q.Color)
+	}
+	p.Color = overlay.PickTagColor(used)
+	// Copy, then write: config.Get hands out this same map, and a reader
+	// holding it must never see it change.
+	c.Profiles = maps.Clone(c.Profiles)
+	c.Profiles[name] = p
+	return p.Color
 }
 
 // setLastRecording stashes the just-finished recording (audio + metadata) so the
