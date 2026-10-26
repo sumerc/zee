@@ -45,6 +45,9 @@ func loadLocal(m localmodel.Model) (*llama.Model, error) {
 	if loaded != nil && loadedPath == path {
 		return loaded, nil
 	}
+	if !llama.Available() {
+		return nil, fmt.Errorf("post_transcribe provider %q needs a Mac with Apple Silicon", ProviderLocal)
+	}
 	if !localmodel.Present(m) {
 		return nil, fmt.Errorf("%s is not downloaded: place %s in %s", m.ID, m.Filename, localmodel.Dir())
 	}

@@ -69,15 +69,19 @@ func TestProvider(t *testing.T) {
 }
 
 // TestRewriteLocalMissing: a local model that is not on disk fails with a
-// message that says where to put it, and needs no API key.
+// message that says where to put it, and needs no API key. Where llama is not
+// compiled in, the message says what the local provider needs instead.
 func TestRewriteLocalMissing(t *testing.T) {
 	m, _ := localmodel.ByID(localmodel.IDGemma4E2B)
-	if localmodel.Present(m) {
+	want := m.Filename
+	if !llama.Available() {
+		want = "Apple Silicon"
+	} else if localmodel.Present(m) {
 		t.Skip("model is on disk")
 	}
 	_, err := Rewrite(config.PostTranscribe{Active: "clean", Provider: ProviderLocal, Profiles: Defaults()}, "", "en", "x")
-	if err == nil || !strings.Contains(err.Error(), m.Filename) {
-		t.Errorf("err = %v, want a not-downloaded error naming %s", err, m.Filename)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %v, want an error naming %s", err, want)
 	}
 }
 
