@@ -160,7 +160,7 @@ Models are hosted in an immutable, never-"latest" `models-vN` GitHub release, **
 
 ## Packaging
 
-- `packaging/appicon.png` - source icon (1024px, stack Z design: shadow square + framed Z, transparent background)
+- `packaging/appicon.svg` / `appicon.png` - app icon source + its 1024px render (Andalusian tile: square-Kufic z in cobalt mosaic, cream panel, turquoise border; also the README logo)
 - `packaging/mkicns.sh` - generates `Zee.icns` from `appicon.png` (via `make icns`)
 - `packaging/mkdmg.sh` - creates DMG with Zee.app + Applications symlink (via `make app`)
 - `packaging/Info.plist` - app bundle metadata (version templated from git tag)

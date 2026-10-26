@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="zee-logo-stack.svg" alt="zee" width="180"><br>
+  <img src="packaging/appicon.svg" alt="zee" width="180"><br>
   <strong>zee</strong><br><br>
   Voice transcription that stays out of your way.<br>
   <strong>Runs fully on-device — no account, no API key, no network.</strong><br>

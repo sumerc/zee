@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <radialGradient id="glaze" cx="0.3" cy="0.2" r="0.9">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.28"/>
+      <stop offset="0.5" stop-color="#fff" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0.12"/>
+    </radialGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#1F9A97"/>
+  <rect x="180" y="180" width="664" height="664" rx="110" fill="#F3EBDA"/>
+  <g fill="#D8A23A">
+    <rect x="494" y="122" width="36" height="36" transform="rotate(45 512 140)"/>
+    <rect x="494" y="866" width="36" height="36" transform="rotate(45 512 884)"/>
+    <rect x="122" y="494" width="36" height="36" transform="rotate(45 140 512)"/>
+    <rect x="866" y="494" width="36" height="36" transform="rotate(45 884 512)"/>
+  </g>
+  <g fill="#1D3E8A">
+    <rect x="311" y="277" width="62" height="62" rx="5"/>
+    <rect x="447" y="277" width="62" height="62" rx="5"/>
+    <rect x="583" y="277" width="62" height="62" rx="5"/>
+    <rect x="651" y="345" width="62" height="62" rx="5"/>
+    <rect x="583" y="413" width="62" height="62" rx="5"/>
+    <rect x="515" y="481" width="62" height="62" rx="5"/>
+    <rect x="447" y="549" width="62" height="62" rx="5"/>
+    <rect x="379" y="617" width="62" height="62" rx="5"/>
+    <rect x="311" y="685" width="62" height="62" rx="5"/>
+    <rect x="447" y="685" width="62" height="62" rx="5"/>
+    <rect x="583" y="685" width="62" height="62" rx="5"/>
+  </g>
+  <g fill="#2A4FA6">
+    <rect x="379" y="277" width="62" height="62" rx="5"/>
+    <rect x="515" y="277" width="62" height="62" rx="5"/>
+    <rect x="651" y="277" width="62" height="62" rx="5"/>
+    <rect x="583" y="345" width="62" height="62" rx="5"/>
+    <rect x="515" y="413" width="62" height="62" rx="5"/>
+    <rect x="447" y="481" width="62" height="62" rx="5"/>
+    <rect x="379" y="549" width="62" height="62" rx="5"/>
+    <rect x="311" y="617" width="62" height="62" rx="5"/>
+    <rect x="379" y="685" width="62" height="62" rx="5"/>
+    <rect x="515" y="685" width="62" height="62" rx="5"/>
+    <rect x="651" y="685" width="62" height="62" rx="5"/>
+  </g>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#glaze)"/>
+</svg>
