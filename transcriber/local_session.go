@@ -27,6 +27,19 @@ type languageDetector interface {
 	LastDetection() (lang string, p float64)
 }
 
+// transcriptLang is the language the transcript is in: the forced one, else
+// what auto-detect picked, for engines that detect.
+func transcriptLang(e localEngine, forced string) string {
+	if forced != "" {
+		return forced
+	}
+	if d, ok := e.(languageDetector); ok {
+		lang, _ := d.LastDetection()
+		return lang
+	}
+	return ""
+}
+
 func logDetectedLanguage(e localEngine) {
 	d, ok := e.(languageDetector)
 	if !ok {
@@ -100,6 +113,7 @@ func (s *localSession) Close() (SessionResult, error) {
 	rawKB := float64(len(raw)) / 1024
 
 	sr := SessionResult{
+		Lang:        transcriptLang(eng, s.lang),
 		Text:        text,
 		HasText:     !noSpeech,
 		NoSpeech:    noSpeech,

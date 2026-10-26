@@ -59,34 +59,60 @@ app):
 An optional LLM pass rewrites each transcript before it is pasted. It is off by
 default. Pick a profile from the tray (**Settings → Post-Transcribe**, **None**
 turns it off) or set it in `config.json` and **Reload Config**; either way it
-applies from the next recording, with no restart. It uses the `groq` key from
-`credentials.json`, with any provider for the transcription itself.
+applies from the next recording, with no restart. It works with any provider
+for the transcription itself.
 
 ```json
 "post_transcribe": {
-  "active": "friendly",
-  "model": "openai/gpt-oss-120b",
-  "prompts": {
-    "slack": "Adjust the tone to casual, for a Slack message, only where needed."
+  "active": "clean",
+  "provider": "local",
+  "profiles": {
+    "clean": {
+      "description": "Fix grammar and misheard words, drop filler; keep your tone.",
+      "prompt": "You clean up a speech-to-text transcript … {{if .Language}}\nThe transcript is in {{.Language}}.{{end}}\n\nInstruction: Change nothing more.{{if .Hints}}\n\nVocabulary the speaker uses: {{.Hints}} …{{end}}",
+      "color": "#7CFF4F"
+    }
   }
 }
 ```
 
 - `active` — the profile to run; `""` (the default) turns it off.
-- `prompts` — your own profiles, name → a one- or two-sentence instruction. A
-  name that matches a built-in one replaces it.
-- `model` — any Groq chat model; omit it for `openai/gpt-oss-120b`. The rewrite
-  has a 5 s budget, so pick a fast model: a slow or reasoning-heavy one times out
-  on longer dictations and the raw transcript is pasted instead.
-- `colors` — each profile's colour for the recording overlay, `"#RRGGBB"`. zee
-  gives a profile without one a random colour from its palette the first time
-  you use it, and saves it so the colour stays put; edit it to choose your own.
+- `profiles` — every profile, by name. zee writes its defaults here the first
+  time (`clean`: the cleanup alone, tone untouched; `friendly`; `professional`),
+  and from then on this is the only copy: edit a prompt, add a profile, or
+  delete one, then **Reload Config**. Each profile has:
+  - `prompt` (required) — the whole system prompt the model gets, a template
+    with the variables below. The transcript itself is sent as the user turn.
+  - `description` — the tray tooltip.
+  - `color` — the profile's colour on the recording overlay, `"#RRGGBB"`. zee
+    gives a profile without one a random colour from its palette the first
+    time you use it, and saves it so it stays put.
+- `provider` — where the rewrite runs: `groq` (the default; it needs the `groq`
+  key) or `local`, on this Mac (Apple Silicon only, no key needed).
+- `model` — for `groq`, any Groq chat model; omit it for `openai/gpt-oss-120b`.
+  The Groq rewrite has a 5 s budget, so pick a fast model: a slow or
+  reasoning-heavy one times out on longer dictations and the raw transcript is
+  pasted instead. For `local`, omit it for `gemma-4-e2b`, the one local model
+  for now. Put `gemma-4-E2B-it-Q3_K_M.gguf` (2.5 GB) in the models folder; zee
+  loads it when a recording starts and keeps it in memory from then on. Its
+  time grows with the length of the dictation, and it has no 5 s budget.
 
-Built-in profiles: `clean` (the cleanup alone, tone untouched), `friendly`
-(conversational tone), `professional` (work email tone). Every profile fixes
-grammar and misheard words (toward `hints.txt`), removes filler, repetition and
-false starts, keeps the sentence in the language you spoke it in (English words
-inside a Turkish sentence stay English), and never answers the dictated text.
+Prompt variables, in Go template syntax — `{{.Name}}`, and
+`{{if .Name}}…{{end}}` to leave a part out when it is empty:
+
+| Variable | Value |
+|---|---|
+| `{{.Language}}` | The transcript's language in English, e.g. `Turkish`: the one you set, or with Auto-detect the one the transcription detected (local Whisper, Groq, Deepgram and ElevenLabs report it; Mistral and OpenAI do not). Empty when unknown, and always empty for `groq`, whose models were measured without it. The local model needs it to not translate. |
+| `{{.Hints}}` | Your vocabulary from `hints.txt`, comma-separated; empty when there is none. |
+
+A prompt that uses another name, or does not parse, fails that rewrite: the
+raw transcript is pasted and the tray error names the variables there are.
+The default prompts keep each word in the language you spoke it in (English
+words inside a Turkish sentence stay English) and never answer the dictated
+text.
+
+An earlier config with `prompts` (name → instruction) and `colors` is
+converted once: each instruction becomes a profile with the default rules.
 
 While a profile is active, the recording overlay shows its name in the
 top-right corner, in its colour.
@@ -95,7 +121,7 @@ If the call fails or times out, the raw transcript is pasted and the tray shows
 the error. In streaming mode the text is pasted once at the end instead of
 while you speak. With `-debug-transcribe`, each recording folder keeps the raw
 `transcript.txt` beside the rewritten `post_transcript.txt`, and `info.json`
-records the profile, the model and any error. The rewrite's time is
+records the profile, the provider, the model and any error. The rewrite's time is
 `post_transcribe_ms` in the `felt_latency` line.
 
 Logs live in `~/Library/Logs/zee/`: `diagnostics_log.txt` (timing, errors;

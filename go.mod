@@ -16,6 +16,7 @@ require (
 	github.com/shirou/gopsutil/v4 v4.26.5
 	golang.design/x/hotkey v0.4.1
 	golang.org/x/term v0.39.0
+	golang.org/x/text v0.34.0
 	nhooyr.io/websocket v1.8.17
 )
 

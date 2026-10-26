@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"zee/encoder"
 	"zee/hotkey"
 	"zee/overlay"
+	"zee/posttranscribe"
 	"zee/transcriber"
 )
 
@@ -320,7 +322,10 @@ func TestTagColor(t *testing.T) {
 	}
 
 	config.Update(func(s *config.Settings) {
-		s.PostTranscribe.Colors = map[string]string{"friendly": "#123456"}
+		s.PostTranscribe.Profiles = posttranscribe.Defaults()
+		f := s.PostTranscribe.Profiles["friendly"]
+		f.Color = "#123456"
+		s.PostTranscribe.Profiles["friendly"] = f
 	})
 	if c := tagColor("friendly"); c != "#123456" {
 		t.Errorf("friendly = %q, want the user's #123456 kept", c)
@@ -334,32 +339,51 @@ func TestTagColor(t *testing.T) {
 		t.Fatal(err)
 	}
 	pt := config.Get().PostTranscribe
-	if pt.Colors["clean"] != got || tagColor("clean") != got {
-		t.Errorf("clean = %q after reload, want its first colour %q kept", pt.Colors["clean"], got)
+	if pt.Profiles["clean"].Color != got || tagColor("clean") != got {
+		t.Errorf("clean = %q after reload, want its first colour %q kept", pt.Profiles["clean"].Color, got)
 	}
-	if c, ok := pt.Colors["professional"]; ok {
+	if c := pt.Profiles["professional"].Color; c != "" {
 		t.Errorf("professional = %q, want no colour for an unused profile", c)
 	}
 }
 
-// TestSetTagColor: a first pick writes a new map, so a reader holding the old
-// one never sees it change; a set colour and "none" change nothing.
-func TestSetTagColor(t *testing.T) {
-	old := map[string]string{"friendly": "#123456"}
-	var s config.Settings
-	s.PostTranscribe.Colors = old
+// TestLoadConfigCorrupt: a config.json that does not parse runs on the
+// defaults and is not saved over at startup.
+func TestLoadConfigCorrupt(t *testing.T) {
+	config.SetDir(t.TempDir())
+	bad := []byte(`{"language": "fr",`)
+	if err := os.WriteFile(config.SettingsPath(), bad, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if s := loadConfig(); s.Language != "en" {
+		t.Errorf("language = %q, want the default en", s.Language)
+	}
+	if got, err := os.ReadFile(config.SettingsPath()); err != nil || !bytes.Equal(got, bad) {
+		t.Errorf("config.json = %q, %v; want the user's file untouched", got, err)
+	}
+}
 
-	if c := setTagColor(&s, ""); c != "" || len(s.PostTranscribe.Colors) != 1 {
-		t.Errorf("setTagColor(\"\") = %q, colours %v; want none, unchanged", c, s.PostTranscribe.Colors)
+// TestSetTagColor: a first pick writes a new map, so a reader holding the old
+// one never sees it change; a set colour, "none" and an unknown name change
+// nothing.
+func TestSetTagColor(t *testing.T) {
+	old := map[string]config.Profile{"friendly": {Prompt: "x", Color: "#123456"}, "clean": {Prompt: "y"}}
+	var s config.Settings
+	s.PostTranscribe.Profiles = old
+
+	for _, name := range []string{"", "pirate"} {
+		if c := setTagColor(&s, name); c != "" || s.PostTranscribe.Profiles["clean"].Color != "" {
+			t.Errorf("setTagColor(%q) = %q; want none, nothing changed", name, c)
+		}
 	}
 	if c := setTagColor(&s, "friendly"); c != "#123456" {
 		t.Errorf("friendly = %q, want #123456 kept", c)
 	}
 	c := setTagColor(&s, "clean")
-	if !slices.Contains(overlay.TagColors, c) || s.PostTranscribe.Colors["clean"] != c {
-		t.Errorf("clean = %q, colours %v; want a saved palette colour", c, s.PostTranscribe.Colors)
+	if !slices.Contains(overlay.TagColors, c) || s.PostTranscribe.Profiles["clean"].Color != c {
+		t.Errorf("clean = %q, profiles %v; want a saved palette colour", c, s.PostTranscribe.Profiles)
 	}
-	if _, ok := old["clean"]; ok {
+	if old["clean"].Color != "" {
 		t.Error("the colour was written into the map readers hold")
 	}
 }
@@ -371,10 +395,11 @@ func TestResolvePost(t *testing.T) {
 	if err := config.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if got := resolvePost(config.PostTranscribe{Active: "frendly"}); got.Active != "" {
+	profiles := posttranscribe.Defaults()
+	if got := resolvePost(config.PostTranscribe{Active: "frendly", Profiles: profiles}); got.Active != "" {
 		t.Errorf("unknown profile resolved to %q, want none", got.Active)
 	}
-	if got := resolvePost(config.PostTranscribe{Active: "friendly"}); got.Active != "friendly" {
+	if got := resolvePost(config.PostTranscribe{Active: "friendly", Profiles: profiles}); got.Active != "friendly" {
 		t.Errorf("friendly resolved to %q, want it kept", got.Active)
 	}
 	if _, err := os.Stat(config.SettingsPath()); err == nil {
