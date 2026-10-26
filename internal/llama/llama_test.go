@@ -7,7 +7,8 @@ import (
 )
 
 // TestGenerate loads the GGUF named by ZEE_LLAMA_MODEL and checks one Gemma 4
-// turn comes back as plain text. Skipped when the model is not on disk.
+// turn comes back as plain text, ended by the model (a reply cut off before
+// end-of-generation is an error). Skipped when the model is not on disk.
 func TestGenerate(t *testing.T) {
 	path := os.Getenv("ZEE_LLAMA_MODEL")
 	if path == "" || !Available() {
@@ -19,15 +20,22 @@ func TestGenerate(t *testing.T) {
 	}
 	defer m.Close()
 	prompt := "<|turn>system\nReply with the cleaned text only.<turn|>\n<|turn>user\nhello their how are you<turn|>\n<|turn>model\n"
-	for range 2 { // the second call must not see the first one's KV cache
+	var replies [2]string
+	for i := range replies {
 		out, err := m.Generate(prompt, 64)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if out = strings.TrimSpace(out); out == "" || strings.Contains(out, "<turn|>") {
-			t.Fatalf("reply = %q", out)
+		if strings.TrimSpace(out) == "" {
+			t.Fatal("empty reply")
 		}
+		replies[i] = out
 		t.Logf("reply: %q", out)
+	}
+	// Greedy decoding is deterministic: a second reply that differs saw the
+	// first one's KV cache.
+	if replies[0] != replies[1] {
+		t.Errorf("replies differ: %q, %q", replies[0], replies[1])
 	}
 	if out, err := m.Generate(prompt, 2); err == nil {
 		t.Errorf("a reply cut off at 2 tokens returned %q, want an error", out)

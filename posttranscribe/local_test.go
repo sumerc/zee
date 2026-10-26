@@ -85,18 +85,25 @@ func TestRewriteLocalMissing(t *testing.T) {
 	}
 }
 
-// TestRewriteLocal runs a real rewrite when the model is downloaded.
+// TestRewriteLocal runs a real rewrite when the model is downloaded, twice:
+// the resident model gives the same reply again, ended by the model (a reply
+// cut off before end-of-generation is an error).
 func TestRewriteLocal(t *testing.T) {
 	m, _ := localmodel.ByID(localmodel.IDGemma4E2B)
 	if !llama.Available() || !localmodel.Present(m) {
 		t.Skip("local LLM not compiled in or not downloaded")
 	}
-	out, err := Rewrite(config.PostTranscribe{Active: "clean", Provider: ProviderLocal, Profiles: Defaults()}, "", "en", "um so hello their how are you")
-	if err != nil {
-		t.Fatal(err)
+	c := config.PostTranscribe{Active: "clean", Provider: ProviderLocal, Profiles: Defaults()}
+	var outs [2]string
+	for i := range outs {
+		out, err := Rewrite(c, "", "en", "um so hello their how are you")
+		if err != nil {
+			t.Fatal(err)
+		}
+		outs[i] = out
+		t.Logf("out: %q", out)
 	}
-	if strings.Contains(out, "<turn|>") || strings.Contains(strings.ToLower(out), "their") {
-		t.Errorf("out = %q", out)
+	if strings.Contains(strings.ToLower(outs[0]), "their") || outs[0] != outs[1] {
+		t.Errorf("outs = %q, want the same fixed reply twice", outs)
 	}
-	t.Logf("out: %q", out)
 }
