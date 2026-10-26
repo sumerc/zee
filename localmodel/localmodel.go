@@ -135,9 +135,9 @@ var models = []Model{
 		ID:           IDGemma4E2B,
 		Label:        "Post-transcribe — local (Gemma 4 E2B)",
 		Engine:       EngineLlama,
-		Filename:     "gemma-4-E2B-it-Q4_K_M.gguf",
-		SHA256:       "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
-		SizeBytes:    3106738272,
+		Filename:     "gemma-4-E2B-it-Q3_K_M.gguf",
+		SHA256:       "086e2f5ba85057f8f19712e3160a644728f74f323c9feeac4cd73fab11b43085",
+		SizeBytes:    2536786016,
 		Multilingual: true,
 	},
 }

@@ -82,7 +82,7 @@ for the transcription itself.
   The Groq rewrite has a 5 s budget, so pick a fast model: a slow or
   reasoning-heavy one times out on longer dictations and the raw transcript is
   pasted instead. For `local`, omit it for `gemma-4-e2b`, the one local model
-  for now. Put `gemma-4-E2B-it-Q4_K_M.gguf` (3.1 GB) in the models folder; zee
+  for now. Put `gemma-4-E2B-it-Q3_K_M.gguf` (2.5 GB) in the models folder; zee
   loads it when a recording starts and keeps it in memory from then on. The
   local rewrite is told the transcript's language — the one you set, or with
   Auto-detect the one the transcription detected (local Whisper, Groq,
