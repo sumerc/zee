@@ -198,3 +198,37 @@ func TestEmptyProfilesPersist(t *testing.T) {
 		t.Errorf("profiles = %#v, want an empty map", p)
 	}
 }
+
+// TestCorruptFileNotSavedOver: after a Load that fails to parse, a setting
+// change must not write the defaults over the user's file; once the file is
+// fixed and reloaded, changes save again.
+func TestCorruptFileNotSavedOver(t *testing.T) {
+	d := t.TempDir()
+	SetDir(d)
+	path := filepath.Join(d, "config.json")
+	bad := []byte(`{"language": "fr",}`)
+	if err := os.WriteFile(path, bad, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(); err == nil {
+		t.Fatal("Load on corrupt file: want error, got nil")
+	}
+	Update(func(s *Settings) { s.Device = "Blue Yeti" })
+	if got, _ := os.ReadFile(path); string(got) != string(bad) {
+		t.Fatalf("corrupt config.json was saved over: %q", got)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"language": "fr"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	Update(func(s *Settings) { s.Device = "Blue Yeti" })
+	if err := Load(); err != nil {
+		t.Fatalf("Load after save: %v", err)
+	}
+	if s := Get(); s.Device != "Blue Yeti" || s.Language != "fr" {
+		t.Fatalf("after Reload, Update did not save: %+v", s)
+	}
+}

@@ -1457,8 +1457,9 @@ func postMenu(pt config.PostTranscribe) []tray.PostProfile {
 }
 
 // loadConfig loads config.json at startup and normalizes it. A file that
-// does not load runs on the defaults and is not saved over: the user's file
-// stays as it is until they fix it and pick Reload Config.
+// does not load runs on the defaults and is not saved over — config skips
+// every save, from here or any later setting change, until the user fixes the
+// file and picks Reload Config.
 func loadConfig() config.Settings {
 	if err := config.Load(); err != nil {
 		log.Warnf("settings: %v", err)

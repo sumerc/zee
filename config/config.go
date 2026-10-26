@@ -68,10 +68,15 @@ const settingsFile = "config.json"
 const defaultTailWaitMs = 50
 
 var (
-	mu       sync.Mutex
-	current  Settings
-	dir      string
-	defaults = Settings{
+	mu      sync.Mutex
+	current Settings
+	// loadFailed is set while the live settings are the defaults standing in
+	// for a config.json that did not parse: Update does not save then, so no
+	// change made meanwhile writes them over the user's file. A good Load or
+	// Reload clears it.
+	loadFailed bool
+	dir        string
+	defaults   = Settings{
 		Language:   "en",
 		AutoPaste:  true,
 		TailWaitMs: defaultTailWaitMs,
@@ -171,9 +176,13 @@ func IsAppBundle() bool {
 
 // Load reads config.json into the live settings. A missing file is the
 // defaults. A file that does not parse also leaves the defaults live, and is
-// returned as an error: the caller must not save them over the user's file.
+// returned as an error, and no save writes them over the user's file until
+// a Reload succeeds.
 func Load() error {
+	mu.Lock()
+	defer mu.Unlock()
 	current = defaults
+	loadFailed = false
 
 	data, err := os.ReadFile(settingsPath())
 	if err != nil {
@@ -189,6 +198,7 @@ func Load() error {
 	// (Auto-detect), which must persist.
 	s := defaults
 	if err := json.Unmarshal(data, &s); err != nil {
+		loadFailed = true
 		return fmt.Errorf("invalid config.json, using defaults: %w", err)
 	}
 	current = s
@@ -221,15 +231,20 @@ func Reload() (Settings, error) {
 		return current, fmt.Errorf("invalid config.json: %w", err)
 	}
 	current = s
+	loadFailed = false
 	return s, nil
 }
 
 func Update(fn func(*Settings)) {
 	mu.Lock()
 	fn(&current)
-	s := current
+	s, failed := current, loadFailed
 	mu.Unlock()
 
+	if failed {
+		log.Warn("settings: config.json did not parse, not saving over it (fix it and pick Reload Config)")
+		return
+	}
 	save(s)
 }
 
