@@ -131,9 +131,6 @@ func plainLangsFromCodes(codes []string) []Language {
 	return langs
 }
 
-// AllLanguages returns every known language (Auto-detect first, then the rest
-// sorted alphabetically). The tray uses this as the fixed universe of language
-// menu items; SetLanguages then shows only the active model's subset.
 // langCode normalizes a language as a provider reports it — an ISO 639-1 or
 // 639-3 code ("tr", "tur") or an English name ("Turkish") — to ISO 639-1.
 // It is "" when s is empty or not a language zee lists.
@@ -159,6 +156,9 @@ func langCode(s string) string {
 // or "" when the code is unknown.
 func LanguageName(code string) string { return langLabels[code] }
 
+// AllLanguages returns every known language (Auto-detect first, then the rest
+// sorted alphabetically). The tray uses this as the fixed universe of language
+// menu items; SetLanguages then shows only the active model's subset.
 func AllLanguages() []Language {
 	codes := make([]string, 0, len(langLabels))
 	for c := range langLabels {
