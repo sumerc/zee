@@ -47,9 +47,11 @@ static struct llama_context *zee_llama_context(struct llama_model *m, int n_ctx)
 }
 
 // zee_llama_generate decodes prompt and samples greedily until an
-// end-of-generation token or max_tokens. It writes the reply (special tokens
+// end-of-generation token. The reply gets max_tokens, or the room the prompt
+// leaves in the context if that is less. It writes the reply (special tokens
 // not rendered) into out and returns its length, or a negative error:
-// -1 tokenize, -2 prompt too long, -3 decode, -4 out of memory.
+// -1 tokenize, -2 prompt too long, -3 decode, -4 out of memory, -5 no
+// end-of-generation within the reply's tokens, -6 a piece did not fit.
 static int zee_llama_generate(struct llama_model *m, struct llama_context *ctx,
                               const char *prompt, int max_tokens, char *out, int out_cap) {
 	const struct llama_vocab *vocab = llama_model_get_vocab(m);
@@ -57,7 +59,9 @@ static int zee_llama_generate(struct llama_model *m, struct llama_context *ctx,
 
 	int n = -llama_tokenize(vocab, prompt, (int)strlen(prompt), NULL, 0, true, true);
 	if (n <= 0) return -1;
-	if (n >= (int)llama_n_ctx(ctx) - max_tokens) return -2;
+	int room = (int)llama_n_ctx(ctx) - n;
+	if (room <= 0) return -2;
+	if (max_tokens > room) max_tokens = room;
 	llama_token *toks = malloc(sizeof(llama_token) * n);
 	if (!toks) return -4;
 	if (llama_tokenize(vocab, prompt, (int)strlen(prompt), toks, n, true, true) < 0) {
@@ -70,23 +74,28 @@ static int zee_llama_generate(struct llama_model *m, struct llama_context *ctx,
 
 	struct llama_sampler *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
 	llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
-	int len = 0;
+	int len = 0, ret = -5;
 	for (int i = 0; i < max_tokens; i++) {
 		llama_token t = llama_sampler_sample(smpl, ctx, -1);
-		if (llama_vocab_is_eog(vocab, t)) break;
+		if (llama_vocab_is_eog(vocab, t)) {
+			ret = len;
+			break;
+		}
 		char piece[256];
 		int k = llama_token_to_piece(vocab, t, piece, sizeof(piece), 0, false);
-		if (k > 0 && len + k < out_cap) {
-			memcpy(out + len, piece, k);
-			len += k;
+		if (k < 0 || len + k >= out_cap) {
+			ret = -6;
+			break;
 		}
+		memcpy(out + len, piece, k);
+		len += k;
 		if (llama_decode(ctx, llama_batch_get_one(&t, 1)) != 0) {
-			llama_sampler_free(smpl);
-			return -3;
+			ret = -3;
+			break;
 		}
 	}
 	llama_sampler_free(smpl);
-	return len;
+	return ret;
 }
 */
 import "C"
@@ -131,7 +140,8 @@ func Load(path string) (*Model, error) {
 }
 
 // Generate completes prompt (already in the model's chat format) and returns
-// the reply, at most maxTokens long.
+// the reply. A reply that does not end within maxTokens, or within the room
+// the prompt leaves in the context, is an error, not a cut-short text.
 func (m *Model) Generate(prompt string, maxTokens int) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -147,6 +157,10 @@ func (m *Model) Generate(prompt string, maxTokens int) (string, error) {
 	switch {
 	case n == -2:
 		return "", fmt.Errorf("llama: prompt too long for a %d-token context", contextTokens)
+	case n == -5:
+		return "", fmt.Errorf("llama: reply did not end within its token limit")
+	case n == -6:
+		return "", fmt.Errorf("llama: reply did not fit the output buffer")
 	case n < 0:
 		return "", fmt.Errorf("llama: generation failed (%d)", int(n))
 	}

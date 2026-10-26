@@ -8,8 +8,10 @@ import (
 	"zee/localmodel"
 )
 
-// maxLocalTokens bounds the local reply. A rewrite is about as long as the
-// dictation, so this leaves room for a long one inside llama's context.
+// maxLocalTokens bounds the local reply, so a model that does not stop holds
+// the recorder only so long. A rewrite is about as long as the dictation, so
+// this leaves room for a long one; llama also stops at the end of its context.
+// A reply cut off at either limit is an error: the raw transcript is pasted.
 const maxLocalTokens = 1024
 
 // The local model is loaded on first use and kept resident: loading it maps

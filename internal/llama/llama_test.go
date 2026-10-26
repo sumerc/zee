@@ -29,4 +29,7 @@ func TestGenerate(t *testing.T) {
 		}
 		t.Logf("reply: %q", out)
 	}
+	if out, err := m.Generate(prompt, 2); err == nil {
+		t.Errorf("a reply cut off at 2 tokens returned %q, want an error", out)
+	}
 }
