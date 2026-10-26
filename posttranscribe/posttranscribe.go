@@ -228,15 +228,21 @@ func Warm(c config.PostTranscribe) {
 
 // Release frees the resident local model unless c runs one, so its memory
 // comes back once post-transcribe is off or on Groq; call it whenever the
-// config changes. It does not block: a rewrite running on the model finishes
-// first, and one that was about to start fails, so its raw transcript is
-// pasted.
+// config changes, and after a rewrite, which runs on the config its recording
+// started with. It does not block (a tray click calls it on the main thread):
+// the unload runs in the background after a load or a rewrite running on the
+// model, and a rewrite that was about to start fails, so its raw transcript
+// is pasted.
 func Release(c config.PostTranscribe) {
 	r, _ := Resolve(c)
 	if _, isLocal, err := local(r); r.Active != "" && isLocal && err == nil {
 		return // loadLocal swaps one local model for another itself
 	}
-	unloadLocal()
+	unloads.Add(1)
+	go func() {
+		defer unloads.Done()
+		unloadLocal()
+	}()
 }
 
 type message struct {

@@ -20,6 +20,8 @@ var (
 	localMu    sync.Mutex
 	loaded     *llama.Model
 	loadedPath string
+	// unloads tracks Release's background unloads, so a test can wait for them.
+	unloads sync.WaitGroup
 )
 
 // localEntry returns the registry entry when model names a local LLM.
@@ -65,15 +67,16 @@ func loadLocal(m localmodel.Model) (*llama.Model, error) {
 	return l, nil
 }
 
-// unloadLocal frees the resident model, if any. Close waits for a running
-// Generate, so it runs off the caller's goroutine.
+// unloadLocal frees the resident model, if any. It waits for a running
+// loadLocal and Close waits for a running Generate, so Release runs it in the
+// background.
 func unloadLocal() {
 	localMu.Lock()
 	l := loaded
 	loaded, loadedPath = nil, ""
 	localMu.Unlock()
 	if l != nil {
-		go l.Close()
+		l.Close()
 	}
 }
 

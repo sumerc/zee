@@ -125,8 +125,18 @@ func TestRelease(t *testing.T) {
 	for _, off := range []config.PostTranscribe{{Profiles: c.Profiles, Provider: ProviderLocal}, defaults("clean")} {
 		Warm(c)
 		Release(off)
+		unloads.Wait()
 		if resident() {
 			t.Errorf("Release(%s, %q) kept the model", Provider(off), off.Active)
 		}
 	}
+}
+
+// TestReleaseDoesNotBlock: a tray click calls Release on the main thread, so
+// it must return while a model load holds localMu.
+func TestReleaseDoesNotBlock(t *testing.T) {
+	localMu.Lock() // a load in progress
+	Release(defaults("clean"))
+	localMu.Unlock()
+	unloads.Wait()
 }

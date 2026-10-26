@@ -1333,6 +1333,9 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 		t := time.Now()
 		out, err := posttranscribe.Rewrite(cfg.post, cfg.hints, result.Lang, text)
 		lat.PostTranscribeMs = float64(time.Since(t).Microseconds()) / 1000
+		// cfg.post is the config this recording started with: if the user
+		// has moved off it since, free what this rewrite may have reloaded.
+		posttranscribe.Release(config.Get().PostTranscribe)
 		if err != nil {
 			log.Warnf("post_transcribe: %v", err)
 			tray.SetError("Post-transcribe failed, used the raw transcript: " + err.Error())
