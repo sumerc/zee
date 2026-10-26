@@ -65,6 +65,18 @@ func loadLocal(m localmodel.Model) (*llama.Model, error) {
 	return l, nil
 }
 
+// unloadLocal frees the resident model, if any. Close waits for a running
+// Generate, so it runs off the caller's goroutine.
+func unloadLocal() {
+	localMu.Lock()
+	l := loaded
+	loaded, loadedPath = nil, ""
+	localMu.Unlock()
+	if l != nil {
+		go l.Close()
+	}
+}
+
 // completeLocal runs one rewrite on the local model. It has no timeout: a
 // llama generation cannot be cut short, and maxLocalTokens bounds it instead.
 func completeLocal(m localmodel.Model, system, text string) (string, error) {

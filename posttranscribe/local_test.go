@@ -107,3 +107,26 @@ func TestRewriteLocal(t *testing.T) {
 		t.Errorf("outs = %q, want the same fixed reply twice", outs)
 	}
 }
+
+// TestRelease: the resident model stays while the config runs it and is freed
+// once the config moves off it.
+func TestRelease(t *testing.T) {
+	m, _ := localmodel.ByID(localmodel.IDGemma4E2B)
+	if !llama.Available() || !localmodel.Present(m) {
+		t.Skip("local LLM not compiled in or not downloaded")
+	}
+	resident := func() bool { localMu.Lock(); defer localMu.Unlock(); return loaded != nil }
+	c := config.PostTranscribe{Active: "clean", Provider: ProviderLocal, Profiles: Defaults()}
+	Warm(c)
+	Release(c)
+	if !resident() {
+		t.Fatal("released the model the config runs")
+	}
+	for _, off := range []config.PostTranscribe{{Profiles: c.Profiles, Provider: ProviderLocal}, defaults("clean")} {
+		Warm(c)
+		Release(off)
+		if resident() {
+			t.Errorf("Release(%s, %q) kept the model", Provider(off), off.Active)
+		}
+	}
+}

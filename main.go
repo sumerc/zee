@@ -485,12 +485,14 @@ func run() {
 	})
 	tray.SetAutoPaste(autoPaste)
 	// A pick is saved like any other tray setting; each recording reads the
-	// config, so it applies from the next one without a restart.
+	// config, so it applies from the next one without a restart. A pick away
+	// from a local model frees it.
 	tray.SetPostTranscribe(postMenu(cfg.PostTranscribe), resolvePost(cfg.PostTranscribe).Active, func(name string) {
 		config.Update(func(s *config.Settings) {
 			s.PostTranscribe.Active = name
 			setTagColor(s, name) // a first pick gives the profile its colour
 		})
+		posttranscribe.Release(config.Get().PostTranscribe)
 		log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
 	})
 
@@ -883,6 +885,7 @@ func run() {
 		}
 
 		tray.SetPostTranscribe(postMenu(s.PostTranscribe), resolvePost(s.PostTranscribe).Active, nil)
+		posttranscribe.Release(s.PostTranscribe)
 
 		if want := s.Hotkey.OrDefault(); !want.Equal(hk.Current()) {
 			if err := hk.Rebind(want); err != nil {
