@@ -35,9 +35,9 @@ type Settings struct {
 // PostTranscribe is the post_transcribe block of config.json. Active picks a
 // profile by name from Profiles; "" is off.
 type PostTranscribe struct {
-	Active   string             `json:"active"`
-	Provider string             `json:"provider,omitempty"` // "groq" (the default) or "local"
-	Model    string             `json:"model,omitempty"`    // "" = the provider's default
+	Active   string `json:"active"`
+	Provider string `json:"provider,omitempty"` // "groq" (the default) or "local"
+	Model    string `json:"model,omitempty"`    // "" = the provider's default
 	// Profiles has no omitempty: an empty map is the user deleting every
 	// profile, and must not read back as absent (which seeds the defaults).
 	Profiles map[string]Profile `json:"profiles"`
