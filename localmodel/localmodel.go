@@ -9,6 +9,7 @@
 package localmodel
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -75,11 +76,15 @@ type Model struct {
 	SizeBytes    int64
 	Decoder      int  // parakeet head: 0=default, 1=ctc, 2=tdt (ignored by whisper)
 	Multilingual bool // true => non-English supported; false => English-only
-	PreFetch     bool // install.sh pre-fetches it (currently every model)
+	PreFetch     bool // install.sh pre-fetches it
+	// Source is the full download URL of a model that is not in the models
+	// release: GitHub caps a release file at 2 GiB. It must name an immutable
+	// revision (a commit, not a branch), so SHA256 always matches.
+	Source string
 }
 
-// URL is where the gguf is hosted under the pinned models tag.
-func (m Model) URL() string { return baseURL + m.Filename }
+// URL is where the gguf is hosted: Source, else the pinned models tag.
+func (m Model) URL() string { return cmp.Or(m.Source, baseURL+m.Filename) }
 
 // HumanSize renders the on-disk size as "1.4 GB" or "267 MB".
 func (m Model) HumanSize() string {
@@ -133,12 +138,15 @@ var models = []Model{
 	},
 	{
 		ID:           IDGemma4E2B,
-		Label:        "Post-transcribe — local (Gemma 4 E2B)",
+		Label:        "Gemma 4 E2B",
 		Engine:       EngineLlama,
 		Filename:     "gemma-4-E2B-it-Q3_K_M.gguf",
 		SHA256:       "086e2f5ba85057f8f19712e3160a644728f74f323c9feeac4cd73fab11b43085",
 		SizeBytes:    2536786016,
 		Multilingual: true,
+		// unsloth's quantization, Apache-2.0, at a fixed commit; too large
+		// for a GitHub release file.
+		Source: "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q3_K_M.gguf",
 	},
 }
 
