@@ -55,6 +55,47 @@ func TestEffectiveLangRoundTrip(t *testing.T) {
 	}
 }
 
+// TestChoosePostNoted: a click on an entry with a note (its model is not
+// downloaded) is reported but keeps the checkmark where it was.
+func TestChoosePostNoted(t *testing.T) {
+	var got []string
+	SetPostTranscribe([]PostProfile{{Name: "clean", Note: "download 2.4 GB"}}, "", func(name string) { got = append(got, name) })
+	t.Cleanup(func() {
+		SetPostTranscribe(nil, "", nil)
+		trayMu.Lock()
+		postCb = nil
+		trayMu.Unlock()
+	})
+
+	choosePost(1)
+
+	if len(got) != 1 || got[0] != "clean" {
+		t.Fatalf("callbacks = %q, want [clean]", got)
+	}
+	if postActive != "" {
+		t.Errorf("postActive = %q, want None kept", postActive)
+	}
+}
+
+// TestChoosePostNoKey: a profile disabled for a missing API key ignores a
+// click: nothing is reported and None stays selected.
+func TestChoosePostNoKey(t *testing.T) {
+	var got []string
+	SetPostTranscribe([]PostProfile{{Name: "clean", NoKey: true}}, "", func(name string) { got = append(got, name) })
+	t.Cleanup(func() {
+		SetPostTranscribe(nil, "", nil)
+		trayMu.Lock()
+		postCb = nil
+		trayMu.Unlock()
+	})
+
+	choosePost(1)
+
+	if len(got) != 0 || postActive != "" {
+		t.Errorf("callbacks = %q, active = %q; want none and None", got, postActive)
+	}
+}
+
 // TestChoosePost: entry 0 is None (""), the rest follow the profiles; a click
 // reports the choice and moves the selection.
 func TestChoosePost(t *testing.T) {
@@ -77,5 +118,49 @@ func TestChoosePost(t *testing.T) {
 	}
 	if postActive != "" {
 		t.Errorf("postActive = %q, want None", postActive)
+	}
+}
+
+// TestChoosePostModel: like the transcription Model menu, a ready entry is
+// reported and gets the checkmark; a downloadable one is reported without it;
+// an unavailable (no key) or downloading one is ignored.
+func TestChoosePostModel(t *testing.T) {
+	var got []string
+	SetPostModels([]Model{
+		{Provider: "local", ModelID: "gemma", Group: "Local", State: ModelNeedsDownload, Detail: "2.4 GB"},
+		{Provider: "groq", ModelID: "a", Group: "Groq"},
+		{Provider: "groq", ModelID: "b", Group: "Groq", Active: true},
+		{Provider: "openai", ModelID: "c", Group: "OpenAI", State: ModelUnavailable},
+	}, func(provider, model string) { got = append(got, provider+":"+model) })
+	t.Cleanup(func() {
+		SetPostModels(nil, nil)
+		trayMu.Lock()
+		postModelCb = nil
+		trayMu.Unlock()
+	})
+	active := func() string {
+		trayMu.Lock()
+		defer trayMu.Unlock()
+		for _, m := range postModels {
+			if m.Active {
+				return m.Provider + ":" + m.ModelID
+			}
+		}
+		return ""
+	}
+
+	choosePostModel(0)
+	if a := active(); a != "groq:b" {
+		t.Errorf("after the download click, active = %q, want groq:b kept", a)
+	}
+	choosePostModel(3) // no key: ignored
+	choosePostModel(1)
+	choosePostModel(9) // past the end: ignored
+
+	if len(got) != 2 || got[0] != "local:gemma" || got[1] != "groq:a" {
+		t.Fatalf("callbacks = %q, want [local:gemma groq:a]", got)
+	}
+	if a := active(); a != "groq:a" {
+		t.Errorf("active = %q, want groq:a", a)
 	}
 }

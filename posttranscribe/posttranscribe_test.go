@@ -37,6 +37,7 @@ func TestMain(m *testing.M) {
 	}))
 	defer srv.Close()
 	apiURL = srv.URL + "/openai/v1/chat/completions"
+	openaiURL = srv.URL + "/v1/chat/completions"
 
 	dir, _ := os.MkdirTemp("", "zee-posttranscribe")
 	defer os.RemoveAll(dir)
@@ -52,7 +53,7 @@ func defaults(active string) config.PostTranscribe {
 }
 
 func TestRewriteDefault(t *testing.T) {
-	out, err := Rewrite(defaults("friendly"), "Claude, JSON", "tr", "hello their")
+	out, err := Rewrite(defaults("clean"), "Claude, JSON", "tr", "hello their")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +64,7 @@ func TestRewriteDefault(t *testing.T) {
 		t.Errorf("model=%q effort=%q, want %q low", last.Model, last.ReasoningEffort, DefaultModel)
 	}
 	sys, user := last.Messages[0].Content, last.Messages[1].Content
-	if !strings.Contains(sys, "Instruction: Adjust the tone to friendly") || !strings.Contains(sys, "Claude, JSON") {
+	if !strings.Contains(sys, "Instruction: Change nothing more.") || !strings.Contains(sys, "Claude, JSON") {
 		t.Errorf("system prompt lacks profile or vocabulary:\n%s", sys)
 	}
 	if !strings.Contains(user, "<transcript>\nhello their\n</transcript>") {
@@ -99,9 +100,7 @@ func measuredPrompt(instruction, hints, language string) string {
 
 func TestDefaultsRenderMeasuredPrompt(t *testing.T) {
 	instructions := map[string]string{
-		"clean":        "Change nothing more.",
-		"friendly":     "Adjust the tone to friendly, only where needed.",
-		"professional": "Adjust the tone to polite and professional, only where needed.",
+		"clean": "Change nothing more.",
 	}
 	d := Defaults()
 	if got := slices.Sorted(maps.Keys(d)); !slices.Equal(got, slices.Sorted(maps.Keys(instructions))) {
@@ -176,7 +175,7 @@ func TestRenderErrors(t *testing.T) {
 
 func TestRewriteUnknownProfile(t *testing.T) {
 	_, err := Rewrite(defaults("pirate"), "", "", "x")
-	if err == nil || !strings.Contains(err.Error(), "clean, friendly, professional") {
+	if err == nil || !strings.Contains(err.Error(), "(have: clean)") {
 		t.Errorf("err = %v, want the list of profiles", err)
 	}
 }
@@ -195,7 +194,7 @@ func TestResolve(t *testing.T) {
 		c := defaults(tc.active)
 		c.Model = "m"
 		got, ok := Resolve(c)
-		if got.Active != tc.want || ok != tc.ok || got.Model != "m" || len(got.Profiles) != 3 {
+		if got.Active != tc.want || ok != tc.ok || got.Model != "m" || len(got.Profiles) != 1 {
 			t.Errorf("Resolve(%q) = %+v, %v; want Active %q, %v", tc.active, got, ok, tc.want, tc.ok)
 		}
 	}
@@ -284,7 +283,7 @@ func TestRewriteErrors(t *testing.T) {
 		{"empty text", `{"choices":[{"message":{"content":"  "}}]}`, http.StatusOK, "empty"},
 	} {
 		reply, replyCode = tc.body, tc.code
-		_, err := Rewrite(defaults("friendly"), "", "", "x")
+		_, err := Rewrite(defaults("clean"), "", "", "x")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
 		}
@@ -319,7 +318,56 @@ func TestProfiles(t *testing.T) {
 	c := defaults("")
 	c.Profiles["slack"] = config.Profile{Prompt: "x"}
 	got := Profiles(c)
-	if want := []string{"clean", "friendly", "professional", "slack"}; !slices.Equal(got, want) {
+	if want := []string{"clean", "slack"}; !slices.Equal(got, want) {
 		t.Errorf("Profiles = %q, want %q", got, want)
+	}
+}
+
+// TestChoices: the Groq models are always offered, the local ones only where
+// this build runs them, and a config's own model is added once.
+func TestChoices(t *testing.T) {
+	has := func(cs []Choice, provider, model string) int {
+		n := 0
+		for _, c := range cs {
+			if c.Provider == provider && c.Model == model {
+				n++
+			}
+		}
+		return n
+	}
+	cs := Choices(config.PostTranscribe{})
+	for _, m := range GroqModels {
+		if has(cs, ProviderGroq, m) != 1 {
+			t.Errorf("Groq %s offered %d times, want once", m, has(cs, ProviderGroq, m))
+		}
+	}
+	if want := map[bool]int{true: 1, false: 0}[LocalAvailable()]; has(cs, ProviderLocal, DefaultLocalModel) != want {
+		t.Errorf("local %s offered %d times, want %d", DefaultLocalModel, has(cs, ProviderLocal, DefaultLocalModel), want)
+	}
+	custom := config.PostTranscribe{Model: "qwen/qwen3-32b"}
+	if has(Choices(custom), ProviderGroq, "qwen/qwen3-32b") != 1 {
+		t.Error("the config's own Groq model is not offered")
+	}
+}
+
+// TestRewriteOpenAI: provider openai sends its own key and default model;
+// without a key it reports one missing.
+func TestRewriteOpenAI(t *testing.T) {
+	c := defaults("clean")
+	c.Provider = ProviderOpenAI
+	if !KeyMissing(ProviderOpenAI) {
+		t.Fatal("KeyMissing(openai) = false before a key is set")
+	}
+	if _, err := Rewrite(c, "", "en", "x"); err == nil || !strings.Contains(err.Error(), "no openai API key") {
+		t.Errorf("err = %v, want no openai API key", err)
+	}
+	config.SetAPIKey(ProviderOpenAI, "test-key")
+	t.Cleanup(func() { config.SetAPIKey(ProviderOpenAI, "") })
+
+	if _, err := Rewrite(c, "", "en", "hello their"); err != nil {
+		t.Fatal(err)
+	}
+	if last.Model != OpenAIModels[0] || last.ReasoningEffort != "" {
+		t.Errorf("model=%q effort=%q, want %q with no effort", last.Model, last.ReasoningEffort, OpenAIModels[0])
 	}
 }

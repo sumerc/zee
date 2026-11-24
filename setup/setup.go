@@ -28,6 +28,7 @@ import (
 	"zee/hotkey"
 	"zee/localmodel"
 	"zee/permissions"
+	"zee/posttranscribe"
 	"zee/transcriber"
 
 	"golang.org/x/term"
@@ -82,10 +83,10 @@ func colorEnabled() bool {
 	return os.Getenv("NO_COLOR") == "" && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-// step prints a bold "Step n/4 · title" header so the user always knows where
+// step prints a bold "Step n/5 · title" header so the user always knows where
 // they are in the wizard.
 func step(n int, title string) {
-	fmt.Printf("\n%s\n", bold(fmt.Sprintf("Step %d/4 · %s", n, title)))
+	fmt.Printf("\n%s\n", bold(fmt.Sprintf("Step %d/5 · %s", n, title)))
 }
 
 // results collects what each step actually proved, for the final summary.
@@ -130,8 +131,12 @@ func begin(cmd string) (code int, done bool) {
 	signal.Notify(sig, os.Interrupt)
 	go func() { <-sig; exitInterrupted() }()
 	transcriber.SetKeySource(config.APIKey)
+	// A config.json that does not load must stop the wizard: config skips
+	// every save while defaults stand in for it, so each step would say
+	// "saved" and save nothing.
 	if err := config.Load(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not load settings: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Cannot read %s: %v\nFix the file (or move it away to start fresh), then re-run `%s`.\n", config.SettingsPath(), err, cmd)
+		return 1, true
 	}
 	printBanner()
 	return 0, false
@@ -153,6 +158,7 @@ func Run() int {
 	stepHotkey(&r)
 	stepAutoPaste(&r)
 	stepProviders(&r)
+	stepPostTranscribe()
 	code := summary(r)
 
 	if launchInstalledApp() {
@@ -612,6 +618,58 @@ func ensureAccessibility(reason string) bool {
 }
 
 // --- Providers (configure any number, live-test each, pick the active one) ---
+
+// --- Post-transcribe (optional, local) ---
+
+// stepPostTranscribe offers the local post-transcribe model. install.sh does
+// not fetch it (it is large), so this and the tray's Post-Transcribe menu are
+// where a user opts in. Yes downloads it and turns the clean profile on, run
+// on this Mac.
+func stepPostTranscribe() {
+	step(5, "Post-transcribe (optional)")
+	if !posttranscribe.LocalAvailable() {
+		fmt.Println("  The local model needs a Mac with Apple Silicon — skipped.")
+		return
+	}
+	// A cloud model name does not run locally: local takes its default model.
+	local := config.Get().PostTranscribe
+	local.Provider, local.Model = posttranscribe.ProviderLocal, ""
+	size, missing := posttranscribe.Missing(local)
+	if !missing && posttranscribe.Provider(config.Get().PostTranscribe) == posttranscribe.ProviderLocal {
+		fmt.Println("  " + tick() + " local model ready (Settings → Post-Transcribe in the tray)")
+		return
+	}
+	fmt.Println("  Clean up each transcript on this Mac before it is pasted: misheard words,")
+	fmt.Println("  grammar and filler. Off by default; turn it off any time in the tray.")
+	q := "  Turn it on?"
+	if missing {
+		q = fmt.Sprintf("  Download the model (%s) and turn it on?", size)
+	}
+	if !askYesNo(q, false) {
+		fmt.Println("  Skipped — turn it on later from the tray: Settings → Post-Transcribe.")
+		return
+	}
+	if missing {
+		fmt.Print("  Downloading")
+		last := -1
+		err := posttranscribe.Download(local, func(f float64) {
+			if pct := int(f * 100); pct/10 != last/10 {
+				last = pct
+				fmt.Printf(" %d%%", pct)
+			}
+		})
+		fmt.Println()
+		if err != nil {
+			fmt.Printf("  Download failed: %v (re-run `zee setup` to retry)\n", err)
+			return
+		}
+	}
+	config.Update(func(s *config.Settings) {
+		s.PostTranscribe.Provider, s.PostTranscribe.Model = posttranscribe.ProviderLocal, ""
+		s.PostTranscribe.Active = "clean"
+	})
+	fmt.Println("  " + tick() + " post-transcribe on: clean, on this Mac")
+}
 
 func stepProviders(r *results) {
 	step(4, "Transcription providers")

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"zee/config"
 	"zee/internal/llama"
 	"zee/localmodel"
 )
@@ -41,6 +42,31 @@ func localIDs() []string {
 	return ids
 }
 
+// LocalAvailable reports whether this build runs the local provider (Apple
+// Silicon, llama compiled in).
+func LocalAvailable() bool { return llama.Available() }
+
+// Missing reports the size of the local model c runs on when it is not
+// downloaded yet; ok is false when c runs on Groq, names no local model, the
+// local provider cannot run here, or the model is present.
+func Missing(c config.PostTranscribe) (size string, ok bool) {
+	m, isLocal, err := local(c)
+	if err != nil || !isLocal || !llama.Available() || localmodel.Present(m) {
+		return "", false
+	}
+	return m.HumanSize(), true
+}
+
+// Download fetches the local model c runs on, reporting the fraction done to
+// progress; a no-op when it is present or c is not local.
+func Download(c config.PostTranscribe, progress func(fraction float64)) error {
+	m, isLocal, err := local(c)
+	if err != nil || !isLocal {
+		return err
+	}
+	return localmodel.Download(m, progress)
+}
+
 // loadLocal returns m loaded, loading it if it is not the resident model.
 func loadLocal(m localmodel.Model) (*llama.Model, error) {
 	localMu.Lock()
@@ -53,7 +79,7 @@ func loadLocal(m localmodel.Model) (*llama.Model, error) {
 		return nil, fmt.Errorf("post_transcribe provider %q needs a Mac with Apple Silicon", ProviderLocal)
 	}
 	if !localmodel.Present(m) {
-		return nil, fmt.Errorf("%s is not downloaded: place %s in %s", m.ID, m.Filename, localmodel.Dir())
+		return nil, fmt.Errorf("%s is not downloaded: pick a profile under Settings → Post-Transcribe to download it", m.ID)
 	}
 	if loaded != nil { // config.json switched to another local model
 		loaded.Close()

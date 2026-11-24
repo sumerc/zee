@@ -20,3 +20,4 @@ func updateAutoPasteItem(bool)                       {}
 func updateLoginItem(bool)                           {}
 func updateHotkeyDisplay()                           {}
 func refreshPostMenu()                               {}
+func refreshPostModelMenu()                          {}

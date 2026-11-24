@@ -488,12 +488,24 @@ func run() {
 	// config, so it applies from the next one without a restart. A pick away
 	// from a local model frees it.
 	tray.SetPostTranscribe(postMenu(cfg.PostTranscribe), resolvePost(cfg.PostTranscribe).Active, func(name string) {
-		config.Update(func(s *config.Settings) {
-			s.PostTranscribe.Active = name
-			setTagColor(s, name) // a first pick gives the profile its colour
-		})
-		posttranscribe.Release(config.Get().PostTranscribe)
-		log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
+		// A profile whose local model is not downloaded yet downloads it
+		// first; the pick then applies when the download ends.
+		pt := config.Get().PostTranscribe
+		if _, missing := posttranscribe.Missing(pt); missing && name != "" {
+			go downloadPostModel(pt, func() { pickPost(name) })
+			return
+		}
+		pickPost(name)
+	})
+	tray.SetPostModels(postModels(cfg.PostTranscribe), func(provider, model string) {
+		target := config.Get().PostTranscribe
+		target.Provider, target.Model = provider, model
+		if _, missing := posttranscribe.Missing(target); missing {
+			go downloadPostModel(target, func() { pickPostModel(provider, model) })
+			return
+		}
+		pickPostModel(provider, model)
+		go refreshPostTray()
 	})
 
 	var trayModels []tray.Model
@@ -885,6 +897,7 @@ func run() {
 		}
 
 		tray.SetPostTranscribe(postMenu(s.PostTranscribe), resolvePost(s.PostTranscribe).Active, nil)
+		tray.SetPostModels(postModels(s.PostTranscribe), nil)
 		posttranscribe.Release(s.PostTranscribe)
 
 		if want := s.Hotkey.OrDefault(); !want.Equal(hk.Current()) {
@@ -1450,14 +1463,111 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	setLastRecording(result, cfg, "")
 }
 
-// postMenu lists the post-transcribe profiles with their tray tooltips.
+// postMenu lists the post-transcribe profiles with their tray tooltips. While
+// the local model is missing, each entry says so: "download 2.4 GB", or the
+// progress of the download that runs. While the selected model's provider has
+// no API key, the profiles are disabled, as the Model menu disables it.
 func postMenu(pt config.PostTranscribe) []tray.PostProfile {
+	noKey := posttranscribe.KeyMissing(posttranscribe.Provider(pt))
+	note := ""
+	if size, missing := posttranscribe.Missing(pt); missing {
+		note = "download " + size
+		if p := postDownload.Load(); p != nil {
+			note = "downloading " + *p
+		}
+	}
 	var ps []tray.PostProfile
 	for _, n := range posttranscribe.Profiles(pt) {
-		ps = append(ps, tray.PostProfile{Name: n, Tip: posttranscribe.Describe(pt, n)})
+		ps = append(ps, tray.PostProfile{Name: n, Tip: posttranscribe.Describe(pt, n), Note: note, NoKey: noKey})
 	}
 	return ps
 }
+
+// pickPost makes name the active post-transcribe profile ("" = None); it
+// applies from the next recording. A pick away from a local model frees it.
+func pickPost(name string) {
+	config.Update(func(s *config.Settings) {
+		s.PostTranscribe.Active = name
+		setTagColor(s, name) // a first pick gives the profile its colour
+	})
+	posttranscribe.Release(config.Get().PostTranscribe)
+	log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
+}
+
+// postModels lists Post-Transcribe → Model in the transcription Model menu's
+// terms: ready, needs a download (with its size, or the progress of the one
+// that runs), or unavailable (no API key).
+func postModels(pt config.PostTranscribe) []tray.Model {
+	var ms []tray.Model
+	for _, c := range posttranscribe.Choices(pt) {
+		m := tray.Model{Provider: c.Provider, Group: c.Group, ModelID: c.Model, Label: c.Label,
+			Active: c.Provider == posttranscribe.Provider(pt) && c.Model == posttranscribe.Model(pt)}
+		target := pt
+		target.Provider, target.Model = c.Provider, c.Model
+		if posttranscribe.KeyMissing(c.Provider) {
+			m.State = tray.ModelUnavailable
+		} else if size, missing := posttranscribe.Missing(target); missing {
+			m.State, m.Detail = tray.ModelNeedsDownload, size
+			if p := postDownload.Load(); p != nil {
+				m.State, m.Detail = tray.ModelDownloading, *p
+			}
+		}
+		ms = append(ms, m)
+	}
+	return ms
+}
+
+// pickPostModel makes the rewrite run on provider and model from the next
+// recording, and frees a local model it moves off.
+func pickPostModel(provider, model string) {
+	config.Update(func(s *config.Settings) {
+		s.PostTranscribe.Provider, s.PostTranscribe.Model = provider, model
+	})
+	posttranscribe.Release(config.Get().PostTranscribe)
+	log.Info("post_transcribe: provider=" + provider + " model=" + model)
+}
+
+// postDownload is the progress of the local post-transcribe model download
+// that runs ("42%"); nil when none runs.
+var postDownload atomic.Pointer[string]
+
+// refreshPostTray re-renders both Post-Transcribe menus from the saved
+// config. Off the main thread only.
+func refreshPostTray() {
+	pt := config.Get().PostTranscribe
+	tray.SetPostTranscribe(postMenu(pt), resolvePost(pt).Active, nil)
+	tray.SetPostModels(postModels(pt), nil)
+}
+
+// downloadPostModel downloads the local model target runs on, with its
+// progress in the menus, then runs done (the pick that waited for it). A
+// click while a download runs is ignored.
+func downloadPostModel(target config.PostTranscribe, done func()) {
+	if !postDownload.CompareAndSwap(nil, ptr("0%")) {
+		return
+	}
+	refreshPostTray()
+	last := 0
+	err := posttranscribe.Download(target, func(f float64) {
+		if pct := int(f * 100); pct != last {
+			last = pct
+			postDownload.Store(ptr(fmt.Sprintf("%d%%", pct)))
+			refreshPostTray()
+		}
+	})
+	postDownload.Store(nil)
+	if err != nil {
+		log.Errorf("post_transcribe: model download: %v", err)
+		tray.SetError("Download failed: " + err.Error())
+		refreshPostTray()
+		return
+	}
+	done()
+	refreshPostTray()
+	alert.Info("The post-transcribe model is downloaded.\n\nIt runs from the next recording.")
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // loadConfig loads config.json at startup and normalizes it. A file that
 // does not load runs on the defaults and is not saved over — config skips

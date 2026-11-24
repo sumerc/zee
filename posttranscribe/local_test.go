@@ -3,6 +3,7 @@ package posttranscribe
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"zee/config"
 	"zee/internal/llama"
@@ -69,11 +70,11 @@ func TestProvider(t *testing.T) {
 }
 
 // TestRewriteLocalMissing: a local model that is not on disk fails with a
-// message that says where to put it, and needs no API key. Where llama is not
+// message that says how to download it, and needs no API key. Where llama is not
 // compiled in, the message says what the local provider needs instead.
 func TestRewriteLocalMissing(t *testing.T) {
 	m, _ := localmodel.ByID(localmodel.IDGemma4E2B)
-	want := m.Filename
+	want := "Post-Transcribe"
 	if !llama.Available() {
 		want = "Apple Silicon"
 	} else if localmodel.Present(m) {
@@ -136,7 +137,31 @@ func TestRelease(t *testing.T) {
 // it must return while a model load holds localMu.
 func TestReleaseDoesNotBlock(t *testing.T) {
 	localMu.Lock() // a load in progress
-	Release(defaults("clean"))
+	done := make(chan struct{})
+	go func() { Release(defaults("clean")); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Error("Release blocked on a load in progress")
+	}
 	localMu.Unlock()
+	<-done
 	unloads.Wait()
+}
+
+// TestMissing: only a local config whose model is not on disk reports it
+// missing, with its size for the tray.
+func TestMissing(t *testing.T) {
+	t.Setenv("ZEE_MODELS_DIR", t.TempDir())
+	if _, ok := Missing(config.PostTranscribe{}); ok {
+		t.Error("groq reported a missing model")
+	}
+	local := config.PostTranscribe{Provider: ProviderLocal}
+	size, ok := Missing(local)
+	if !ok || size == "" {
+		t.Errorf("Missing(local, empty dir) = %q, %v; want its size, true", size, ok)
+	}
+	if _, ok := Missing(config.PostTranscribe{Provider: ProviderLocal, Model: "nope"}); ok {
+		t.Error("an unknown local model reported as downloadable")
+	}
 }

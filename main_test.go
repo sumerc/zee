@@ -399,8 +399,8 @@ func TestResolvePost(t *testing.T) {
 	if got := resolvePost(config.PostTranscribe{Active: "frendly", Profiles: profiles}); got.Active != "" {
 		t.Errorf("unknown profile resolved to %q, want none", got.Active)
 	}
-	if got := resolvePost(config.PostTranscribe{Active: "friendly", Profiles: profiles}); got.Active != "friendly" {
-		t.Errorf("friendly resolved to %q, want it kept", got.Active)
+	if got := resolvePost(config.PostTranscribe{Active: "clean", Profiles: profiles}); got.Active != "clean" {
+		t.Errorf("clean resolved to %q, want it kept", got.Active)
 	}
 	if _, err := os.Stat(config.SettingsPath()); err == nil {
 		t.Error("config.json written for an unknown profile")

@@ -26,15 +26,16 @@ import (
 	"zee/transcriber"
 )
 
-// Providers, config.json's post_transcribe.provider. ProviderGroq is also the
-// credentials.json key whose API key the Groq rewrite uses.
+// Providers, config.json's post_transcribe.provider. A cloud provider's name
+// is also its credentials.json key, the same key its transcription uses.
 const (
-	ProviderGroq  = "groq"
-	ProviderLocal = "local"
+	ProviderGroq   = "groq"
+	ProviderOpenAI = "openai"
+	ProviderLocal  = "local"
 )
 
 // DefaultModel and DefaultLocalModel are what Groq and local run when
-// post_transcribe.model is unset.
+// post_transcribe.model is unset; OpenAI runs OpenAIModels[0].
 const (
 	DefaultModel      = "openai/gpt-oss-120b"
 	DefaultLocalModel = localmodel.IDGemma4E2B
@@ -64,8 +65,8 @@ func Defaults() map[string]config.Profile {
 // docs/reference.md lists them; TestVarsDocumented keeps that list complete.
 type Vars struct {
 	// Language is the transcript's language in English ("Turkish"); "" when
-	// unknown, and always "" for provider groq, whose models were measured
-	// without it.
+	// unknown, and always "" for the cloud providers, whose models were
+	// measured (Groq) without it.
 	Language string
 	// Hints is the vocabulary from hints.txt, comma-separated; "" when none.
 	Hints string
@@ -158,10 +159,78 @@ func Resolve(c config.PostTranscribe) (r config.PostTranscribe, ok bool) {
 // Provider is the provider c runs on.
 func Provider(c config.PostTranscribe) string { return cmp.Or(c.Provider, ProviderGroq) }
 
+// GroqModels and OpenAIModels are the cloud models the tray offers; any other
+// chat model of the provider still runs when config.json names it. The Groq
+// ones were measured in zee-evals; the OpenAI ones are its GPT-6 family from
+// the smallest up (Astra, the largest, is too slow and costly for a cleanup).
+var (
+	GroqModels   = []string{DefaultModel, "openai/gpt-oss-20b"}
+	OpenAIModels = []string{"gpt-6-luna", "gpt-6.1-terra", "gpt-6.2-sol"}
+)
+
+// KeyMissing reports whether provider needs an API key that
+// credentials.json lacks.
+func KeyMissing(provider string) bool {
+	return provider != ProviderLocal && !config.HasAPIKey(provider)
+}
+
+// Choice is a provider and model the rewrite can run on: Group is its menu
+// heading ("Local", "Groq"), Label the model's name under it.
+type Choice struct{ Provider, Model, Group, Label string }
+
+// providerGroups are the menu headings, as the transcription Model menu
+// names the same providers.
+var providerGroups = map[string]string{ProviderLocal: "Local", ProviderGroq: "Groq", ProviderOpenAI: "OpenAI"}
+
+// Choices lists the providers and models the tray offers: the local LLMs
+// where this build runs them, then the Groq models, then c's own provider and
+// model when config.json names one that is none of these.
+func Choices(c config.PostTranscribe) []Choice {
+	var cs []Choice
+	if LocalAvailable() {
+		for _, m := range localmodel.All() {
+			if m.Engine == localmodel.EngineLlama {
+				cs = append(cs, Choice{ProviderLocal, m.ID, "Local", m.Label})
+			}
+		}
+	}
+	for _, m := range GroqModels {
+		cs = append(cs, Choice{ProviderGroq, m, "Groq", m})
+	}
+	for _, m := range OpenAIModels {
+		cs = append(cs, Choice{ProviderOpenAI, m, "OpenAI", m})
+	}
+	p, m := Provider(c), Model(c)
+	if !slices.ContainsFunc(cs, func(x Choice) bool { return x.Provider == p && x.Model == m }) {
+		cs = append(cs, Choice{p, m, cmp.Or(providerGroups[p], p), m})
+	}
+	// Keep each group's entries together: the menu renders a group per run.
+	slices.SortStableFunc(cs, func(a, b Choice) int {
+		return cmp.Compare(groupRank(a.Group), groupRank(b.Group))
+	})
+	return cs
+}
+
+// groupRank orders the menu: Local first, then Groq, OpenAI, anything else.
+func groupRank(g string) int {
+	switch g {
+	case "Local":
+		return 0
+	case "Groq":
+		return 1
+	case "OpenAI":
+		return 2
+	}
+	return 3
+}
+
 // Model is the model c runs on.
 func Model(c config.PostTranscribe) string {
-	if Provider(c) == ProviderLocal {
+	switch Provider(c) {
+	case ProviderLocal:
 		return cmp.Or(c.Model, DefaultLocalModel)
+	case ProviderOpenAI:
+		return cmp.Or(c.Model, OpenAIModels[0])
 	}
 	return cmp.Or(c.Model, DefaultModel)
 }
@@ -177,36 +246,53 @@ func local(c config.PostTranscribe) (m localmodel.Model, isLocal bool, err error
 			return m, false, fmt.Errorf("%q is not a local model (have: %s)", Model(c), strings.Join(localIDs(), ", "))
 		}
 		return m, true, nil
-	case ProviderGroq:
+	case ProviderGroq, ProviderOpenAI:
 		if known {
 			return m, false, fmt.Errorf("%q is a local model: set post_transcribe.provider to %q", Model(c), ProviderLocal)
 		}
 		return m, false, nil
 	}
-	return m, false, fmt.Errorf("unknown post_transcribe provider %q (want %q or %q)", c.Provider, ProviderGroq, ProviderLocal)
+	return m, false, fmt.Errorf("unknown post_transcribe provider %q (want %q, %q or %q)", c.Provider, ProviderGroq, ProviderOpenAI, ProviderLocal)
 }
 
 // maxErrBody is how many runes of an HTTP error body the returned error keeps.
 const maxErrBody = 200
 
-var apiURL = "https://api.groq.com/openai/v1/chat/completions"
+// apiURL and openaiURL are the cloud providers' chat completions endpoints,
+// variables so tests can point them at a fake server.
+var (
+	apiURL    = "https://api.groq.com/openai/v1/chat/completions"
+	openaiURL = "https://api.openai.com/v1/chat/completions"
+)
+
+// urlFor is provider's chat completions endpoint.
+func urlFor(provider string) string {
+	if provider == ProviderOpenAI {
+		return openaiURL
+	}
+	return apiURL
+}
 
 var (
 	clientMu sync.Mutex
-	shared   *transcriber.TracedClient
+	shared   map[string]*transcriber.TracedClient // by endpoint
 )
 
-// client returns the shared HTTP client, created on first use so nothing
-// touches the network while post-transcribe is off, and whether this call
-// created it. A new client warms its own connection.
-func client() (*transcriber.TracedClient, bool) {
+// client returns the shared HTTP client for provider, created on first use so
+// nothing touches the network while post-transcribe is off, and whether this
+// call created it. A new client warms its own connection.
+func client(provider string) (*transcriber.TracedClient, bool) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
-	if shared != nil {
-		return shared, false
+	url := urlFor(provider)
+	if c, ok := shared[url]; ok {
+		return c, false
 	}
-	shared = transcriber.NewTracedClient(apiURL)
-	return shared, true
+	if shared == nil {
+		shared = map[string]*transcriber.TracedClient{}
+	}
+	shared[url] = transcriber.NewTracedClient(url)
+	return shared[url], true
 }
 
 // Warm prepares c's model ahead of the request; call it when recording starts
@@ -221,7 +307,7 @@ func Warm(c config.PostTranscribe) {
 		loadLocal(m) // an error comes back again from Rewrite
 		return
 	}
-	if c, created := client(); !created {
+	if c, created := client(Provider(c)); !created {
 		c.Warm()
 	}
 }
@@ -288,12 +374,13 @@ func Rewrite(c config.PostTranscribe, hints, lang, text string) (string, error) 
 	if isLocal {
 		return completeLocal(m, system, text)
 	}
-	apiKey := config.APIKey(ProviderGroq)
+	provider := Provider(c)
+	apiKey := config.APIKey(provider)
 	if apiKey == "" {
-		return "", fmt.Errorf("no %s API key in credentials.json", ProviderGroq)
+		return "", fmt.Errorf("no %s API key in credentials.json", provider)
 	}
 
-	return complete(apiKey, Model(c), system, text)
+	return complete(provider, apiKey, Model(c), system, text)
 }
 
 // userMessage wraps the transcript for the user turn. The instruction is said
@@ -316,7 +403,7 @@ func cleanReply(from, out string) (string, error) {
 
 // complete sends one system prompt + transcript to the chat API and returns
 // the cleaned reply.
-func complete(apiKey, model, system, text string) (string, error) {
+func complete(provider, apiKey, model, system, text string) (string, error) {
 	req := request{
 		Model: model,
 		Messages: []message{
@@ -325,7 +412,8 @@ func complete(apiKey, model, system, text string) (string, error) {
 		},
 	}
 	// gpt-oss reasons before it answers; a cleanup pass needs little of it.
-	// Other models reject the field, so send it only to these.
+	// Other models reject the field or run on their own default, so send it
+	// only to these.
 	if strings.HasPrefix(req.Model, "openai/gpt-oss") {
 		req.ReasoningEffort = "low"
 	}
@@ -336,14 +424,14 @@ func complete(apiKey, model, system, text string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, urlFor(provider), bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	c, _ := client()
+	c, _ := client(provider)
 	resp, err := c.Do(httpReq)
 	if err != nil {
 		return "", err
@@ -354,14 +442,14 @@ func complete(apiKey, model, system, text string) (string, error) {
 		if len(body) > maxErrBody {
 			body = append(body[:maxErrBody], '…')
 		}
-		return "", fmt.Errorf("%s API error %d: %s", ProviderGroq, resp.StatusCode, string(body))
+		return "", fmt.Errorf("%s API error %d: %s", provider, resp.StatusCode, string(body))
 	}
 	var r response
 	if err := json.Unmarshal(resp.Body, &r); err != nil {
-		return "", fmt.Errorf("%s response parse error: %w", ProviderGroq, err)
+		return "", fmt.Errorf("%s response parse error: %w", provider, err)
 	}
 	if len(r.Choices) == 0 {
-		return "", fmt.Errorf("%s returned no choices", ProviderGroq)
+		return "", fmt.Errorf("%s returned no choices", provider)
 	}
-	return cleanReply(ProviderGroq, r.Choices[0].Message.Content)
+	return cleanReply(provider, r.Choices[0].Message.Content)
 }
