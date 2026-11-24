@@ -70,6 +70,8 @@ var (
 	postProfiles []PostProfile // Post-Transcribe entries after "None"
 	postActive   string        // selected profile; "" = None
 	postCb       func(name string)
+	postModels   []Model // Post-Transcribe → Model entries
+	postModelCb  func(provider, model string)
 
 	appVersion     string
 	checkUpdateCb  func()
@@ -243,9 +245,14 @@ func OnEditCredentials(fn func()) { editCredsCb = fn }
 func OnReloadConfig(fn func())    { reloadCfgCb = fn }
 
 // PostProfile is one Post-Transcribe menu entry: the profile name and the
-// tooltip shown when hovering it.
+// tooltip shown when hovering it. Note follows the name ("download 2.4 GB",
+// "downloading 42%"); a click on a noted entry is reported but does not move
+// the checkmark, since the profile cannot run yet. NoKey disables the entry
+// with "(no API key)", as the transcription Model menu does a provider
+// without one.
 type PostProfile struct {
-	Name, Tip string
+	Name, Tip, Note string
+	NoKey           bool
 }
 
 // noneTip is the tooltip of the None entry.
@@ -279,11 +286,53 @@ func choosePost(idx int) {
 		trayMu.Unlock()
 		return
 	}
-	postActive = names[idx].Name
+	if names[idx].NoKey {
+		trayMu.Unlock()
+		return
+	}
+	if names[idx].Note == "" {
+		postActive = names[idx].Name
+	}
 	cb := postCb
 	trayMu.Unlock()
 	if cb != nil {
 		cb(names[idx].Name)
+	}
+}
+
+// SetPostModels lists Post-Transcribe → Model the way SetModels lists the
+// transcription models: Group, State, Detail and Active mean the same, and
+// the entries render the same way (a submenu per Group, "(no API key)" on a
+// group with nothing usable). Before Init it seeds the menu build; after Init
+// it re-renders. A nil onPick keeps the current callback.
+func SetPostModels(ms []Model, onPick func(provider, model string)) {
+	trayMu.Lock()
+	postModels = ms
+	if onPick != nil {
+		postModelCb = onPick
+	}
+	trayMu.Unlock()
+	refreshPostModelMenu()
+}
+
+// choosePostModel reports a click on the idx-th entry when it is ready (the
+// checkmark moves to it) or can be downloaded; other states ignore it.
+func choosePostModel(idx int) {
+	trayMu.Lock()
+	if idx >= len(postModels) {
+		trayMu.Unlock()
+		return
+	}
+	m := postModels[idx]
+	if m.State == ModelReady {
+		for i := range postModels {
+			postModels[i].Active = i == idx
+		}
+	}
+	cb := postModelCb
+	trayMu.Unlock()
+	if cb != nil && (m.State == ModelReady || m.State == ModelNeedsDownload) {
+		cb(m.Provider, m.ModelID)
 	}
 }
 

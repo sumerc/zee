@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -118,8 +119,8 @@ func TestSettingsCorruptFile(t *testing.T) {
 
 	os.WriteFile(filepath.Join(d, "config.json"), []byte("not json{{{"), 0644)
 
-	if err := Load(); err != nil {
-		t.Fatalf("Load should not error on corrupt file: %v", err)
+	if err := Load(); err == nil {
+		t.Fatal("Load on corrupt file: want error, got nil")
 	}
 	s := Get()
 	if s.Language != "en" {
@@ -180,5 +181,91 @@ func TestReloadExternalEdits(t *testing.T) {
 	}
 	if got := Get().Language; got != "fr" {
 		t.Fatalf("Get().Language = %q after failed reload, want fr (untouched)", got)
+	}
+}
+
+// TestEmptyProfilesPersist: a config with every profile deleted reads back
+// empty, not absent, so the defaults are not seeded again.
+func TestEmptyProfilesPersist(t *testing.T) {
+	SetDir(t.TempDir())
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	Update(func(s *Settings) { s.PostTranscribe.Profiles = map[string]Profile{} })
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	if p := Get().PostTranscribe.Profiles; p == nil || len(p) != 0 {
+		t.Errorf("profiles = %#v, want an empty map", p)
+	}
+}
+
+// TestCorruptFileNotSavedOver: after a Load that fails to parse, a setting
+// change must not write the defaults over the user's file; once the file is
+// fixed and reloaded, changes save again.
+func TestCorruptFileNotSavedOver(t *testing.T) {
+	d := t.TempDir()
+	SetDir(d)
+	path := filepath.Join(d, "config.json")
+	bad := []byte(`{"language": "fr",}`)
+	if err := os.WriteFile(path, bad, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(); err == nil {
+		t.Fatal("Load on corrupt file: want error, got nil")
+	}
+	Update(func(s *Settings) { s.Device = "Blue Yeti" })
+	if got, _ := os.ReadFile(path); string(got) != string(bad) {
+		t.Fatalf("corrupt config.json was saved over: %q", got)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"language": "fr"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	Update(func(s *Settings) { s.Device = "Blue Yeti" })
+	if err := Load(); err != nil {
+		t.Fatalf("Load after save: %v", err)
+	}
+	if s := Get(); s.Device != "Blue Yeti" || s.Language != "fr" {
+		t.Fatalf("after Reload, Update did not save: %+v", s)
+	}
+}
+
+// TestLoadUnreadableStopsSaves: a config.json that exists but cannot be read
+// (permissions) is not saved over either.
+func TestLoadUnreadableStopsSaves(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads any file")
+	}
+	d := t.TempDir()
+	SetDir(d)
+	path := filepath.Join(d, "config.json")
+	os.WriteFile(path, []byte(`{"language":"tr"}`), 0o000)
+	t.Cleanup(func() { os.Chmod(path, 0o644) })
+	if err := Load(); err == nil {
+		t.Fatal("Load on an unreadable file: want error")
+	}
+	Update(func(s *Settings) { s.Language = "es" })
+	os.Chmod(path, 0o644)
+	if data, _ := os.ReadFile(path); string(data) != `{"language":"tr"}` {
+		t.Errorf("a change after a failed Load saved over the file: %q", data)
+	}
+}
+
+// TestSaveWritesNote: every save puts the do-not-edit note at the top of
+// config.json.
+func TestSaveWritesNote(t *testing.T) {
+	d := t.TempDir()
+	SetDir(d)
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	Update(func(s *Settings) { s.Language = "tr" })
+	data, _ := os.ReadFile(filepath.Join(d, "config.json"))
+	if !strings.HasPrefix(string(data), "{\n  \"_note\": ") {
+		t.Errorf("config.json does not start with the note:\n%s", data)
 	}
 }

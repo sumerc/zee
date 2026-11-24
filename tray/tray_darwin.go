@@ -52,6 +52,15 @@ var (
 	// render holds it would freeze the app.
 	postMenuMu sync.Mutex
 
+	// mPostModel is Post-Transcribe → Model, laid out like the transcription
+	// Model menu: one submenu per group, Local first and divided from the
+	// rest. Groups and items are only ever added (and hidden when unused), as
+	// with postItems. Guarded by trayMu; refreshPostModelMenu is serialized by
+	// postMenuMu.
+	mPostModel      *systray.MenuItem
+	postGroups      []*postModelGroup
+	postGroupDivide bool // the divider after Local is in place
+
 	modelItems []*systray.MenuItem
 	// modelGroups records each group submenu and its [start,end) slice of
 	// models, so a model-state change can re-derive the group's enabled state
@@ -465,6 +474,10 @@ func onReady() {
 
 	// Last in the pipeline order Model → Language → Post-Transcribe.
 	mPost = mSettings.AddSubMenuItem("Post-Transcribe", "Rewrite each transcript with an LLM before it is pasted")
+	// Model first: systray only appends, and profiles added by Reload Config
+	// must land after it.
+	mPostModel = mPost.AddSubMenuItem("Model", "Where the rewrite runs: on this Mac or on Groq")
+	refreshPostModelMenu()
 	refreshPostMenu()
 
 	systray.AddSeparator()
@@ -646,11 +659,168 @@ func refreshPostMenu() {
 			item.Hide()
 			continue
 		}
-		item.SetTitle(cmp.Or(names[i].Name, "None"))
+		title := cmp.Or(names[i].Name, "None")
+		if names[i].Note != "" {
+			title += " — " + names[i].Note
+		}
+		if names[i].NoKey {
+			title += " (no API key)"
+			item.Disable()
+		} else {
+			item.Enable()
+		}
+		item.SetTitle(title)
 		item.SetTooltip(names[i].Tip)
 		item.Show()
 	}
 	renderPostChecks()
+}
+
+// postModelGroup is one group submenu of Post-Transcribe → Model; idx maps
+// its items to postModels indexes for the current render.
+type postModelGroup struct {
+	name  string
+	menu  *systray.MenuItem
+	items []*systray.MenuItem
+	idx   []int
+}
+
+// refreshPostModelMenu renders Post-Transcribe → Model from postModels.
+// Off the main thread only.
+func refreshPostModelMenu() {
+	if mPostModel == nil {
+		return
+	}
+	postMenuMu.Lock()
+	defer postMenuMu.Unlock()
+	trayMu.Lock()
+	ms := slices.Clone(postModels)
+	trayMu.Unlock()
+
+	used := map[*postModelGroup]bool{}
+	for i := 0; i < len(ms); {
+		j := i
+		for j < len(ms) && ms[j].Group == ms[i].Group {
+			j++
+		}
+		g := postModelGroupFor(ms[i].Group)
+		used[g] = true
+		for len(g.items) < j-i {
+			pos := len(g.items)
+			item := g.menu.AddSubMenuItemCheckbox("", "", false)
+			item.Click(func() {
+				trayMu.Lock()
+				idx := -1
+				if pos < len(g.idx) {
+					idx = g.idx[pos]
+				}
+				trayMu.Unlock()
+				if idx >= 0 {
+					choosePostModel(idx)
+					renderPostModelChecks()
+				}
+			})
+			trayMu.Lock()
+			g.items = append(g.items, item)
+			trayMu.Unlock()
+		}
+		anyUsable := false
+		idx := make([]int, 0, j-i)
+		for k := i; k < j; k++ {
+			idx = append(idx, k)
+			if ms[k].State != ModelUnavailable {
+				anyUsable = true
+			}
+		}
+		trayMu.Lock()
+		g.idx = idx
+		items := slices.Clone(g.items)
+		trayMu.Unlock()
+		for pos, item := range items {
+			if pos >= j-i {
+				item.Hide()
+				continue
+			}
+			m := ms[i+pos]
+			item.SetTitle(modelTitle(m))
+			if m.State == ModelUnavailable || m.State == ModelDownloading {
+				item.Disable()
+			} else {
+				item.Enable()
+			}
+			item.Show()
+		}
+		title := g.name
+		if !anyUsable {
+			title += " (no API key)"
+			g.menu.Disable()
+		} else {
+			g.menu.Enable()
+		}
+		g.menu.SetTitle(title)
+		g.menu.Show()
+		i = j
+	}
+	trayMu.Lock()
+	groups := slices.Clone(postGroups)
+	trayMu.Unlock()
+	for _, g := range groups {
+		if !used[g] {
+			g.menu.Hide()
+		}
+	}
+	renderPostModelChecks()
+}
+
+// postModelGroupFor returns the group submenu named name, adding it (and the
+// divider after Local) when it is new. Caller holds postMenuMu.
+func postModelGroupFor(name string) *postModelGroup {
+	trayMu.Lock()
+	for _, g := range postGroups {
+		if g.name == name {
+			trayMu.Unlock()
+			return g
+		}
+	}
+	divide := !postGroupDivide && name != "Local" && slices.ContainsFunc(postGroups, func(g *postModelGroup) bool { return g.name == "Local" })
+	trayMu.Unlock()
+	if divide {
+		addSubmenuSeparator(mPostModel)
+	}
+	g := &postModelGroup{name: name, menu: mPostModel.AddSubMenuItem(name, name)}
+	trayMu.Lock()
+	postGroups = append(postGroups, g)
+	if divide {
+		postGroupDivide = true
+	}
+	trayMu.Unlock()
+	return g
+}
+
+// renderPostModelChecks checks the active model if it is ready and unchecks
+// the rest; no lock across systray calls, so the click handler can run it.
+func renderPostModelChecks() {
+	trayMu.Lock()
+	ms := slices.Clone(postModels)
+	type row struct {
+		item *systray.MenuItem
+		on   bool
+	}
+	var rows []row
+	for _, g := range postGroups {
+		for pos, item := range g.items {
+			on := pos < len(g.idx) && g.idx[pos] < len(ms) && ms[g.idx[pos]].Active && ms[g.idx[pos]].State == ModelReady
+			rows = append(rows, row{item, on})
+		}
+	}
+	trayMu.Unlock()
+	for _, r := range rows {
+		if r.on {
+			r.item.Check()
+		} else {
+			r.item.Uncheck()
+		}
+	}
 }
 
 // renderPostChecks checks the active entry and unchecks the rest. It takes no

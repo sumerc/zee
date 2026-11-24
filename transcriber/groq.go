@@ -59,6 +59,7 @@ func (g *Groq) NewSession(_ context.Context, cfg SessionConfig) (Session, error)
 
 type groqResponse struct {
 	Text     string  `json:"text"`
+	Language string  `json:"language"` // detected, as an English name ("Turkish")
 	Duration float64 `json:"duration"`
 	Segments []struct {
 		Text             string  `json:"text"`
@@ -146,6 +147,7 @@ func (g *Groq) Transcribe(audioData []byte, format, lang, hints string) (*Result
 
 	return &Result{
 		Text:         gResp.Text,
+		Lang:         gResp.Language,
 		Metrics:      resp.Metrics,
 		RateLimit:    remaining + "/" + limit,
 		NoSpeechProb: noSpeechProb,

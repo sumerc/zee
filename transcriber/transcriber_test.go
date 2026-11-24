@@ -196,3 +196,53 @@ func TestBatchSessionFeedAndClose(t *testing.T) {
 		t.Error("AudioLengthS should be positive")
 	}
 }
+
+// TestLangCode: every form a provider reports a language in maps to ISO 639-1.
+func TestLangCode(t *testing.T) {
+	for in, want := range map[string]string{
+		"tr":      "tr", // Deepgram, Mistral
+		"tur":     "tr", // ElevenLabs (ISO 639-3)
+		"eng":     "en",
+		"Turkish": "tr", // Groq Whisper's verbose_json
+		"english": "en",
+		" fr ":    "fr",
+		"":        "",
+		"xx":      "",
+		"Klingon": "",
+	} {
+		if got := langCode(in); got != want {
+			t.Errorf("langCode(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestBatchSessionLang: a forced language wins; with auto-detect the
+// provider's detection is normalized; an unknown one is left out.
+func TestBatchSessionLang(t *testing.T) {
+	for _, tc := range []struct{ forced, detected, want string }{
+		{"en", "Turkish", "en"},
+		{"", "Turkish", "tr"},
+		{"", "tur", "tr"},
+		{"", "", ""},
+	} {
+		fakeFn := func(audio []byte, format, lang, hints string) (*Result, error) {
+			return &Result{Text: "x", Lang: tc.detected, Metrics: &NetworkMetrics{}}, nil
+		}
+		bs, err := newBatchSession(SessionConfig{Format: "mp3@16", Language: tc.forced}, fakeFn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			for range bs.Updates() {
+			}
+		}()
+		bs.Feed(make([]byte, encoder.BlockSize*2))
+		r, err := bs.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Lang != tc.want {
+			t.Errorf("forced=%q detected=%q: Lang = %q, want %q", tc.forced, tc.detected, r.Lang, tc.want)
+		}
+	}
+}

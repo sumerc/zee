@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Rules
 - **CHANGELOG.md** — do not touch it. It is written only at release time, by hand. Never add an entry for a fix, a feature, or anything else during normal work.
 - **No performance numbers in code comments** — they are machine-specific and go stale silently. Say *what* is slow and *why* ("-play blocks while it starts the audio hardware"). If a number really must appear in a comment, name the machine with it (e.g. "~47 ms on an M5 Pro").
+- **config.json is zee's state, not a user file** — the tray and `zee setup` write it. Anything caused by editing it by hand (lost edits, invalid values) is the user's responsibility: not a bug, no code, no review finding. Only exception: if it does not load at startup, zee never writes its defaults over it, so the user's settings survive.
 - **Clean package interface** — every package must expose a single, platform-neutral interface describing *what it provides*, defined once (typically in `<pkg>.go`). Public API, shared types, and guard logic live there; platform/provider files (build-tag variants) only implement the backend hooks. Never duplicate the public API across build-tag files (see `audio/`: `audio.go` owns the capture interface plus `PlayStart/PlayEnd/...`, platform files provide only the backends — `initSound`/`playOne` for playback, the malgo/pulse capture impls).
 
 ## Build & Run
@@ -71,7 +72,7 @@ overwriting. `BENCH_FILE=` overrides the destination.
 - `-format <mp3@16|mp3@64|flac>` - audio format (default: mp3@16)
 - `-lang <code>` - language code for transcription (default: en, also settable from tray menu)
 - `-device <name>` - use named microphone device (also switchable from tray menu)
-- `zee setup` (or `-setup`) - interactive setup wizard: mic + live transcription test, hotkey capture + fire test, permissions, providers (multiple, each key live-tested)
+- `zee setup` (or `-setup`) - interactive setup wizard: mic + live transcription test, hotkey capture + fire test, permissions, providers (multiple, each key live-tested), optional local post-transcribe (downloads its model)
 - `zee doctor` - zero-question health check: hold the configured hotkey, speak, release — verifies hotkey/mic/provider end to end with the saved config; exit code reflects health
 - `zee update` - download + verify the latest release, swap it into place, then re-run `zee setup` (macOS drops TCC grants when the ad-hoc-signed bundle changes; setup restores them). The tray's "Check for Updates" is notify-only
 - `-benchmark <wav>` - run benchmark instead of live recording
@@ -106,7 +107,7 @@ Option+Space keydown → record audio → encode (mode-based) → API call → c
 - `vad.go` - voice activity detection using WebRTC VAD with debounced speech confirmation
 - `silence.go` - silence monitoring with warnings, repeat beeps, and auto-close (toggle mode)
 - `config/` - persistent settings (`config.json`) and vocabulary hints (`hints.txt`)
-- `posttranscribe/` - optional LLM rewrite of the transcript before paste (Groq chat completions); built-in profiles + user prompts from `config.json`'s `post_transcribe` block
+- `posttranscribe/` - optional LLM rewrite of the transcript before paste (Groq chat completions, or a local GGUF via `internal/llama`); profiles are full prompt templates in `config.json`'s `post_transcribe.profiles`, seeded once from the embedded `defaults.json`
 - `log.go` - diagnostic logging and panic capture to `diagnostics_log.txt`
 
 ## Design Philosophy
@@ -149,7 +150,7 @@ Users install via the one-liner in README (`install.sh` fetches the DMG and veri
 
 ### Releasing a new local model (Parakeet GGUF)
 
-Models are hosted in an immutable, never-"latest" `models-vN` GitHub release, **separate** from app releases. `localmodel/localmodel.go` is the single source of truth (filenames, SHA256s, `PreFetch` flags); `localmodel/manifest.txt` is its generated, committed projection that `install.sh` reads from `main`. Nothing model-related is hardcoded in `install.sh`.
+Models are hosted in an immutable, never-"latest" `models-vN` GitHub release, **separate** from app releases. GitHub caps a release file at 2 GiB, so a larger model (Gemma 4 E2B, 2.5 GB) is not uploaded: its entry sets `Source` to a Hugging Face URL pinned to a commit (`/resolve/<sha>/`), still verified by SHA256, and it stays `PreFetch: false`. `localmodel/localmodel.go` is the single source of truth (filenames, SHA256s, `PreFetch` flags); `localmodel/manifest.txt` is its generated, committed projection that `install.sh` reads from `main`. Nothing model-related is hardcoded in `install.sh`.
 
 1. Produce the `.gguf` locally (parakeet.cpp conversion/quantization) into a folder, e.g. `./out`.
 2. Add/edit its entry in `localmodel.go` — `Filename`, `SHA256` (`shasum -a 256`), `SizeBytes` (`ls -l`), `Decoder`, `Multilingual`, `PreFetch`. Re-quantizing existing files → also bump `localmodel.Version` and `install.sh`'s `MODELS_TAG`.

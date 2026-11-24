@@ -2,11 +2,11 @@ version: 2
 
 before:
   hooks:
-    # Init the parakeet.cpp submodule and build both static archives before the
-    # arm64 cgo build links them (darwin/arm64 only; no-op elsewhere).
-    # whisper-lib depends on parakeet-lib, so this one target builds both.
+    # Init the submodules and build the static archives before the arm64 cgo
+    # build links them (darwin/arm64 only; no-op elsewhere). whisper-lib and
+    # llama-lib both depend on parakeet-lib, which builds the shared ggml.
     - git submodule update --init --recursive
-    - make whisper-lib
+    - make whisper-lib llama-lib
     - packaging/mkicns.sh packaging/appicon.png
 
 builds:

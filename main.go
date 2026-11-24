@@ -304,10 +304,7 @@ func run() {
 		os.Exit(setup.Run())
 	}
 	// Load persistent settings, merge with CLI flags
-	if err := config.Load(); err != nil {
-		log.Warnf("settings: %v", err)
-	}
-	cfg := config.Get()
+	cfg := loadConfig()
 	flagSet := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
 	if !flagSet["lang"] {
@@ -488,13 +485,27 @@ func run() {
 	})
 	tray.SetAutoPaste(autoPaste)
 	// A pick is saved like any other tray setting; each recording reads the
-	// config, so it applies from the next one without a restart.
+	// config, so it applies from the next one without a restart. A pick away
+	// from a local model frees it.
 	tray.SetPostTranscribe(postMenu(cfg.PostTranscribe), resolvePost(cfg.PostTranscribe).Active, func(name string) {
-		config.Update(func(s *config.Settings) {
-			s.PostTranscribe.Active = name
-			setTagColor(s, name) // a first pick gives the profile its colour
-		})
-		log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
+		// A profile whose local model is not downloaded yet downloads it
+		// first; the pick then applies when the download ends.
+		pt := config.Get().PostTranscribe
+		if _, missing := posttranscribe.Missing(pt); missing && name != "" {
+			go downloadPostModel(pt, func() { pickPost(name) })
+			return
+		}
+		pickPost(name)
+	})
+	tray.SetPostModels(postModels(cfg.PostTranscribe), func(provider, model string) {
+		target := config.Get().PostTranscribe
+		target.Provider, target.Model = provider, model
+		if _, missing := posttranscribe.Missing(target); missing {
+			go downloadPostModel(target, func() { pickPostModel(provider, model) })
+			return
+		}
+		pickPostModel(provider, model)
+		go refreshPostTray()
 	})
 
 	var trayModels []tray.Model
@@ -886,6 +897,8 @@ func run() {
 		}
 
 		tray.SetPostTranscribe(postMenu(s.PostTranscribe), resolvePost(s.PostTranscribe).Active, nil)
+		tray.SetPostModels(postModels(s.PostTranscribe), nil)
+		posttranscribe.Release(s.PostTranscribe)
 
 		if want := s.Hotkey.OrDefault(); !want.Equal(hk.Current()) {
 			if err := hk.Rebind(want); err != nil {
@@ -901,12 +914,11 @@ func run() {
 		if guardBusy("Can't reload the config while recording or transcribing.") {
 			return
 		}
-		s, err := config.Reload()
-		if err != nil {
+		if _, err := config.Reload(); err != nil {
 			alert.Warn("Config reload failed — keeping current settings.\n\n" + err.Error())
 			return
 		}
-		applyCfg(s)
+		applyCfg(normalizePost())
 
 		// Credentials may have changed too: a cloud transcriber bakes its key in
 		// at construction, so rebuild the active one; then re-derive every
@@ -1201,7 +1213,7 @@ func handleRecording(capture audio.CaptureDevice, sess recSession) (<-chan struc
 	}
 	configMu.Unlock()
 	if cfg.post.Active != "" {
-		go posttranscribe.Warm()
+		go posttranscribe.Warm(cfg.post)
 	}
 	if cfg.autoPaste && !permissions.HasAccessibility() {
 		cfg.autoPaste = false
@@ -1330,16 +1342,20 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	text := result.Text
 	var post log.PostTranscript
 	if closeErr == nil && result.HasText && !result.NoSpeech && cfg.post.Active != "" {
-		post = log.PostTranscript{Profile: cfg.post.Active, Model: posttranscribe.Model(cfg.post)}
+		post = log.PostTranscript{Profile: cfg.post.Active, Provider: posttranscribe.Provider(cfg.post), Model: posttranscribe.Model(cfg.post)}
 		t := time.Now()
-		out, err := posttranscribe.Rewrite(cfg.post, cfg.hints, text)
+		out, err := posttranscribe.Rewrite(cfg.post, cfg.hints, result.Lang, text)
 		lat.PostTranscribeMs = float64(time.Since(t).Microseconds()) / 1000
+		// cfg.post is the config this recording started with: if the user
+		// has moved off it since, free what this rewrite may have reloaded.
+		posttranscribe.Release(config.Get().PostTranscribe)
 		if err != nil {
 			log.Warnf("post_transcribe: %v", err)
 			tray.SetError("Post-transcribe failed, used the raw transcript: " + err.Error())
 			post.Error = err.Error()
 		} else {
-			log.Info(fmt.Sprintf("post_transcribe: profile=%s ms=%.0f", cfg.post.Active, lat.PostTranscribeMs))
+			log.Info(fmt.Sprintf("post_transcribe: profile=%s provider=%s model=%s ms=%.0f",
+				post.Profile, post.Provider, post.Model, lat.PostTranscribeMs))
 			text = out
 			post.Text = out
 		}
@@ -1447,13 +1463,132 @@ func finishTranscription(sess transcriber.Session, clipCh chan clipSave, updates
 	setLastRecording(result, cfg, "")
 }
 
-// postMenu lists the post-transcribe profiles with their tray tooltips.
+// postMenu lists the post-transcribe profiles with their tray tooltips. While
+// the local model is missing, each entry says so: "download 2.4 GB", or the
+// progress of the download that runs. While the selected model's provider has
+// no API key, the profiles are disabled, as the Model menu disables it.
 func postMenu(pt config.PostTranscribe) []tray.PostProfile {
+	noKey := posttranscribe.KeyMissing(posttranscribe.Provider(pt))
+	note := ""
+	if size, missing := posttranscribe.Missing(pt); missing {
+		note = "download " + size
+		if p := postDownload.Load(); p != nil {
+			note = "downloading " + *p
+		}
+	}
 	var ps []tray.PostProfile
 	for _, n := range posttranscribe.Profiles(pt) {
-		ps = append(ps, tray.PostProfile{Name: n, Tip: posttranscribe.Describe(pt, n)})
+		ps = append(ps, tray.PostProfile{Name: n, Tip: posttranscribe.Describe(pt, n), Note: note, NoKey: noKey})
 	}
 	return ps
+}
+
+// pickPost makes name the active post-transcribe profile ("" = None); it
+// applies from the next recording. A pick away from a local model frees it.
+func pickPost(name string) {
+	config.Update(func(s *config.Settings) {
+		s.PostTranscribe.Active = name
+		setTagColor(s, name) // a first pick gives the profile its colour
+	})
+	posttranscribe.Release(config.Get().PostTranscribe)
+	log.Info("post_transcribe: active=" + cmp.Or(name, "none"))
+}
+
+// postModels lists Post-Transcribe → Model in the transcription Model menu's
+// terms: ready, needs a download (with its size, or the progress of the one
+// that runs), or unavailable (no API key).
+func postModels(pt config.PostTranscribe) []tray.Model {
+	var ms []tray.Model
+	for _, c := range posttranscribe.Choices(pt) {
+		m := tray.Model{Provider: c.Provider, Group: c.Group, ModelID: c.Model, Label: c.Label,
+			Active: c.Provider == posttranscribe.Provider(pt) && c.Model == posttranscribe.Model(pt)}
+		target := pt
+		target.Provider, target.Model = c.Provider, c.Model
+		if posttranscribe.KeyMissing(c.Provider) {
+			m.State = tray.ModelUnavailable
+		} else if size, missing := posttranscribe.Missing(target); missing {
+			m.State, m.Detail = tray.ModelNeedsDownload, size
+			if p := postDownload.Load(); p != nil {
+				m.State, m.Detail = tray.ModelDownloading, *p
+			}
+		}
+		ms = append(ms, m)
+	}
+	return ms
+}
+
+// pickPostModel makes the rewrite run on provider and model from the next
+// recording, and frees a local model it moves off.
+func pickPostModel(provider, model string) {
+	config.Update(func(s *config.Settings) {
+		s.PostTranscribe.Provider, s.PostTranscribe.Model = provider, model
+	})
+	posttranscribe.Release(config.Get().PostTranscribe)
+	log.Info("post_transcribe: provider=" + provider + " model=" + model)
+}
+
+// postDownload is the progress of the local post-transcribe model download
+// that runs ("42%"); nil when none runs.
+var postDownload atomic.Pointer[string]
+
+// refreshPostTray re-renders both Post-Transcribe menus from the saved
+// config. Off the main thread only.
+func refreshPostTray() {
+	pt := config.Get().PostTranscribe
+	tray.SetPostTranscribe(postMenu(pt), resolvePost(pt).Active, nil)
+	tray.SetPostModels(postModels(pt), nil)
+}
+
+// downloadPostModel downloads the local model target runs on, with its
+// progress in the menus, then runs done (the pick that waited for it). A
+// click while a download runs is ignored.
+func downloadPostModel(target config.PostTranscribe, done func()) {
+	if !postDownload.CompareAndSwap(nil, ptr("0%")) {
+		return
+	}
+	refreshPostTray()
+	last := 0
+	err := posttranscribe.Download(target, func(f float64) {
+		if pct := int(f * 100); pct != last {
+			last = pct
+			postDownload.Store(ptr(fmt.Sprintf("%d%%", pct)))
+			refreshPostTray()
+		}
+	})
+	postDownload.Store(nil)
+	if err != nil {
+		log.Errorf("post_transcribe: model download: %v", err)
+		tray.SetError("Download failed: " + err.Error())
+		refreshPostTray()
+		return
+	}
+	done()
+	refreshPostTray()
+	alert.Info("The post-transcribe model is downloaded.\n\nIt runs from the next recording.")
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// loadConfig loads config.json at startup and normalizes it. A file that
+// does not load runs on the defaults and is not saved over — config skips
+// every save, from here or any later setting change, until the user fixes the
+// file and picks Reload Config.
+func loadConfig() config.Settings {
+	if err := config.Load(); err != nil {
+		log.Warnf("settings: %v", err)
+		return config.Get()
+	}
+	return normalizePost()
+}
+
+// normalizePost brings config.json's post_transcribe block to its current
+// form — the default profiles the first time, the earlier prompts/colors maps
+// folded in — saves it if that changed anything, and returns the settings.
+func normalizePost() config.Settings {
+	if _, changed := posttranscribe.Normalize(config.Get().PostTranscribe); changed {
+		config.Update(func(s *config.Settings) { s.PostTranscribe, _ = posttranscribe.Normalize(s.PostTranscribe) })
+	}
+	return config.Get()
 }
 
 // resolvePost is pt as config.json was just loaded: an unknown profile name is
@@ -1495,7 +1630,7 @@ func tagColor(name string) string {
 	if name == "" {
 		return ""
 	}
-	if c := config.Get().PostTranscribe.Colors[name]; c != "" {
+	if c := config.Get().PostTranscribe.Profiles[name].Color; c != "" {
 		return c
 	}
 	var color string
@@ -1511,17 +1646,20 @@ func setTagColor(s *config.Settings, name string) string {
 		return ""
 	}
 	c := &s.PostTranscribe
-	if c.Colors[name] == "" {
-		// Copy, then write: config.Get hands out this same map, and a reader
-		// holding it must never see it change.
-		colors := maps.Clone(c.Colors)
-		if colors == nil {
-			colors = map[string]string{}
-		}
-		colors[name] = overlay.PickTagColor(slices.Collect(maps.Values(colors)))
-		c.Colors = colors
+	p, ok := c.Profiles[name]
+	if !ok || p.Color != "" {
+		return p.Color
 	}
-	return c.Colors[name]
+	var used []string
+	for _, q := range c.Profiles {
+		used = append(used, q.Color)
+	}
+	p.Color = overlay.PickTagColor(used)
+	// Copy, then write: config.Get hands out this same map, and a reader
+	// holding it must never see it change.
+	c.Profiles = maps.Clone(c.Profiles)
+	c.Profiles[name] = p
+	return p.Color
 }
 
 // setLastRecording stashes the just-finished recording (audio + metadata) so the

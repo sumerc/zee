@@ -17,6 +17,9 @@ import (
 // keycode; an empty Hotkey (no Mods) means "use the built-in default"
 // (hotkey.Combo.OrDefault resolves that).
 type Settings struct {
+	// Note is the warning save writes at the top of config.json (JSON has no
+	// comments); its value is ignored when the file is read.
+	Note      string       `json:"_note"`
 	Language  string       `json:"language"`
 	Device    string       `json:"device"`
 	Provider  string       `json:"provider"`
@@ -33,15 +36,28 @@ type Settings struct {
 }
 
 // PostTranscribe is the post_transcribe block of config.json. Active picks a
-// profile by name — one of the user's Prompts, else a built-in; "" is off.
+// profile by name from Profiles; "" is off.
 type PostTranscribe struct {
-	Active  string            `json:"active"`
-	Model   string            `json:"model,omitempty"`   // "" = the package default
-	Prompts map[string]string `json:"prompts,omitempty"` // name → instruction
-	// Colors is each profile's overlay tag colour, "#RRGGBB". zee fills in a
-	// colour for a profile the first time it is used, so it stays the same from
-	// then on.
-	Colors map[string]string `json:"colors,omitempty"`
+	Active   string `json:"active"`
+	Provider string `json:"provider,omitempty"` // "groq" (the default) or "local"
+	Model    string `json:"model,omitempty"`    // "" = the provider's default
+	// Profiles has no omitempty: an empty map is the user deleting every
+	// profile, and must not read back as absent (which seeds the defaults).
+	Profiles map[string]Profile `json:"profiles"`
+	// Prompts and Colors are the earlier form (name → instruction, name →
+	// colour); posttranscribe.Normalize folds them into Profiles once.
+	Prompts map[string]string `json:"prompts,omitempty"`
+	Colors  map[string]string `json:"colors,omitempty"`
+}
+
+// Profile is one post-transcribe profile: the whole system prompt, a template
+// (see posttranscribe.Vars), plus its tray tooltip and overlay tag colour.
+type Profile struct {
+	Prompt      string `json:"prompt"`
+	Description string `json:"description,omitempty"`
+	// Color is "#RRGGBB". zee fills one in the first time the profile is used,
+	// so it stays the same from then on.
+	Color string `json:"color,omitempty"`
 }
 
 const settingsFile = "config.json"
@@ -55,10 +71,15 @@ const settingsFile = "config.json"
 const defaultTailWaitMs = 50
 
 var (
-	mu       sync.Mutex
-	current  Settings
-	dir      string
-	defaults = Settings{
+	mu      sync.Mutex
+	current Settings
+	// loadFailed is set while config.json is there but did not read or parse
+	// at startup: the live settings are the defaults standing in for it, and
+	// Update does not save, so no change made meanwhile writes them over the
+	// user's file. A good Load or Reload clears it.
+	loadFailed bool
+	dir        string
+	defaults   = Settings{
 		Language:   "en",
 		AutoPaste:  true,
 		TailWaitMs: defaultTailWaitMs,
@@ -156,14 +177,22 @@ func IsAppBundle() bool {
 	return ok
 }
 
+// Load reads config.json into the live settings. A missing file is the
+// defaults. A file that does not parse also leaves the defaults live, and is
+// returned as an error, and no save writes them over the user's file until
+// a Reload succeeds.
 func Load() error {
+	mu.Lock()
+	defer mu.Unlock()
 	current = defaults
+	loadFailed = false
 
 	data, err := os.ReadFile(settingsPath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
+		loadFailed = true
 		return err
 	}
 
@@ -173,8 +202,8 @@ func Load() error {
 	// (Auto-detect), which must persist.
 	s := defaults
 	if err := json.Unmarshal(data, &s); err != nil {
-		log.Warnf("settings: corrupt config.json, using defaults: %v", err)
-		return nil
+		loadFailed = true
+		return fmt.Errorf("invalid config.json, using defaults: %w", err)
 	}
 	current = s
 	return nil
@@ -193,7 +222,9 @@ func Get() Settings {
 // report a parse failure to the user's face). Read + compare + swap all happen
 // under the lock, serialized with Update, so a concurrent save can't be
 // overwritten by stale file contents. A missing or corrupt file leaves the
-// live settings untouched and is returned as an error for the UI to show.
+// live settings untouched and is returned as an error for the UI to show; the
+// next tray change then saves them over it (a hand edit is the user's risk,
+// see CLAUDE.md).
 func Reload() (Settings, error) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -206,19 +237,30 @@ func Reload() (Settings, error) {
 		return current, fmt.Errorf("invalid config.json: %w", err)
 	}
 	current = s
+	loadFailed = false
 	return s, nil
 }
 
 func Update(fn func(*Settings)) {
 	mu.Lock()
 	fn(&current)
-	s := current
+	s, failed := current, loadFailed
 	mu.Unlock()
 
+	if failed {
+		log.Warn("settings: config.json did not parse, not saving over it (fix it and pick Reload Config)")
+		return
+	}
 	save(s)
 }
 
+// fileNote is the warning at the top of config.json: the file is zee's own
+// state, and a hand edit is lost when a tray change saves before Reload
+// Config (an accepted risk; see CLAUDE.md).
+const fileNote = "zee's own settings, written by the tray and `zee setup`. Not designed for editing by hand: if you do, pick Reload Config right after, since any tray change before that saves over your edit. Use at your own risk."
+
 func save(s Settings) {
+	s.Note = fileNote
 	d := Dir()
 	if err := os.MkdirAll(d, 0755); err != nil {
 		log.Warnf("settings: create dir: %v", err)

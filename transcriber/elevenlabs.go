@@ -136,6 +136,7 @@ func (e *ElevenLabs) Transcribe(audioData []byte, format, lang, hints string) (*
 
 	return &Result{
 		Text:       elResp.Text,
+		Lang:       elResp.LanguageCode,
 		Metrics:    resp.Metrics,
 		Confidence: elResp.LanguageProbability,
 		AvgLogProb: avgLogProb,
