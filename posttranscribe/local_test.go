@@ -150,7 +150,8 @@ func TestReleaseDoesNotBlock(t *testing.T) {
 }
 
 // TestMissing: only a local config whose model is not on disk reports it
-// missing, with its size for the tray.
+// missing, with its size for the tray — and only where this build runs the
+// local provider (CI does not build llama).
 func TestMissing(t *testing.T) {
 	t.Setenv("ZEE_MODELS_DIR", t.TempDir())
 	if _, ok := Missing(config.PostTranscribe{}); ok {
@@ -158,8 +159,8 @@ func TestMissing(t *testing.T) {
 	}
 	local := config.PostTranscribe{Provider: ProviderLocal}
 	size, ok := Missing(local)
-	if !ok || size == "" {
-		t.Errorf("Missing(local, empty dir) = %q, %v; want its size, true", size, ok)
+	if want := LocalAvailable(); ok != want || (ok && size == "") {
+		t.Errorf("Missing(local, empty dir) = %q, %v; want missing=%v with its size", size, ok, want)
 	}
 	if _, ok := Missing(config.PostTranscribe{Provider: ProviderLocal, Model: "nope"}); ok {
 		t.Error("an unknown local model reported as downloadable")
