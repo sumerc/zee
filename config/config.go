@@ -17,6 +17,9 @@ import (
 // keycode; an empty Hotkey (no Mods) means "use the built-in default"
 // (hotkey.Combo.OrDefault resolves that).
 type Settings struct {
+	// Note is the warning save writes at the top of config.json (JSON has no
+	// comments); its value is ignored when the file is read.
+	Note      string       `json:"_note"`
 	Language  string       `json:"language"`
 	Device    string       `json:"device"`
 	Provider  string       `json:"provider"`
@@ -70,10 +73,10 @@ const defaultTailWaitMs = 50
 var (
 	mu      sync.Mutex
 	current Settings
-	// loadFailed is set while the live settings are the defaults standing in
-	// for a config.json that did not parse: Update does not save then, so no
-	// change made meanwhile writes them over the user's file. A good Load or
-	// Reload clears it.
+	// loadFailed is set while config.json is there but did not read or parse
+	// at startup: the live settings are the defaults standing in for it, and
+	// Update does not save, so no change made meanwhile writes them over the
+	// user's file. A good Load or Reload clears it.
 	loadFailed bool
 	dir        string
 	defaults   = Settings{
@@ -189,6 +192,7 @@ func Load() error {
 		if os.IsNotExist(err) {
 			return nil
 		}
+		loadFailed = true
 		return err
 	}
 
@@ -218,7 +222,9 @@ func Get() Settings {
 // report a parse failure to the user's face). Read + compare + swap all happen
 // under the lock, serialized with Update, so a concurrent save can't be
 // overwritten by stale file contents. A missing or corrupt file leaves the
-// live settings untouched and is returned as an error for the UI to show.
+// live settings untouched and is returned as an error for the UI to show; the
+// next tray change then saves them over it (a hand edit is the user's risk,
+// see CLAUDE.md).
 func Reload() (Settings, error) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -248,7 +254,13 @@ func Update(fn func(*Settings)) {
 	save(s)
 }
 
+// fileNote is the warning at the top of config.json: the file is zee's own
+// state, and a hand edit is lost when a tray change saves before Reload
+// Config (an accepted risk; see CLAUDE.md).
+const fileNote = "zee's own settings, written by the tray and `zee setup`. Not designed for editing by hand: if you do, pick Reload Config right after, since any tray change before that saves over your edit. Use at your own risk."
+
 func save(s Settings) {
+	s.Note = fileNote
 	d := Dir()
 	if err := os.MkdirAll(d, 0755); err != nil {
 		log.Warnf("settings: create dir: %v", err)

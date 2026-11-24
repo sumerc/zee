@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -230,5 +231,41 @@ func TestCorruptFileNotSavedOver(t *testing.T) {
 	}
 	if s := Get(); s.Device != "Blue Yeti" || s.Language != "fr" {
 		t.Fatalf("after Reload, Update did not save: %+v", s)
+	}
+}
+
+// TestLoadUnreadableStopsSaves: a config.json that exists but cannot be read
+// (permissions) is not saved over either.
+func TestLoadUnreadableStopsSaves(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads any file")
+	}
+	d := t.TempDir()
+	SetDir(d)
+	path := filepath.Join(d, "config.json")
+	os.WriteFile(path, []byte(`{"language":"tr"}`), 0o000)
+	t.Cleanup(func() { os.Chmod(path, 0o644) })
+	if err := Load(); err == nil {
+		t.Fatal("Load on an unreadable file: want error")
+	}
+	Update(func(s *Settings) { s.Language = "es" })
+	os.Chmod(path, 0o644)
+	if data, _ := os.ReadFile(path); string(data) != `{"language":"tr"}` {
+		t.Errorf("a change after a failed Load saved over the file: %q", data)
+	}
+}
+
+// TestSaveWritesNote: every save puts the do-not-edit note at the top of
+// config.json.
+func TestSaveWritesNote(t *testing.T) {
+	d := t.TempDir()
+	SetDir(d)
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	Update(func(s *Settings) { s.Language = "tr" })
+	data, _ := os.ReadFile(filepath.Join(d, "config.json"))
+	if !strings.HasPrefix(string(data), "{\n  \"_note\": ") {
+		t.Errorf("config.json does not start with the note:\n%s", data)
 	}
 }
